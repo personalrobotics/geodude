@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "geodude"
+version = "0.1.0"
+description = "High-level API for programming the Geodude bimanual robot"
+# readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "mujoco",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/geodude"]
+
+[tool.ruff]
+lint.select = ["F", "E", "W", "I"]

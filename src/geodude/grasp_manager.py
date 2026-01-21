@@ -1,0 +1,194 @@
+"""Grasp state management and collision group updates."""
+
+import mujoco
+import numpy as np
+
+# Collision group bit definitions
+# Bit 0 (value 1): Normal objects and robot arm
+# Bit 1 (value 2): Grasped objects (only collides with gripper pads)
+COLLISION_GROUP_NORMAL = 1
+COLLISION_GROUP_GRASPED = 2
+COLLISION_GROUP_GRIPPER_PADS = 3  # Both bits: collides with normal AND grasped
+
+
+class GraspManager:
+    """Manages grasp state and updates collision groups accordingly.
+
+    When an object is grasped:
+    - Its collision group changes from NORMAL (1) to GRASPED (2)
+    - This means it no longer collides with the robot arm (group 1)
+    - But still collides with gripper pads (group 3 = 1|2)
+    - And still collides with environment/other objects
+
+    This allows planning motions with a grasped object without false
+    collisions between the object and the robot's arm.
+    """
+
+    def __init__(self, model: mujoco.MjModel, data: mujoco.MjData):
+        self.model = model
+        self.data = data
+        self.grasped: dict[str, str] = {}  # object_name -> arm_name
+        self._original_collision_groups: dict[str, list[tuple[int, int]]] = {}
+
+    def mark_grasped(self, object_name: str, arm: str) -> None:
+        """Mark an object as grasped by the specified arm.
+
+        Updates the object's collision group so it doesn't collide with
+        the robot arm during planning, but still collides with gripper
+        pads and environment.
+
+        Args:
+            object_name: Name of the grasped object body in MuJoCo
+            arm: Which arm is holding it ("left" or "right")
+        """
+        if object_name in self.grasped:
+            return  # Already grasped
+
+        self.grasped[object_name] = arm
+        self._save_and_update_collision_group(object_name, grasped=True)
+
+    def mark_released(self, object_name: str) -> None:
+        """Mark an object as released.
+
+        Restores the object's original collision group.
+
+        Args:
+            object_name: Name of the released object body in MuJoCo
+        """
+        if object_name not in self.grasped:
+            return  # Not currently grasped
+
+        del self.grasped[object_name]
+        self._restore_collision_group(object_name)
+
+    def get_grasped_by(self, arm: str) -> list[str]:
+        """Get list of objects currently grasped by the specified arm."""
+        return [obj for obj, holder in self.grasped.items() if holder == arm]
+
+    def is_grasped(self, object_name: str) -> bool:
+        """Check if an object is currently grasped."""
+        return object_name in self.grasped
+
+    def get_holder(self, object_name: str) -> str | None:
+        """Get the arm holding an object, or None if not grasped."""
+        return self.grasped.get(object_name)
+
+    def _get_body_geom_ids(self, body_name: str) -> list[int]:
+        """Get all geom IDs belonging to a body."""
+        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        if body_id == -1:
+            raise ValueError(f"Body '{body_name}' not found in model")
+
+        geom_ids = []
+        for geom_id in range(self.model.ngeom):
+            if self.model.geom_bodyid[geom_id] == body_id:
+                geom_ids.append(geom_id)
+        return geom_ids
+
+    def _save_and_update_collision_group(self, object_name: str, grasped: bool) -> None:
+        """Save original collision groups and update to grasped state."""
+        geom_ids = self._get_body_geom_ids(object_name)
+
+        # Save original values
+        self._original_collision_groups[object_name] = [
+            (int(self.model.geom_contype[gid]), int(self.model.geom_conaffinity[gid]))
+            for gid in geom_ids
+        ]
+
+        # Update to grasped collision group
+        for geom_id in geom_ids:
+            self.model.geom_contype[geom_id] = COLLISION_GROUP_GRASPED
+            self.model.geom_conaffinity[geom_id] = COLLISION_GROUP_GRASPED
+
+    def _restore_collision_group(self, object_name: str) -> None:
+        """Restore original collision groups for an object."""
+        if object_name not in self._original_collision_groups:
+            return
+
+        geom_ids = self._get_body_geom_ids(object_name)
+        original = self._original_collision_groups.pop(object_name)
+
+        for geom_id, (contype, conaffinity) in zip(geom_ids, original):
+            self.model.geom_contype[geom_id] = contype
+            self.model.geom_conaffinity[geom_id] = conaffinity
+
+
+def detect_grasped_object(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    gripper_body_names: list[str],
+    candidate_objects: list[str] | None = None,
+) -> str | None:
+    """Detect which object (if any) is being grasped by the gripper.
+
+    Checks MuJoCo contacts to find objects in contact with gripper bodies.
+
+    Args:
+        model: MuJoCo model
+        data: MuJoCo data (after mj_forward)
+        gripper_body_names: Names of gripper bodies (pads, fingers)
+        candidate_objects: Optional list of object names to consider.
+                          If None, considers all bodies.
+
+    Returns:
+        Name of grasped object, or None if nothing is grasped
+    """
+    # Get gripper body IDs
+    gripper_body_ids = set()
+    for name in gripper_body_names:
+        body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
+        if body_id != -1:
+            gripper_body_ids.add(body_id)
+
+    if not gripper_body_ids:
+        return None
+
+    # Get candidate object body IDs
+    candidate_body_ids: set[int] | None = None
+    if candidate_objects is not None:
+        candidate_body_ids = set()
+        for name in candidate_objects:
+            body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
+            if body_id != -1:
+                candidate_body_ids.add(body_id)
+
+    # Check contacts
+    contacted_objects: dict[int, int] = {}  # body_id -> contact_count
+
+    for i in range(data.ncon):
+        contact = data.contact[i]
+        geom1, geom2 = contact.geom1, contact.geom2
+        body1 = model.geom_bodyid[geom1]
+        body2 = model.geom_bodyid[geom2]
+
+        # Check if one is gripper and one is candidate object
+        gripper_body = None
+        other_body = None
+
+        if body1 in gripper_body_ids:
+            gripper_body = body1
+            other_body = body2
+        elif body2 in gripper_body_ids:
+            gripper_body = body2
+            other_body = body1
+
+        if gripper_body is None:
+            continue
+
+        # Skip if other body is also part of gripper/robot
+        if other_body in gripper_body_ids:
+            continue
+
+        # Skip if not in candidate list (when specified)
+        if candidate_body_ids is not None and other_body not in candidate_body_ids:
+            continue
+
+        # Count contacts with this object
+        contacted_objects[other_body] = contacted_objects.get(other_body, 0) + 1
+
+    # Return object with most contacts (heuristic for "most grasped")
+    if not contacted_objects:
+        return None
+
+    best_body_id = max(contacted_objects, key=lambda x: contacted_objects[x])
+    return mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, best_body_id)

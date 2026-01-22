@@ -24,12 +24,25 @@ class ArmConfig:
 
 
 @dataclass
+class VentionBaseConfig:
+    """Configuration for a Vention linear actuator."""
+
+    name: str  # "left" or "right"
+    joint_name: str  # MuJoCo joint name
+    actuator_name: str  # MuJoCo actuator name
+    height_range: tuple[float, float] = (0.0, 0.5)  # meters (min, max)
+    collision_check_resolution: float = 0.01  # meters between collision checks
+
+
+@dataclass
 class GeodudConfig:
     """Full robot configuration."""
 
     model_path: Path
     left_arm: ArmConfig
     right_arm: ArmConfig
+    left_base: VentionBaseConfig | None = None
+    right_base: VentionBaseConfig | None = None
     named_poses: dict[str, dict[str, list[float]]] = field(default_factory=dict)
 
     @classmethod
@@ -83,14 +96,27 @@ class GeodudConfig:
                     "right_ur5e/gripper/left_pad",
                 ],
             ),
+            left_base=VentionBaseConfig(
+                name="left",
+                joint_name="left_arm_linear_vention",
+                actuator_name="left_linear_actuator",
+            ),
+            right_base=VentionBaseConfig(
+                name="right",
+                joint_name="right_arm_linear_vention",
+                actuator_name="right_linear_actuator",
+            ),
             named_poses={
                 "home": {
+                    # Arms tucked in, elbows bent up
                     "left": [-1.5708, -1.5708, 1.5708, -1.5708, -1.5708, 0],
                     "right": [-1.5708, -1.5708, 1.5708, -1.5708, -1.5708, 0],
                 },
                 "ready": {
-                    "left": [-1.0, -1.5708, 1.5708, -1.5708, -1.5708, 0],
-                    "right": [-2.14, -1.5708, 1.5708, -1.5708, -1.5708, 0],
+                    # Arms extended forward, gripper pointing down, ready to work
+                    # shoulder_pan, shoulder_lift, elbow, wrist1, wrist2, wrist3
+                    "left": [-1.57, -1.2, 0.8, -1.17, -1.57, 0],
+                    "right": [-1.57, -1.2, 0.8, -1.17, -1.57, 0],
                 },
             },
         )
@@ -101,9 +127,19 @@ class GeodudConfig:
         with open(path) as f:
             data = yaml.safe_load(f)
 
+        left_base = None
+        if "left_base" in data:
+            left_base = VentionBaseConfig(**data["left_base"])
+
+        right_base = None
+        if "right_base" in data:
+            right_base = VentionBaseConfig(**data["right_base"])
+
         return cls(
             model_path=Path(data["model_path"]),
             left_arm=ArmConfig(**data["left_arm"]),
             right_arm=ArmConfig(**data["right_arm"]),
+            left_base=left_base,
+            right_base=right_base,
             named_poses=data.get("named_poses", {}),
         )

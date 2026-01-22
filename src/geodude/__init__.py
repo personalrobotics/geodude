@@ -7,6 +7,34 @@ def __getattr__(name):
     if name == "Geodude":
         from geodude.robot import Geodude
         return Geodude
+    if name == "VentionBase":
+        from geodude.vention_base import VentionBase
+        return VentionBase
+    if name == "VentionBaseConfig":
+        from geodude.config import VentionBaseConfig
+        return VentionBaseConfig
+    # TSR utilities
+    if name in (
+        "create_top_grasp_tsr",
+        "create_side_grasp_tsr",
+        "create_place_tsr",
+        "create_lift_tsr",
+        "create_retract_tsr",
+        "create_approach_tsr",
+    ):
+        from geodude import tsr_utils
+        return getattr(tsr_utils, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-__all__ = ["Geodude"]
+__all__ = [
+    "Geodude",
+    "VentionBase",
+    "VentionBaseConfig",
+    # TSR utilities
+    "create_top_grasp_tsr",
+    "create_side_grasp_tsr",
+    "create_place_tsr",
+    "create_lift_tsr",
+    "create_retract_tsr",
+    "create_approach_tsr",
+]

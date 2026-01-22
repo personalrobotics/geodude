@@ -9,6 +9,7 @@ import numpy as np
 from geodude.arm import Arm
 from geodude.config import GeodudConfig
 from geodude.grasp_manager import GraspManager
+from geodude.vention_base import VentionBase
 
 
 class Geodude:
@@ -52,6 +53,19 @@ class Geodude:
         self._left_arm = Arm(self, self.config.left_arm, self.grasp_manager)
         self._right_arm = Arm(self, self.config.right_arm, self.grasp_manager)
 
+        # Initialize bases (if configured)
+        self._left_base: VentionBase | None = None
+        self._right_base: VentionBase | None = None
+
+        if self.config.left_base is not None:
+            self._left_base = VentionBase(
+                self.model, self.data, self.config.left_base, self._left_arm
+            )
+        if self.config.right_base is not None:
+            self._right_base = VentionBase(
+                self.model, self.data, self.config.right_base, self._right_arm
+            )
+
         # Run forward to initialize state
         mujoco.mj_forward(self.model, self.data)
 
@@ -91,6 +105,16 @@ class Geodude:
     def right_arm(self) -> Arm:
         """Right arm controller."""
         return self._right_arm
+
+    @property
+    def left_base(self) -> VentionBase | None:
+        """Left Vention base controller (linear actuator)."""
+        return self._left_base
+
+    @property
+    def right_base(self) -> VentionBase | None:
+        """Right Vention base controller (linear actuator)."""
+        return self._right_base
 
     @property
     def named_poses(self) -> dict[str, dict[str, list[float]]]:

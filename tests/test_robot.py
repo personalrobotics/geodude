@@ -72,10 +72,10 @@ class TestGeodude:
         success = robot.go_to("ready")
 
         assert success
-        expected_left = [-1.0, -1.5708, 1.5708, -1.5708, -1.5708, 0]
-        expected_right = [-2.14, -1.5708, 1.5708, -1.5708, -1.5708, 0]
-        assert np.allclose(robot.left_arm.get_joint_positions(), expected_left, atol=0.01)
-        assert np.allclose(robot.right_arm.get_joint_positions(), expected_right, atol=0.01)
+        # Both arms use same ready pose config
+        expected = [-1.57, -1.2, 0.8, -1.17, -1.57, 0]
+        assert np.allclose(robot.left_arm.get_joint_positions(), expected, atol=0.01)
+        assert np.allclose(robot.right_arm.get_joint_positions(), expected, atol=0.01)
 
     def test_go_to_unknown_pose_raises(self):
         """go_to with unknown pose raises ValueError."""

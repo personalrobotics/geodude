@@ -58,17 +58,12 @@ class VentionBase:
         if self._actuator_id == -1:
             raise ValueError(f"Actuator '{config.actuator_name}' not found in model")
 
-        # Build set of body IDs for THIS arm (for collision checking)
-        # Uses same policy as arm planning: only ignore adjacent link contacts
+        # Build set of body IDs for this arm (for collision checking)
         self._arm_body_ids: set[int] = set()
-        self._gripper_body_ids: set[int] = set()
-        self._adjacent_pairs: set[tuple[int, int]] = set()
         self._build_arm_body_ids()
 
     def _build_arm_body_ids(self) -> None:
-        """Build set of body IDs that belong to this arm and adjacency info."""
-        # First pass: collect arm link bodies
-        arm_link_bodies = []
+        """Build set of body IDs that belong to this arm including gripper."""
         for joint_name in self._arm.config.joint_names:
             joint_id = mujoco.mj_name2id(
                 self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name
@@ -76,43 +71,14 @@ class VentionBase:
             if joint_id != -1:
                 body_id = self.model.jnt_bodyid[joint_id]
                 self._arm_body_ids.add(body_id)
-                arm_link_bodies.append(body_id)
+                self._add_child_bodies(body_id)
 
-        # Build adjacency from kinematic chain (parent-child relationships)
-        for body_id in arm_link_bodies:
-            parent_id = self.model.body_parentid[body_id]
-            if parent_id in self._arm_body_ids:
-                self._add_adjacent_pair(parent_id, body_id)
-
-        # Add gripper bodies (children of last arm link)
-        last_link = arm_link_bodies[-1] if arm_link_bodies else None
-        if last_link is not None:
-            self._add_gripper_bodies(last_link)
-
-    def _add_adjacent_pair(self, body1: int, body2: int) -> None:
-        """Add a pair of bodies as adjacent (allowed to contact)."""
-        pair = (min(body1, body2), max(body1, body2))
-        self._adjacent_pairs.add(pair)
-
-    def _add_gripper_bodies(self, parent_id: int) -> None:
-        """Recursively add gripper bodies and their adjacencies."""
+    def _add_child_bodies(self, parent_id: int) -> None:
+        """Recursively add child bodies (e.g., gripper) to arm body set."""
         for i in range(self.model.nbody):
-            if self.model.body_parentid[i] == parent_id:
+            if self.model.body_parentid[i] == parent_id and i not in self._arm_body_ids:
                 self._arm_body_ids.add(i)
-                self._gripper_body_ids.add(i)
-                # Gripper body is adjacent to its parent
-                self._add_adjacent_pair(parent_id, i)
-                # Recurse for gripper sub-bodies
-                self._add_gripper_bodies(i)
-
-    def _are_adjacent(self, body1: int, body2: int) -> bool:
-        """Check if two bodies are adjacent in the kinematic chain."""
-        pair = (min(body1, body2), max(body1, body2))
-        return pair in self._adjacent_pairs
-
-    def _both_gripper_bodies(self, body1: int, body2: int) -> bool:
-        """Check if both bodies are gripper bodies (finger contacts allowed)."""
-        return body1 in self._gripper_body_ids and body2 in self._gripper_body_ids
+                self._add_child_bodies(i)
 
     @property
     def name(self) -> str:
@@ -229,45 +195,24 @@ class VentionBase:
             mujoco.mj_forward(self.model, self.data)
 
     def _has_arm_collision(self) -> bool:
-        """Check if arm is in collision.
+        """Check if arm is in collision with environment.
 
-        Uses the SAME policy as arm motion planning:
-        - Ignore adjacent link contacts (parent-child in kinematic chain)
-        - Ignore gripper-gripper contacts (finger self-contact)
-        - Flag non-adjacent same-arm contacts (e.g., forearm hitting gripper)
-        - Flag contacts between arm and vention frame
-        - Flag contacts between arm and other arm
-        - Flag contacts between arm and environment
+        Self-collision filtering is handled by MuJoCo via <exclude> tags,
+        so we only check for arm-environment contacts.
 
         Returns:
-            True if arm has a collision
+            True if arm has a collision with environment
         """
         for i in range(self.data.ncon):
             contact = self.data.contact[i]
-            geom1, geom2 = contact.geom1, contact.geom2
-            body1 = self.model.geom_bodyid[geom1]
-            body2 = self.model.geom_bodyid[geom2]
+            body1 = self.model.geom_bodyid[contact.geom1]
+            body2 = self.model.geom_bodyid[contact.geom2]
 
-            # Check if contact involves this arm
             body1_is_arm = body1 in self._arm_body_ids
             body2_is_arm = body2 in self._arm_body_ids
 
-            if not body1_is_arm and not body2_is_arm:
-                # Neither body is part of this arm - not our concern
-                continue
-
-            # Check same-arm contacts more carefully
-            if body1_is_arm and body2_is_arm:
-                # Allow: adjacent links (parent-child) or gripper-gripper
-                if self._are_adjacent(body1, body2):
-                    continue
-                if self._both_gripper_bodies(body1, body2):
-                    continue
-                # Non-adjacent same-arm contact = real self-collision!
+            # Only flag contacts between arm and non-arm (environment)
+            if body1_is_arm != body2_is_arm:
                 return True
-
-            # Arm is in contact with something else (vention, other arm, environment)
-            # This is a collision
-            return True
 
         return False

@@ -637,20 +637,7 @@ class Arm:
                 "Or: uv add pycbirrt[eaik]"
             )
 
-        from tsr import TSR
-
         q_start = self.get_joint_positions()
-
-        # Get the EE pose at the goal configuration WITHOUT modifying robot state
-        # This avoids visible teleportation artifacts in the viewer
-        goal_pose = self._get_ee_pose_at_config(q_goal)
-
-        # Create a point TSR for the goal (no freedom)
-        goal_tsr = TSR(
-            T0_w=goal_pose,
-            Tw_e=np.eye(4),
-            Bw=np.zeros((6, 2)),
-        )
 
         config = CBiRRTConfig(
             timeout=timeout,
@@ -662,15 +649,11 @@ class Arm:
         planner = self._get_planner(config)
 
         try:
-            path = planner.plan(q_start, goal_tsrs=[goal_tsr], seed=seed)
+            # Pass goal configuration directly - no FK/IK round-trip needed
+            path = planner.plan(start=q_start, goal=q_goal, seed=seed)
         except ValueError:
-            # No valid goal configurations found
+            # Invalid goal configuration (collision or constraint violation)
             return None
-
-        # NOTE: Do NOT modify path[-1] to force it to q_goal!
-        # The planner may find a different IK solution that achieves the same pose.
-        # Forcing it to q_goal can create huge (>300°) unvalidated jumps with collisions.
-        # The planned path already achieves the goal pose and is collision-free.
 
         # CRITICAL: Restore robot state after planning
         # Planner corrupts state during collision checking and exploration
@@ -720,7 +703,7 @@ class Arm:
         planner = self._get_planner(config)
 
         try:
-            return planner.plan(
+            path = planner.plan(
                 q_start,
                 goal_tsrs=tsrs,
                 constraint_tsrs=constraint_tsrs,
@@ -728,7 +711,15 @@ class Arm:
             )
         except ValueError:
             # No valid goal configurations found (IK failed or all in collision)
-            return None
+            path = None
+
+        # CRITICAL: Restore robot state after planning
+        # Planner corrupts state during collision checking and exploration
+        self.set_joint_positions(q_start)
+        for i in range(len(self.data.qvel)):
+            self.data.qvel[i] = 0.0
+
+        return path
 
     def execute(
         self,
@@ -847,12 +838,9 @@ class Arm:
             return False
 
         # 3. Create approach pose (back along approach direction)
-        # Get the final grasp pose from the planned path
+        # Get the final grasp pose from the planned path without modifying robot state
         final_q = grasp_path[-1]
-        old_q = self.get_joint_positions()
-        self.set_joint_positions(final_q)
-        grasp_pose = self.get_ee_pose()
-        self.set_joint_positions(old_q)
+        grasp_pose = self._get_ee_pose_at_config(final_q)
 
         approach_tsr = create_approach_tsr(
             target_ee_pose=grasp_pose,
@@ -870,13 +858,13 @@ class Arm:
 
         # 5. Execute the grasp path (from approach to grasp)
         # Re-plan from current position to grasp
-        current_q = self.get_joint_positions()
         final_grasp_path = self.plan_to_configuration(final_q)
         if final_grasp_path is not None:
             self.execute(final_grasp_path)
         else:
-            # Fall back to executing original path from current position
-            self.execute(grasp_path)
+            # Re-planning failed - this can happen if approach put us in a bad spot
+            # Return failure rather than executing stale path from wrong start position
+            return False
 
         # 6. Close gripper to grasp
         self.gripper.set_candidate_objects([object_name])
@@ -952,12 +940,9 @@ class Arm:
         if place_path is None:
             return False
 
-        # 2. Get the place pose for approach planning
+        # 2. Get the place pose for approach planning without modifying robot state
         final_q = place_path[-1]
-        old_q = self.get_joint_positions()
-        self.set_joint_positions(final_q)
-        place_pose = self.get_ee_pose()
-        self.set_joint_positions(old_q)
+        place_pose = self._get_ee_pose_at_config(final_q)
 
         # 3. Create approach pose
         approach_tsr = create_approach_tsr(
@@ -971,12 +956,13 @@ class Arm:
             self.execute(approach_path)
 
         # 5. Move to place pose
-        current_q = self.get_joint_positions()
         final_place_path = self.plan_to_configuration(final_q)
         if final_place_path is not None:
             self.execute(final_place_path)
         else:
-            self.execute(place_path)
+            # Re-planning failed - this can happen if approach put us in a bad spot
+            # Return failure rather than executing stale path from wrong start position
+            return False
 
         # 6. Open gripper to release object
         self.open_gripper()

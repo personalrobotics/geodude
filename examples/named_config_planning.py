@@ -1,12 +1,13 @@
 """Example: Move between named configurations using CBiRRT planning.
 
 This script demonstrates how to plan collision-free paths between named
-robot configurations (like 'home' and 'ready') using the CBiRRT planner.
+robot configurations (like 'home' and 'ready') using the CBiRRT planner,
+and execute them using TOPP-RA time-optimal trajectory generation.
 
 The robot will:
 1. Start at the 'home' configuration
 2. Plan a path to 'ready' using CBiRRT
-3. Execute the path with visualization
+3. Execute the path with TOPP-RA retiming (respects velocity/acceleration limits)
 4. Plan back to 'home'
 
 Usage:
@@ -24,25 +25,6 @@ import mujoco
 import numpy as np
 
 from geodude import Geodude
-
-
-def interpolate_path(
-    path: list[np.ndarray], steps_per_segment: int = 20
-) -> list[np.ndarray]:
-    """Interpolate between waypoints for smooth motion."""
-    if len(path) < 2:
-        return path
-
-    interpolated = []
-    for i in range(len(path) - 1):
-        q_start = path[i]
-        q_end = path[i + 1]
-        for j in range(steps_per_segment):
-            alpha = j / steps_per_segment
-            q = q_start + alpha * (q_end - q_start)
-            interpolated.append(q)
-    interpolated.append(path[-1])
-    return interpolated
 
 
 def main():
@@ -105,27 +87,19 @@ def main():
 
         print("\nLaunching viewer...")
         with mj_viewer.launch_passive(robot.model, robot.data) as viewer:
+            viewer.sync()
             time.sleep(1.0)
 
-            # Execute path to ready
-            print("Executing: home -> ready")
-            smooth_path = interpolate_path(path_to_ready, steps_per_segment=10)
-            for q in smooth_path:
-                arm.set_joint_positions(q)
-                mujoco.mj_forward(robot.model, robot.data)
-                viewer.sync()
-                time.sleep(0.005)
-
+            # Execute path to ready using TOPP-RA retiming
+            print("Executing: home -> ready (with TOPP-RA retiming)")
+            arm.execute(path_to_ready)
+            viewer.sync()
             time.sleep(0.5)
 
             # Execute path back home
-            print("Executing: ready -> home")
-            smooth_path = interpolate_path(path_to_home, steps_per_segment=10)
-            for q in smooth_path:
-                arm.set_joint_positions(q)
-                mujoco.mj_forward(robot.model, robot.data)
-                viewer.sync()
-                time.sleep(0.005)
+            print("Executing: ready -> home (with TOPP-RA retiming)")
+            arm.execute(path_to_home)
+            viewer.sync()
 
             print("\nDone! Close the viewer window to exit.")
             while viewer.is_running():

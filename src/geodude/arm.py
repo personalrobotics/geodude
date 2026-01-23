@@ -324,7 +324,7 @@ class Arm:
                 step_size=0.2,
                 goal_bias=0.1,
                 ik_num_seeds=1,  # EAIK finds all solutions analytically
-                smoothing_iterations=500,  # More smoothing for shorter paths
+                smoothing_iterations=100,  # Default smoothing
             )
 
             planner = CBiRRT(
@@ -657,7 +657,7 @@ class Arm:
             step_size=0.2,
             goal_bias=0.1,
             ik_num_seeds=1,
-            smoothing_iterations=500,
+            smoothing_iterations=100,  # Default smoothing
         )
         planner = self._get_planner(config)
 
@@ -667,9 +667,10 @@ class Arm:
             # No valid goal configurations found
             return None
 
-        # Ensure path ends at exactly q_goal (IK might find different config for same pose)
-        if path is not None:
-            path[-1] = q_goal
+        # NOTE: Do NOT modify path[-1] to force it to q_goal!
+        # The planner may find a different IK solution that achieves the same pose.
+        # Forcing it to q_goal can create huge (>300°) unvalidated jumps with collisions.
+        # The planned path already achieves the goal pose and is collision-free.
 
         # CRITICAL: Restore robot state after planning
         # Planner corrupts state during collision checking and exploration
@@ -714,7 +715,7 @@ class Arm:
             goal_bias=0.1,
             ik_num_seeds=1,
             timeout=timeout,
-            smoothing_iterations=500,
+            smoothing_iterations=100,  # Default smoothing
         )
         planner = self._get_planner(config)
 

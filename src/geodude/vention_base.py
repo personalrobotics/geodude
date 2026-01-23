@@ -105,10 +105,14 @@ class VentionBase:
             ValueError: If height is outside valid range
         """
         min_h, max_h = self.config.height_range
-        if not min_h <= height <= max_h:
+        tolerance = 1e-3  # Tolerance for floating point errors (1mm)
+        if not (min_h - tolerance) <= height <= (max_h + tolerance):
             raise ValueError(
                 f"Height {height} outside valid range [{min_h}, {max_h}]"
             )
+
+        # Clamp to valid range to handle floating point errors
+        height = max(min_h, min(max_h, height))
 
         self.data.qpos[self._qpos_idx] = height
         self.data.ctrl[self._actuator_id] = height

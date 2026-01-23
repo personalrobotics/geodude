@@ -21,30 +21,24 @@ class FeedbackGains:
     MuJoCo's built-in actuator control. The feedback controller measures position
     and velocity errors at each control cycle and adjusts commands accordingly.
 
-    Tuned values:
-    - kp=200.0: Very aggressive position correction for robust tracking
-    - ki=0.0: Not needed for trajectory tracking (can cause overshoot)
-    - kd=20.0: Strong velocity feedback for damping and smooth motion
-
-    These gains handle large initial errors (e.g., from actuator lag) and
-    provide excellent tracking throughout the trajectory.
+    Original baseline values:
+    - kp=25.0: Position correction gain (works well with MuJoCo actuator dynamics)
+    - ki=0.0: Not needed for trajectory tracking
+    - kd=0.0: No velocity feedback (MuJoCo actuators already have good built-in dynamics)
     """
-    kp: float = 200.0  # Proportional gain (position error)
-    ki: float = 0.0    # Integral gain (accumulated position error)
-    kd: float = 20.0   # Derivative gain (velocity error)
+    kp: float = 25.0  # Proportional gain (position error)
+    ki: float = 0.0   # Integral gain (accumulated position error)
+    kd: float = 0.0   # Derivative gain (velocity error)
 
     @classmethod
     def default(cls) -> "FeedbackGains":
-        """Default gains optimized for robust tracking."""
-        return cls(kp=200.0, ki=0.0, kd=20.0)
+        """Default gains."""
+        return cls(kp=25.0, ki=0.0, kd=0.0)
 
     @classmethod
     def high_speed(cls) -> "FeedbackGains":
-        """Gains optimized for high-speed operation (75-100% speed).
-
-        Uses same gains as default - already tuned for aggressive tracking.
-        """
-        return cls(kp=200.0, ki=0.0, kd=20.0)
+        """Gains optimized for high-speed operation (75-100% speed)."""
+        return cls(kp=25.0, ki=0.0, kd=0.0)
 
 
 @dataclass

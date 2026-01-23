@@ -6,6 +6,7 @@ from typing import Protocol
 import mujoco
 import numpy as np
 
+from geodude.config import FeedbackGains
 from geodude.trajectory import Trajectory
 
 
@@ -226,9 +227,9 @@ class ClosedLoopExecutor:
         actuator_ids: list[int],
         control_dt: float = 0.008,  # 125 Hz to match UR5e
         viewer=None,
-        kp: float = 200.0,  # Position error gain (tuned for very aggressive tracking)
-        ki: float = 0.0,    # Integral gain (0.0 optimal for trajectory tracking)
-        kd: float = 20.0,   # Velocity error gain (strong damping to prevent overshoot)
+        kp: float | None = None,  # Defaults to FeedbackGains.default().kp
+        ki: float | None = None,  # Defaults to FeedbackGains.default().ki
+        kd: float | None = None,  # Defaults to FeedbackGains.default().kd
     ):
         """Initialize closed-loop feedback executor.
 
@@ -239,10 +240,18 @@ class ClosedLoopExecutor:
             actuator_ids: MuJoCo actuator IDs for position control
             control_dt: Control update rate in seconds (default: 125 Hz)
             viewer: Optional MuJoCo viewer to sync during execution
-            kp: Position error gain for feedback control
-            ki: Integral gain for accumulated position error
-            kd: Velocity error gain for damping and velocity tracking
+            kp: Position error gain (default: from FeedbackGains config)
+            ki: Integral gain (default: from FeedbackGains config)
+            kd: Velocity error gain (default: from FeedbackGains config)
         """
+        # Use config defaults if not specified
+        default_gains = FeedbackGains.default()
+        if kp is None:
+            kp = default_gains.kp
+        if ki is None:
+            ki = default_gains.ki
+        if kd is None:
+            kd = default_gains.kd
         self.model = model
         self.data = data
         self.joint_qpos_indices = joint_qpos_indices

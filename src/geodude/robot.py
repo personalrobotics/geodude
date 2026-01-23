@@ -5,6 +5,7 @@ from typing import Any
 
 import mujoco
 import numpy as np
+from mj_environment import Environment
 
 from geodude.arm import Arm
 from geodude.config import GeodudConfig
@@ -36,15 +37,20 @@ class Geodude:
         """
         self.config = config or GeodudConfig.default()
 
-        # Load MuJoCo model
+        # Load MuJoCo model via mj_environment (robot-only, no objects)
         if not self.config.model_path.exists():
             raise FileNotFoundError(
                 f"MuJoCo model not found: {self.config.model_path}\n"
                 "Make sure geodude_assets is available."
             )
 
-        self.model = mujoco.MjModel.from_xml_path(str(self.config.model_path))
-        self.data = mujoco.MjData(self.model)
+        self._env = Environment(
+            base_scene_xml=str(self.config.model_path),
+            objects_dir=None,
+            scene_config_yaml=None,
+        )
+        self.model = self._env.model
+        self.data = self._env.data
 
         # Initialize grasp manager
         self.grasp_manager = GraspManager(self.model, self.data)
@@ -115,6 +121,11 @@ class Geodude:
     def right_base(self) -> VentionBase | None:
         """Right Vention base controller (linear actuator)."""
         return self._right_base
+
+    @property
+    def env(self) -> Environment:
+        """MuJoCo environment wrapper for forking and state management."""
+        return self._env
 
     @property
     def named_poses(self) -> dict[str, dict[str, list[float]]]:

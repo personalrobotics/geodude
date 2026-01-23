@@ -637,6 +637,9 @@ class Arm:
                 "Or: uv add pycbirrt[eaik]"
             )
 
+        # Create fork to preserve state (planning corrupts self.data)
+        state_snapshot = self.robot.env.fork()
+
         q_start = self.get_joint_positions()
 
         config = CBiRRTConfig(
@@ -653,13 +656,10 @@ class Arm:
             path = planner.plan(start=q_start, goal=q_goal, seed=seed)
         except ValueError:
             # Invalid goal configuration (collision or constraint violation)
-            return None
-
-        # CRITICAL: Restore robot state after planning
-        # Planner corrupts state during collision checking and exploration
-        self.set_joint_positions(q_start)
-        for i in range(len(self.data.qvel)):
-            self.data.qvel[i] = 0.0
+            path = None
+        finally:
+            # Restore robot state from snapshot (planning corrupts state)
+            self.robot.env.sync_from(state_snapshot)
 
         return path
 
@@ -690,6 +690,9 @@ class Arm:
                 "Or: uv add pycbirrt[eaik]"
             )
 
+        # Create fork to preserve state (planning corrupts self.data)
+        state_snapshot = self.robot.env.fork()
+
         q_start = self.get_joint_positions()
 
         config = CBiRRTConfig(
@@ -712,12 +715,9 @@ class Arm:
         except ValueError:
             # No valid goal configurations found (IK failed or all in collision)
             path = None
-
-        # CRITICAL: Restore robot state after planning
-        # Planner corrupts state during collision checking and exploration
-        self.set_joint_positions(q_start)
-        for i in range(len(self.data.qvel)):
-            self.data.qvel[i] = 0.0
+        finally:
+            # Restore robot state from snapshot (planning corrupts state)
+            self.robot.env.sync_from(state_snapshot)
 
         return path
 

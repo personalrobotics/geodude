@@ -16,6 +16,14 @@ wheels = [
 ]
 
 [[package]]
+name = "asset-manager"
+version = "0.1.0"
+source = { git = "https://github.com/personalrobotics/asset_manager.git#199ee7d51636d32608388055c4d36bf752d9adc4" }
+dependencies = [
+    { name = "pyyaml" },
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -288,6 +296,8 @@ name = "geodude"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "geodude-assets" },
+    { name = "mj-environment" },
     { name = "mujoco" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -303,6 +313,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "geodude-assets", editable = "../geodude_assets" },
+    { name = "mj-environment", git = "https://github.com/personalrobotics/mj_environment.git" },
     { name = "mujoco" },
     { name = "numpy" },
     { name = "pytest", marker = "extra == 'dev'" },
@@ -311,6 +323,24 @@ requires-dist = [
     { name = "toppra", specifier = ">=0.6.3" },
 ]
 provides-extras = ["dev"]
+
+[[package]]
+name = "geodude-assets"
+version = "0.1.0"
+source = { editable = "../geodude_assets" }
+dependencies = [
+    { name = "mujoco" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "dm-control", marker = "extra == 'assembly'" },
+    { name = "mujoco" },
+    { name = "numpy", marker = "extra == 'assembly'" },
+    { name = "pytest", marker = "extra == 'dev'" },
+    { name = "ruff", marker = "extra == 'dev'" },
+]
+provides-extras = ["assembly", "dev"]
 
 [[package]]
 name = "glfw"
@@ -527,6 +557,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/04/30/3afaa31c757f34b7725ab9d2ba8b48b5e89c2019c003e7d0ead143aabc5a/matplotlib-3.10.8-pp311-pypy311_pp73-macosx_10_15_x86_64.whl", hash = "sha256:6da7c2ce169267d0d066adcf63758f0604aa6c3eebf67458930f9d9b79ad1db1", size = 8249198, upload-time = "2025-12-10T22:56:45.584Z" },
     { url = "https://files.pythonhosted.org/packages/48/2f/6334aec331f57485a642a7c8be03cb286f29111ae71c46c38b363230063c/matplotlib-3.10.8-pp311-pypy311_pp73-macosx_11_0_arm64.whl", hash = "sha256:9153c3292705be9f9c64498a8872118540c3f4123d1a1c840172edf262c8be4a", size = 8136817, upload-time = "2025-12-10T22:56:47.339Z" },
     { url = "https://files.pythonhosted.org/packages/73/e4/6d6f14b2a759c622f191b2d67e9075a3f56aaccb3be4bb9bb6890030d0a0/matplotlib-3.10.8-pp311-pypy311_pp73-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:1ae029229a57cd1e8fe542485f27e7ca7b23aa9e8944ddb4985d0bc444f1eca2", size = 8713867, upload-time = "2025-12-10T22:56:48.954Z" },
+]
+
+[[package]]
+name = "mj-environment"
+version = "0.1.0"
+source = { git = "https://github.com/personalrobotics/mj_environment.git#c07574b2ec5f651777db675ef1463cd91a3273ec" }
+dependencies = [
+    { name = "asset-manager" },
+    { name = "mujoco" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pyyaml" },
 ]
 
 [[package]]

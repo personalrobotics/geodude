@@ -9,8 +9,15 @@ import numpy as np
 
 from geodude.collision import GraspAwareCollisionChecker
 from geodude.config import ArmConfig
+from geodude.executor import (
+    ClosedLoopExecutor,
+    KinematicExecutor,
+    PhysicsExecutor,
+    SimExecutor,  # Alias for ClosedLoopExecutor (backward compatibility)
+)
 from geodude.grasp_manager import GraspManager
 from geodude.gripper import Gripper
+from geodude.trajectory import Trajectory
 
 # Optional pycbirrt imports for motion planning
 try:
@@ -61,12 +68,9 @@ class ArmRobotModel:
         Returns:
             4x4 homogeneous transform of end-effector in world frame
         """
-        # Save and restore current position since FK is query-only
-        old_q = self._arm.get_joint_positions()
-        self._arm.set_joint_positions(q)
-        pose = self._arm.get_ee_pose()
-        self._arm.set_joint_positions(old_q)
-        return pose
+        # Use temporary MjData to avoid visible teleportation during planning
+        # This method is called hundreds of times by the planner!
+        return self._arm._get_ee_pose_at_config(q)
 
 
 class ArmIKSolver:
@@ -152,6 +156,21 @@ class Arm:
             self.joint_ids.append(jid)
             self.joint_qpos_indices.append(self.model.jnt_qposadr[jid])
 
+        # Get actuator IDs for position control
+        # Find actuators that control these joints
+        self.actuator_ids = []
+        for jid in self.joint_ids:
+            # Find actuator that controls this joint
+            actuator_id = -1
+            for act_id in range(self.model.nu):
+                # Check if this actuator's transmission targets our joint
+                if self.model.actuator_trnid[act_id, 0] == jid:
+                    actuator_id = act_id
+                    break
+            if actuator_id == -1:
+                raise ValueError(f"No actuator found for joint ID {jid}")
+            self.actuator_ids.append(actuator_id)
+
         # Get EE site
         self.ee_site_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_SITE, config.ee_site
@@ -183,10 +202,11 @@ class Arm:
             )
         # Note: base_body_id can be -1 if not found; we'll handle this in get_base_pose
 
-        # Planner and IK solver will be set up lazily
+        # Planner, IK solver, and executor will be set up lazily
         self._planner = None
         self._collision_checker = None
         self._ik_solver = None
+        self._executor = None
         self._ee_offset = None  # Cached EE offset transform
 
     @property
@@ -215,6 +235,41 @@ class Arm:
 
         pos = self.data.site_xpos[self.ee_site_id]
         rot_mat = self.data.site_xmat[self.ee_site_id].reshape(3, 3)
+
+        transform = np.eye(4)
+        transform[:3, :3] = rot_mat
+        transform[:3, 3] = pos
+        return transform
+
+    def _get_ee_pose_at_config(self, q: np.ndarray) -> np.ndarray:
+        """Compute end-effector pose at a specific configuration without modifying robot state.
+
+        Creates a temporary MjData copy to avoid corrupting the shared robot state.
+        This is essential during planning to avoid visible teleportation artifacts.
+
+        Args:
+            q: Joint configuration to compute FK at
+
+        Returns:
+            4x4 homogeneous transform of end-effector pose
+        """
+        # Create temporary data for FK computation
+        temp_data = mujoco.MjData(self.model)
+
+        # Copy current state to temp data
+        temp_data.qpos[:] = self.data.qpos
+        temp_data.qvel[:] = self.data.qvel
+
+        # Set arm joints to target configuration in temp data
+        for i, qpos_idx in enumerate(self.joint_qpos_indices):
+            temp_data.qpos[qpos_idx] = q[i]
+
+        # Compute FK in temp data (doesn't affect shared state)
+        mujoco.mj_forward(self.model, temp_data)
+
+        # Read EE pose from temp data
+        pos = temp_data.site_xpos[self.ee_site_id]
+        rot_mat = temp_data.site_xmat[self.ee_site_id].reshape(3, 3)
 
         transform = np.eye(4)
         transform[:3, :3] = rot_mat
@@ -269,6 +324,7 @@ class Arm:
                 step_size=0.2,
                 goal_bias=0.1,
                 ik_num_seeds=1,  # EAIK finds all solutions analytically
+                smoothing_iterations=500,  # More smoothing for shorter paths
             )
 
             planner = CBiRRT(
@@ -325,6 +381,56 @@ class Arm:
                 collision_checker=self._get_collision_checker(),
             )
         return self._ik_solver
+
+    def _get_executor(
+        self,
+        viewer=None,
+        executor_type: str = "closed_loop",
+    ) -> KinematicExecutor | PhysicsExecutor | ClosedLoopExecutor:
+        """Get or create the trajectory executor.
+
+        Args:
+            viewer: Optional MuJoCo viewer for visualization during execution
+            executor_type: Type of executor to use:
+                - "closed_loop" (default): Feedback control with error correction
+                - "kinematic": Perfect tracking without physics
+                - "physics": Open-loop physics simulation
+
+        Returns:
+            Executor instance configured for this arm
+        """
+        # Create executor based on type
+        if executor_type == "kinematic":
+            return KinematicExecutor(
+                model=self.model,
+                data=self.data,
+                joint_qpos_indices=self.joint_qpos_indices,
+                viewer=viewer,
+            )
+        elif executor_type == "physics":
+            return PhysicsExecutor(
+                model=self.model,
+                data=self.data,
+                joint_qpos_indices=self.joint_qpos_indices,
+                actuator_ids=self.actuator_ids,
+                viewer=viewer,
+            )
+        elif executor_type == "closed_loop":
+            return ClosedLoopExecutor(
+                model=self.model,
+                data=self.data,
+                joint_qpos_indices=self.joint_qpos_indices,
+                actuator_ids=self.actuator_ids,
+                viewer=viewer,
+                kp=self.config.feedback_gains.kp,
+                ki=self.config.feedback_gains.ki,
+                kd=self.config.feedback_gains.kd,
+            )
+        else:
+            raise ValueError(
+                f"Unknown executor_type: {executor_type}. "
+                "Must be 'kinematic', 'physics', or 'closed_loop'"
+            )
 
     def _get_base_rotation(self) -> np.ndarray:
         """Get the rotation from EAIK's base frame to MuJoCo's base body frame.
@@ -535,11 +641,9 @@ class Arm:
 
         q_start = self.get_joint_positions()
 
-        # Get the EE pose at the goal configuration
-        old_q = self.get_joint_positions()
-        self.set_joint_positions(q_goal)
-        goal_pose = self.get_ee_pose()
-        self.set_joint_positions(old_q)
+        # Get the EE pose at the goal configuration WITHOUT modifying robot state
+        # This avoids visible teleportation artifacts in the viewer
+        goal_pose = self._get_ee_pose_at_config(q_goal)
 
         # Create a point TSR for the goal (no freedom)
         goal_tsr = TSR(
@@ -553,6 +657,7 @@ class Arm:
             step_size=0.2,
             goal_bias=0.1,
             ik_num_seeds=1,
+            smoothing_iterations=500,
         )
         planner = self._get_planner(config)
 
@@ -565,6 +670,12 @@ class Arm:
         # Ensure path ends at exactly q_goal (IK might find different config for same pose)
         if path is not None:
             path[-1] = q_goal
+
+        # CRITICAL: Restore robot state after planning
+        # Planner corrupts state during collision checking and exploration
+        self.set_joint_positions(q_start)
+        for i in range(len(self.data.qvel)):
+            self.data.qvel[i] = 0.0
 
         return path
 
@@ -603,6 +714,7 @@ class Arm:
             goal_bias=0.1,
             ik_num_seeds=1,
             timeout=timeout,
+            smoothing_iterations=500,
         )
         planner = self._get_planner(config)
 
@@ -617,32 +729,50 @@ class Arm:
             # No valid goal configurations found (IK failed or all in collision)
             return None
 
-    def execute(self, path: list[np.ndarray], speed: float = 1.0) -> bool:
-        """Execute a planned path.
+    def execute(
+        self,
+        path: list[np.ndarray] | Trajectory,
+        executor: KinematicExecutor | PhysicsExecutor | ClosedLoopExecutor | None = None,
+        viewer=None,
+        executor_type: str = "closed_loop",
+    ) -> bool:
+        """Execute a planned path or pre-computed trajectory.
+
+        Converts geometric paths to time-optimal trajectories using TOPP-RA
+        and executes them respecting velocity/acceleration limits.
 
         Args:
-            path: List of waypoints (joint configurations)
-            speed: Execution speed multiplier
+            path: Either a list of waypoints (joint configurations) or
+                  a pre-computed Trajectory object
+            executor: Optional executor to use. If None, creates one based on executor_type
+            viewer: Optional MuJoCo viewer to sync during execution for smooth visualization
+            executor_type: Type of executor to create if executor=None:
+                - "closed_loop" (default): Feedback control with error correction
+                - "kinematic": Perfect tracking without physics
+                - "physics": Open-loop physics simulation
 
         Returns:
-            True if execution completed
+            True if execution completed successfully
+
+        Raises:
+            RuntimeError: If trajectory generation fails (path violates limits)
         """
-        # Simple execution: interpolate and step
-        for i in range(len(path) - 1):
-            q_start = path[i]
-            q_end = path[i + 1]
+        # Convert path to trajectory if needed
+        if isinstance(path, list):
+            trajectory = Trajectory.from_path(
+                path,
+                vel_limits=self.config.kinematic_limits.velocity,
+                acc_limits=self.config.kinematic_limits.acceleration,
+            )
+        else:
+            trajectory = path
 
-            # Interpolate between waypoints
-            n_steps = 50
-            for step in range(n_steps):
-                alpha = step / n_steps
-                q = q_start + alpha * (q_end - q_start)
-                self.set_joint_positions(q)
-                mujoco.mj_step(self.model, self.data)
+        # Get or use provided executor
+        if executor is None:
+            executor = self._get_executor(viewer=viewer, executor_type=executor_type)
 
-        # Final position
-        self.set_joint_positions(path[-1])
-        return True
+        # Execute trajectory
+        return executor.execute(trajectory)
 
     def close_gripper(self, steps: int = 100) -> str | None:
         """Close the gripper and detect grasp.

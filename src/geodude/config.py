@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
 import yaml
 
 # Try to import geodude_assets for model paths, fall back to None if not installed
@@ -10,6 +11,94 @@ try:
     from geodude_assets import get_model_path
 except ImportError:
     get_model_path = None
+
+
+@dataclass
+class FeedbackGains:
+    """PID feedback gains for closed-loop trajectory tracking.
+
+    These gains control the outer-loop feedback control that runs on top of
+    MuJoCo's built-in actuator control. The feedback controller measures position
+    and velocity errors at each control cycle and adjusts commands accordingly.
+
+    Tuned values:
+    - kp=200.0: Very aggressive position correction for robust tracking
+    - ki=0.0: Not needed for trajectory tracking (can cause overshoot)
+    - kd=20.0: Strong velocity feedback for damping and smooth motion
+
+    These gains handle large initial errors (e.g., from actuator lag) and
+    provide excellent tracking throughout the trajectory.
+    """
+    kp: float = 200.0  # Proportional gain (position error)
+    ki: float = 0.0    # Integral gain (accumulated position error)
+    kd: float = 20.0   # Derivative gain (velocity error)
+
+    @classmethod
+    def default(cls) -> "FeedbackGains":
+        """Default gains optimized for robust tracking."""
+        return cls(kp=200.0, ki=0.0, kd=20.0)
+
+    @classmethod
+    def high_speed(cls) -> "FeedbackGains":
+        """Gains optimized for high-speed operation (75-100% speed).
+
+        Uses same gains as default - already tuned for aggressive tracking.
+        """
+        return cls(kp=200.0, ki=0.0, kd=20.0)
+
+
+@dataclass
+class KinematicLimits:
+    """Velocity and acceleration limits for trajectory planning.
+
+    These limits come from the robot manufacturer's specifications (UR5e datasheet)
+    and are used by TOPP-RA for trajectory retiming. They are NOT physics parameters
+    in MuJoCo - the simulation doesn't enforce them, but planners must respect them
+    to ensure trajectories are executable on real hardware.
+
+    Note: Position limits are in the MuJoCo model XML (joint range attributes)
+    and can be read via model.jnt_range. Velocity/acceleration limits are not
+    supported by MuJoCo XML, so we define them here.
+
+    Recommended speed scales:
+    - 10%: Conservative for initial simulation testing
+    - 50%: Standard for real robot operation (safe and efficient) - DEFAULT
+    - 75-100%: High-speed operation (requires high-speed feedback gains)
+    """
+    velocity: np.ndarray  # rad/s per joint
+    acceleration: np.ndarray  # rad/s² per joint
+
+    @classmethod
+    def ur5e_default(cls, vel_scale: float = 0.5, acc_scale: float = 0.5) -> "KinematicLimits":
+        """Create default UR5e limits from datasheet.
+
+        Args:
+            vel_scale: Safety scaling factor for velocity (default 50% of max)
+            acc_scale: Safety scaling factor for acceleration (default 50% of max)
+
+        Returns:
+            KinematicLimits with scaled UR5e specifications
+        """
+        # UR5e official velocity limits from datasheet
+        base_vel = np.array([
+            3.14,  # shoulder_pan: ±180°/s
+            3.14,  # shoulder_lift: ±180°/s
+            3.14,  # elbow: ±180°/s
+            6.28,  # wrist_1: ±360°/s
+            6.28,  # wrist_2: ±360°/s
+            6.28,  # wrist_3: ±360°/s
+        ])
+
+        # UR5e acceleration limits (conservative defaults)
+        base_acc = np.array([
+            2.5, 2.5, 2.5,  # shoulder/elbow
+            5.0, 5.0, 5.0,  # wrist joints (can accelerate faster)
+        ])
+
+        return cls(
+            velocity=base_vel * vel_scale,
+            acceleration=base_acc * acc_scale,
+        )
 
 
 @dataclass
@@ -21,6 +110,8 @@ class ArmConfig:
     ee_site: str
     gripper_actuator: str
     gripper_bodies: list[str]  # Bodies that are part of gripper (for collision filtering)
+    kinematic_limits: KinematicLimits = field(default_factory=KinematicLimits.ur5e_default)
+    feedback_gains: FeedbackGains = field(default_factory=FeedbackGains.default)
 
 
 @dataclass
@@ -127,6 +218,17 @@ class GeodudConfig:
         with open(path) as f:
             data = yaml.safe_load(f)
 
+        def parse_arm_config(arm_data: dict) -> ArmConfig:
+            """Parse arm config with optional kinematic limits."""
+            kinematic_limits = KinematicLimits.ur5e_default()
+            if "kinematic_limits" in arm_data:
+                limits_data = arm_data.pop("kinematic_limits")
+                kinematic_limits = KinematicLimits(
+                    velocity=np.array(limits_data["velocity"]),
+                    acceleration=np.array(limits_data["acceleration"]),
+                )
+            return ArmConfig(**arm_data, kinematic_limits=kinematic_limits)
+
         left_base = None
         if "left_base" in data:
             left_base = VentionBaseConfig(**data["left_base"])
@@ -137,8 +239,8 @@ class GeodudConfig:
 
         return cls(
             model_path=Path(data["model_path"]),
-            left_arm=ArmConfig(**data["left_arm"]),
-            right_arm=ArmConfig(**data["right_arm"]),
+            left_arm=parse_arm_config(data["left_arm"]),
+            right_arm=parse_arm_config(data["right_arm"]),
             left_base=left_base,
             right_base=right_base,
             named_poses=data.get("named_poses", {}),

@@ -35,6 +35,10 @@ class GraspAwareCollisionChecker:
         self.data = data
         self.grasp_manager = grasp_manager
 
+        # Create temporary data for collision checking without visible state changes
+        # This avoids flickering in the viewer during planning
+        self._temp_data = mujoco.MjData(model)
+
         # Get joint indices for the controlled joints
         self.joint_indices = []
         for name in joint_names:
@@ -66,23 +70,27 @@ class GraspAwareCollisionChecker:
         grasped objects, so we just need to set the configuration and
         check for contacts.
 
+        Uses temporary MjData to avoid visible flickering during planning.
+
         Args:
             q: Joint configuration (only the controlled joints)
 
         Returns:
             True if collision-free, False otherwise
         """
-        # Set joint positions
+        # Copy current state to temp data (preserves grasped object states)
+        self._temp_data.qpos[:] = self.data.qpos
+        self._temp_data.qvel[:] = self.data.qvel
+
+        # Set joint positions in temp data
         for i, qpos_idx in enumerate(self.joint_indices):
-            self.data.qpos[qpos_idx] = q[i]
+            self._temp_data.qpos[qpos_idx] = q[i]
 
         # Run forward kinematics to update collision geometry positions
-        mujoco.mj_forward(self.model, self.data)
+        mujoco.mj_forward(self.model, self._temp_data)
 
-        # Check for collisions
-        # ncon > 0 means there are contacts, but we need to filter out
-        # expected contacts (like gripper holding object)
-        return self._count_invalid_contacts() == 0
+        # Check for collisions using temp data
+        return self._count_invalid_contacts(self._temp_data) == 0
 
     def is_valid_batch(self, qs: np.ndarray) -> np.ndarray:
         """Check multiple configurations for collisions.
@@ -98,19 +106,25 @@ class GraspAwareCollisionChecker:
             results[i] = self.is_valid(q)
         return results
 
-    def _count_invalid_contacts(self) -> int:
+    def _count_invalid_contacts(self, data: mujoco.MjData | None = None) -> int:
         """Count contacts that indicate invalid collisions.
 
         Self-collision filtering is handled by MuJoCo via <exclude> tags,
         so we only need to check for arm-environment collisions.
 
+        Args:
+            data: MjData to check contacts in (defaults to self.data for backward compatibility)
+
         Returns:
             Number of invalid (unexpected) contacts
         """
+        if data is None:
+            data = self.data
+
         invalid_count = 0
 
-        for i in range(self.data.ncon):
-            contact = self.data.contact[i]
+        for i in range(data.ncon):
+            contact = data.contact[i]
             body1 = self.model.geom_bodyid[contact.geom1]
             body2 = self.model.geom_bodyid[contact.geom2]
 

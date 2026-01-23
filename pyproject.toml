@@ -12,6 +12,7 @@ dependencies = [
     "numpy",
     "mujoco",
     "pyyaml",
+    "toppra>=0.6.3",
 ]
 
 [project.optional-dependencies]

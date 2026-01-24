@@ -9,9 +9,9 @@ from geodude.grasp_manager import GraspManager
 class GraspAwareCollisionChecker:
     """Collision checker that respects grasp state.
 
-    Checks for collisions between the robot arm and environment objects.
-    Self-collision filtering is handled by MuJoCo via <exclude> tags in the model,
-    so this checker only needs to detect arm-environment contacts.
+    Checks for collisions between the robot arm and environment, AND non-adjacent
+    self-collisions (e.g., forearm hitting gripper). Adjacent link collisions
+    (shoulder-upper_arm, etc.) are filtered by MuJoCo's <exclude> tags.
 
     This class implements the CollisionChecker protocol expected by pycbirrt.
     """
@@ -109,8 +109,11 @@ class GraspAwareCollisionChecker:
     def _count_invalid_contacts(self, data: mujoco.MjData | None = None) -> int:
         """Count contacts that indicate invalid collisions.
 
-        Self-collision filtering is handled by MuJoCo via <exclude> tags,
-        so we only need to check for arm-environment collisions.
+        MuJoCo's <exclude> tags filter ADJACENT link contacts (shoulder-upper_arm, etc.)
+        at the physics level - they won't appear in data.ncon at all.
+
+        Non-adjacent self-collisions (forearm hitting gripper) WILL appear as contacts
+        and should be counted as invalid collisions.
 
         Args:
             data: MjData to check contacts in (defaults to self.data for backward compatibility)
@@ -135,8 +138,11 @@ class GraspAwareCollisionChecker:
             if not body1_is_arm and not body2_is_arm:
                 continue
 
-            # Skip same-arm contacts (MuJoCo handles self-collision via <exclude>)
+            # Self-collision (both bodies belong to this arm)
+            # MuJoCo's <exclude> tags filter adjacent links, so any contact that
+            # reaches here is a NON-ADJACENT self-collision (e.g., forearm-gripper)
             if body1_is_arm and body2_is_arm:
+                invalid_count += 1
                 continue
 
             # Arm contacting something external - check if expected grasp

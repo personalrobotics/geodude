@@ -95,3 +95,29 @@ def gripper_body_names():
         "right_ur5e/gripper/right_pad",
         "right_ur5e/gripper/left_pad",
     ]
+
+
+@pytest.fixture
+def left_arm_joint_names():
+    """Joint names for the left arm."""
+    return [
+        "left_ur5e/shoulder_pan_joint",
+        "left_ur5e/shoulder_lift_joint",
+        "left_ur5e/elbow_joint",
+        "left_ur5e/wrist_1_joint",
+        "left_ur5e/wrist_2_joint",
+        "left_ur5e/wrist_3_joint",
+    ]
+
+
+@pytest.fixture
+def right_arm_joint_names():
+    """Joint names for the right arm (alias for arm_joint_names)."""
+    return [
+        "right_ur5e/shoulder_pan_joint",
+        "right_ur5e/shoulder_lift_joint",
+        "right_ur5e/elbow_joint",
+        "right_ur5e/wrist_1_joint",
+        "right_ur5e/wrist_2_joint",
+        "right_ur5e/wrist_3_joint",
+    ]

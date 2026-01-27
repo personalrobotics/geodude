@@ -9,12 +9,32 @@ from geodude.config import ArmConfig
 from geodude.grasp_manager import GraspManager
 
 
+class MockEnvironment:
+    """Mock environment with fork/sync for state management during planning."""
+
+    def __init__(self, model, data):
+        self._model = model
+        self._data = data
+
+    def fork(self):
+        """Create a snapshot of the current state."""
+        return self._data.qpos.copy(), self._data.qvel.copy()
+
+    def sync_from(self, snapshot):
+        """Restore state from a snapshot."""
+        qpos, qvel = snapshot
+        self._data.qpos[:] = qpos
+        self._data.qvel[:] = qvel
+        mujoco.mj_forward(self._model, self._data)
+
+
 class MockRobot:
     """Minimal mock of Geodude for testing Arm independently."""
 
     def __init__(self, model, data):
         self.model = model
         self.data = data
+        self.env = MockEnvironment(model, data)
         self.named_poses = {
             "home": {"right": [-1.5708, -1.5708, 1.5708, -1.5708, -1.5708, 0]},
             "ready": {"right": [-2.14, -1.5708, 1.5708, -1.5708, -1.5708, 0]},

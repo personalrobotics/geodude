@@ -156,7 +156,9 @@ class Trajectory:
             )
 
         # Create path parameterized from 0 to 1 (TOPP-RA convention)
-        # This avoids gridpoint issues with longer paths
+        # SplineInterpolator uses cubic splines for smooth C2-continuous trajectories.
+        # Note: splines can deviate ~3-4° from linear segments at direction changes,
+        # so collision validation should check the retimed trajectory, not just waypoints.
         path_positions = toppra.SplineInterpolator(
             np.linspace(0, 1, len(path_array)), path_array
         )

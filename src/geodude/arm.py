@@ -316,7 +316,7 @@ class Arm:
 
             planner_config = config or CBiRRTConfig(
                 max_iterations=5000,
-                step_size=0.2,
+                step_size=0.1,
                 goal_bias=0.1,
                 ik_num_seeds=1,  # EAIK finds all solutions analytically
                 smoothing_iterations=100,  # Default smoothing
@@ -626,7 +626,7 @@ class Arm:
 
         config = CBiRRTConfig(
             timeout=timeout,
-            step_size=0.2,
+            step_size=0.1,
             goal_bias=0.1,
             ik_num_seeds=1,
             smoothing_iterations=100,  # Default smoothing
@@ -679,7 +679,7 @@ class Arm:
 
         config = CBiRRTConfig(
             max_iterations=5000,
-            step_size=0.2,
+            step_size=0.1,
             goal_bias=0.1,
             ik_num_seeds=1,
             timeout=timeout,

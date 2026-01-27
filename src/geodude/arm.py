@@ -9,12 +9,7 @@ import numpy as np
 
 from geodude.collision import GraspAwareCollisionChecker
 from geodude.config import ArmConfig
-from geodude.executor import (
-    ClosedLoopExecutor,
-    KinematicExecutor,
-    PhysicsExecutor,
-    SimExecutor,  # Alias for ClosedLoopExecutor (backward compatibility)
-)
+from geodude.executor import KinematicExecutor, PhysicsExecutor
 from geodude.grasp_manager import GraspManager
 from geodude.gripper import Gripper
 from geodude.trajectory import Trajectory
@@ -385,21 +380,19 @@ class Arm:
     def _get_executor(
         self,
         viewer=None,
-        executor_type: str = "closed_loop",
-    ) -> KinematicExecutor | PhysicsExecutor | ClosedLoopExecutor:
+        executor_type: str = "physics",
+    ) -> KinematicExecutor | PhysicsExecutor:
         """Get or create the trajectory executor.
 
         Args:
             viewer: Optional MuJoCo viewer for visualization during execution
             executor_type: Type of executor to use:
-                - "closed_loop" (default): Feedback control with error correction
-                - "kinematic": Perfect tracking without physics
-                - "physics": Open-loop physics simulation
+                - "physics" (default): Physics simulation with velocity feedforward
+                - "kinematic": Perfect tracking without physics (direct qpos setting)
 
         Returns:
             Executor instance configured for this arm
         """
-        # Create executor based on type
         if executor_type == "kinematic":
             return KinematicExecutor(
                 model=self.model,
@@ -415,21 +408,10 @@ class Arm:
                 actuator_ids=self.actuator_ids,
                 viewer=viewer,
             )
-        elif executor_type == "closed_loop":
-            return ClosedLoopExecutor(
-                model=self.model,
-                data=self.data,
-                joint_qpos_indices=self.joint_qpos_indices,
-                actuator_ids=self.actuator_ids,
-                viewer=viewer,
-                kp=self.config.feedback_gains.kp,
-                ki=self.config.feedback_gains.ki,
-                kd=self.config.feedback_gains.kd,
-            )
         else:
             raise ValueError(
                 f"Unknown executor_type: {executor_type}. "
-                "Must be 'kinematic', 'physics', or 'closed_loop'"
+                "Must be 'kinematic' or 'physics'"
             )
 
     def _get_base_rotation(self) -> np.ndarray:
@@ -724,9 +706,9 @@ class Arm:
     def execute(
         self,
         path: list[np.ndarray] | Trajectory,
-        executor: KinematicExecutor | PhysicsExecutor | ClosedLoopExecutor | None = None,
+        executor: KinematicExecutor | PhysicsExecutor | None = None,
         viewer=None,
-        executor_type: str = "closed_loop",
+        executor_type: str = "physics",
     ) -> bool:
         """Execute a planned path or pre-computed trajectory.
 
@@ -739,9 +721,8 @@ class Arm:
             executor: Optional executor to use. If None, creates one based on executor_type
             viewer: Optional MuJoCo viewer to sync during execution for smooth visualization
             executor_type: Type of executor to create if executor=None:
-                - "closed_loop" (default): Feedback control with error correction
+                - "physics" (default): Physics simulation with velocity feedforward
                 - "kinematic": Perfect tracking without physics
-                - "physics": Open-loop physics simulation
 
         Returns:
             True if execution completed successfully

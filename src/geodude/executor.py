@@ -6,7 +6,6 @@ from typing import Protocol
 import mujoco
 import numpy as np
 
-from geodude.config import FeedbackGains
 from geodude.trajectory import Trajectory
 
 
@@ -37,6 +36,9 @@ class KinematicExecutor:
     - Validating collision-free paths
     - Fast visualization without dynamics
     - Baseline comparison for physics-based execution
+
+    This executor has NO physics - joints are set directly. There is no
+    position hold because there are no dynamics to fight against.
     """
 
     def __init__(
@@ -109,16 +111,45 @@ class KinematicExecutor:
 
         return True
 
+    def set_position(self, q: np.ndarray) -> None:
+        """Set joint positions directly (kinematic - no physics).
+
+        Args:
+            q: Joint positions to set
+        """
+        for joint_idx, qpos_idx in enumerate(self.joint_qpos_indices):
+            self.data.qpos[qpos_idx] = q[joint_idx]
+            self.data.qvel[qpos_idx] = 0.0
+        mujoco.mj_forward(self.model, self.data)
+
 
 class PhysicsExecutor:
-    """Execute trajectories with physics simulation (open-loop control).
+    """Execute trajectories with physics simulation and velocity feedforward.
 
-    Uses position-controlled actuators to track trajectory waypoints.
-    Realistic dynamics with actuator bandwidth limitations (~5 Hz in MuJoCo).
-    Useful for:
-    - Contact-rich tasks requiring compliance
-    - Realistic dynamics simulation
-    - Testing with actuator limitations
+    Uses position-controlled actuators with velocity feedforward, similar to
+    the real UR5e's servoj command. MuJoCo's actuator PD (defined in XML)
+    handles the low-level servo control.
+
+    Key features:
+    - Velocity feedforward: cmd = q_desired + lookahead_time * qd_desired
+    - Position hold: When not executing, maintains last commanded position
+    - step() method: Call each physics tick to apply control and step physics
+
+    The lookahead_time parameter works like servoj's lookahead_time:
+    - Projects current position forward based on trajectory velocity
+    - Helps compensate for actuator lag
+    - Higher values = smoother but more lag, lower = responsive but can overshoot
+
+    Usage:
+        executor = PhysicsExecutor(model, data, joint_indices, actuator_ids)
+
+        # Option 1: Execute a full trajectory (blocking)
+        executor.execute(trajectory)
+
+        # Option 2: Manual stepping with position hold
+        executor.set_target(q_desired)  # Set target position
+        while running:
+            executor.step()  # Steps physics and applies control
     """
 
     def __init__(
@@ -128,9 +159,10 @@ class PhysicsExecutor:
         joint_qpos_indices: list[int],
         actuator_ids: list[int],
         control_dt: float = 0.008,  # 125 Hz to match UR5e
+        lookahead_time: float = 0.1,  # Like servoj lookahead (0.03-0.2s range)
         viewer=None,
     ):
-        """Initialize simulation executor.
+        """Initialize physics executor.
 
         Args:
             model: MuJoCo model
@@ -138,6 +170,9 @@ class PhysicsExecutor:
             joint_qpos_indices: Indices into data.qpos for the arm joints
             actuator_ids: MuJoCo actuator IDs for position control
             control_dt: Control update rate in seconds (default: 125 Hz)
+            lookahead_time: Velocity feedforward gain in seconds (default: 0.1s).
+                           Command = q_desired + lookahead_time * qd_desired.
+                           Set to 0 for pure position control (no feedforward).
             viewer: Optional MuJoCo viewer to sync during execution
         """
         self.model = model
@@ -145,18 +180,91 @@ class PhysicsExecutor:
         self.joint_qpos_indices = joint_qpos_indices
         self.actuator_ids = actuator_ids
         self.control_dt = control_dt
+        self.lookahead_time = lookahead_time
         self.viewer = viewer
 
         # Calculate number of physics steps per control update
         # MuJoCo timestep is typically 0.002s (500 Hz)
         self.steps_per_control = max(1, int(control_dt / model.opt.timestep))
 
-    def execute(self, trajectory: Trajectory) -> bool:
-        """Execute trajectory in simulation.
+        # Position hold state - initialize to current position
+        self._target_position = np.array([
+            data.qpos[idx] for idx in joint_qpos_indices
+        ])
+        self._target_velocity = np.zeros(len(joint_qpos_indices))
 
-        Uses position-controlled actuators to track the trajectory.
-        Sends position commands at control_dt frequency and steps physics
-        to simulate realistic dynamics.
+    @property
+    def target_position(self) -> np.ndarray:
+        """Current target position being commanded."""
+        return self._target_position.copy()
+
+    def set_target(
+        self,
+        position: np.ndarray,
+        velocity: np.ndarray | None = None,
+    ) -> None:
+        """Set target position (and optionally velocity) for position hold.
+
+        This updates what position the executor commands. Call step() to
+        actually apply the control and step physics.
+
+        Args:
+            position: Target joint positions
+            velocity: Target joint velocities (default: zeros for stationary hold)
+        """
+        self._target_position = np.asarray(position).copy()
+        if velocity is not None:
+            self._target_velocity = np.asarray(velocity).copy()
+        else:
+            self._target_velocity = np.zeros(len(self.joint_qpos_indices))
+
+    def step(self) -> None:
+        """Apply control and step physics once.
+
+        This method:
+        1. Computes the control command with velocity feedforward
+        2. Applies the command to actuators
+        3. Steps physics for one control period
+
+        Call this in your simulation loop to maintain position hold or
+        track a trajectory that you're updating via set_target().
+        """
+        # Compute command with velocity feedforward
+        q_command = self._target_position + self.lookahead_time * self._target_velocity
+
+        # Apply to actuators
+        for joint_idx, actuator_id in enumerate(self.actuator_ids):
+            self.data.ctrl[actuator_id] = q_command[joint_idx]
+
+        # Step physics
+        for _ in range(self.steps_per_control):
+            mujoco.mj_step(self.model, self.data)
+
+        # Sync viewer if provided
+        if self.viewer is not None:
+            self.viewer.sync()
+
+    def hold(self) -> None:
+        """Update target to current position (capture and hold).
+
+        Useful when you want to hold the arm at its current position
+        after it has been moved by external forces or another executor.
+        """
+        self._target_position = np.array([
+            self.data.qpos[idx] for idx in self.joint_qpos_indices
+        ])
+        self._target_velocity = np.zeros(len(self.joint_qpos_indices))
+
+    def execute(self, trajectory: Trajectory) -> bool:
+        """Execute trajectory with velocity feedforward.
+
+        Uses position-controlled actuators with velocity feedforward to track
+        the trajectory. Similar to real UR5e servoj command.
+
+        Command at each step: ctrl = q_desired + lookahead_time * qd_desired
+
+        After execution completes, the executor continues holding the final
+        position. Call step() to maintain the hold.
 
         Args:
             trajectory: Time-parameterized trajectory
@@ -172,28 +280,25 @@ class PhysicsExecutor:
 
         # Execute trajectory waypoint by waypoint
         for i in range(trajectory.num_waypoints):
-            # Send position command to actuators
-            for joint_idx, actuator_id in enumerate(self.actuator_ids):
-                self.data.ctrl[actuator_id] = trajectory.positions[i, joint_idx]
+            # Update target with trajectory state
+            self._target_position = trajectory.positions[i]
+            self._target_velocity = trajectory.velocities[i]
 
-            # Step physics multiple times for realistic dynamics
-            for _ in range(self.steps_per_control):
-                mujoco.mj_step(self.model, self.data)
-
-            # Sync viewer if provided (for smooth visualization)
-            if self.viewer is not None:
-                self.viewer.sync()
+            # Apply control and step physics
+            self.step()
 
             # Wait for control period to maintain real-time execution
             time.sleep(self.control_dt)
 
-        # Send final position command and let physics settle
-        for joint_idx, actuator_id in enumerate(self.actuator_ids):
-            self.data.ctrl[actuator_id] = trajectory.positions[-1, joint_idx]
+        # Set final target for position hold (zero velocity)
+        self._target_position = trajectory.positions[-1].copy()
+        self._target_velocity = np.zeros(len(self.joint_qpos_indices))
 
-        # Step physics longer to settle at final position
-        # With realistic actuator dynamics, we need more time to converge
+        # Settling period - continue holding final position
         for _ in range(self.steps_per_control * 20):
+            q_command = self._target_position  # No feedforward - we want to stop
+            for joint_idx, actuator_id in enumerate(self.actuator_ids):
+                self.data.ctrl[actuator_id] = q_command[joint_idx]
             mujoco.mj_step(self.model, self.data)
 
         # Final viewer sync
@@ -202,155 +307,29 @@ class PhysicsExecutor:
 
         return True
 
-
-class ClosedLoopExecutor:
-    """Execute trajectories with closed-loop PD feedback control (DEFAULT).
-
-    Uses position-controlled actuators with PD (proportional-derivative) feedback.
-    This is similar to how real robots work - constantly measuring position and
-    velocity errors and adjusting commands. Provides much better tracking than
-    open-loop PhysicsExecutor.
-
-    This executor combines:
-    - Position error feedback (P term): corrects position deviations
-    - Velocity error feedback (D term): improves damping and velocity tracking
-    - Physics simulation for realistic dynamics
-
-    Default executor for most applications.
-    """
-
-    def __init__(
-        self,
-        model: mujoco.MjModel,
-        data: mujoco.MjData,
-        joint_qpos_indices: list[int],
-        actuator_ids: list[int],
-        control_dt: float = 0.008,  # 125 Hz to match UR5e
-        viewer=None,
-        kp: float | None = None,  # Defaults to FeedbackGains.default().kp
-        ki: float | None = None,  # Defaults to FeedbackGains.default().ki
-        kd: float | None = None,  # Defaults to FeedbackGains.default().kd
-    ):
-        """Initialize closed-loop feedback executor.
-
-        Args:
-            model: MuJoCo model
-            data: MuJoCo data (will be modified during execution)
-            joint_qpos_indices: Indices into data.qpos for the arm joints
-            actuator_ids: MuJoCo actuator IDs for position control
-            control_dt: Control update rate in seconds (default: 125 Hz)
-            viewer: Optional MuJoCo viewer to sync during execution
-            kp: Position error gain (default: from FeedbackGains config)
-            ki: Integral gain (default: from FeedbackGains config)
-            kd: Velocity error gain (default: from FeedbackGains config)
-        """
-        # Use config defaults if not specified
-        default_gains = FeedbackGains.default()
-        if kp is None:
-            kp = default_gains.kp
-        if ki is None:
-            ki = default_gains.ki
-        if kd is None:
-            kd = default_gains.kd
-        self.model = model
-        self.data = data
-        self.joint_qpos_indices = joint_qpos_indices
-        self.actuator_ids = actuator_ids
-        self.control_dt = control_dt
-        self.viewer = viewer
-        self.kp = kp
-        self.ki = ki
-        self.kd = kd
-
-        # Calculate number of physics steps per control update
-        self.steps_per_control = max(1, int(control_dt / model.opt.timestep))
-
-    def execute(self, trajectory: Trajectory) -> bool:
-        """Execute trajectory with closed-loop PD feedback control.
-
-        At each control cycle:
-        1. Measure actual joint positions and velocities
-        2. Compute position and velocity errors
-        3. Send corrected command using PD feedback: q_cmd = q_des + kp*e_pos + kd*e_vel
-        4. Step physics
-        5. Repeat
-
-        This mimics real robot servo control with PD feedback.
-
-        Args:
-            trajectory: Time-parameterized trajectory
+    def get_position(self) -> np.ndarray:
+        """Get current actual joint positions.
 
         Returns:
-            True if execution completed successfully
+            Current joint positions from qpos
         """
-        if trajectory.dof != len(self.joint_qpos_indices):
-            raise ValueError(
-                f"Trajectory DOF {trajectory.dof} doesn't match "
-                f"joint count {len(self.joint_qpos_indices)}"
-            )
+        return np.array([self.data.qpos[idx] for idx in self.joint_qpos_indices])
 
-        # Execute trajectory with closed-loop feedback
-        for i in range(trajectory.num_waypoints):
-            # Get desired state from trajectory
-            q_desired = trajectory.positions[i]
-            qd_desired = trajectory.velocities[i]
+    def get_velocity(self) -> np.ndarray:
+        """Get current actual joint velocities.
 
-            # Measure actual state (feedback)
-            q_actual = np.array([self.data.qpos[idx] for idx in self.joint_qpos_indices])
-            qd_actual = np.array([self.data.qvel[idx] for idx in self.joint_qpos_indices])
+        Returns:
+            Current joint velocities from qvel
+        """
+        return np.array([self.data.qvel[idx] for idx in self.joint_qpos_indices])
 
-            # Compute position and velocity errors
-            position_error = q_desired - q_actual
-            velocity_error = qd_desired - qd_actual
+    def get_tracking_error(self) -> np.ndarray:
+        """Get current position tracking error.
 
-            # Compute corrected command with PD feedback
-            # Command = desired + kp * position_error + kd * velocity_error
-            # This implements outer-loop PD control on top of MuJoCo's actuator PD control
-            q_command = q_desired + self.kp * position_error + self.kd * velocity_error
-
-            # Send corrected position command to actuators
-            for joint_idx, actuator_id in enumerate(self.actuator_ids):
-                self.data.ctrl[actuator_id] = q_command[joint_idx]
-
-            # Step physics multiple times for realistic dynamics
-            for _ in range(self.steps_per_control):
-                mujoco.mj_step(self.model, self.data)
-
-            # Sync viewer if provided
-            if self.viewer is not None:
-                self.viewer.sync()
-
-            # Wait for control period to maintain real-time execution
-            time.sleep(self.control_dt)
-
-        # Final settling with feedback control
-        q_final = trajectory.positions[-1]
-        qd_final = np.zeros(len(self.joint_qpos_indices))  # Desired velocity is zero at rest
-
-        for _ in range(self.steps_per_control * 20):
-            # Continue applying PD feedback control during settling
-            q_actual = np.array([self.data.qpos[idx] for idx in self.joint_qpos_indices])
-            qd_actual = np.array([self.data.qvel[idx] for idx in self.joint_qpos_indices])
-
-            position_error = q_final - q_actual
-            velocity_error = qd_final - qd_actual
-
-            q_command = q_final + self.kp * position_error + self.kd * velocity_error
-
-            for joint_idx, actuator_id in enumerate(self.actuator_ids):
-                self.data.ctrl[actuator_id] = q_command[joint_idx]
-
-            mujoco.mj_step(self.model, self.data)
-
-        # Final viewer sync
-        if self.viewer is not None:
-            self.viewer.sync()
-
-        return True
-
-
-# Alias for backward compatibility
-SimExecutor = ClosedLoopExecutor  # Default is now closed-loop
+        Returns:
+            Difference between target and actual position
+        """
+        return self._target_position - self.get_position()
 
 
 class RealExecutor:

@@ -14,31 +14,18 @@ except ImportError:
 
 
 @dataclass
-class FeedbackGains:
-    """PID feedback gains for closed-loop trajectory tracking.
+class TrackingThresholds:
+    """Error thresholds for trajectory execution.
 
-    These gains control the outer-loop feedback control that runs on top of
-    MuJoCo's built-in actuator control. The feedback controller measures position
-    and velocity errors at each control cycle and adjusts commands accordingly.
-
-    Original baseline values:
-    - kp=25.0: Position correction gain (works well with MuJoCo actuator dynamics)
-    - ki=0.0: Not needed for trajectory tracking
-    - kd=0.0: No velocity feedback (MuJoCo actuators already have good built-in dynamics)
+    Execution aborts if any single joint exceeds the max_error threshold.
+    Per-joint thresholds may be added in the future.
     """
-    kp: float = 25.0  # Proportional gain (position error)
-    ki: float = 0.0   # Integral gain (accumulated position error)
-    kd: float = 0.0   # Derivative gain (velocity error)
+    max_error: float = np.deg2rad(10.0)  # Abort if any joint error exceeds this
 
     @classmethod
-    def default(cls) -> "FeedbackGains":
-        """Default gains."""
-        return cls(kp=25.0, ki=0.0, kd=0.0)
-
-    @classmethod
-    def high_speed(cls) -> "FeedbackGains":
-        """Gains optimized for high-speed operation (75-100% speed)."""
-        return cls(kp=25.0, ki=0.0, kd=0.0)
+    def default(cls) -> "TrackingThresholds":
+        """Default thresholds."""
+        return cls()
 
 
 @dataclass
@@ -57,7 +44,7 @@ class KinematicLimits:
     Recommended speed scales:
     - 10%: Conservative for initial simulation testing
     - 50%: Standard for real robot operation (safe and efficient) - DEFAULT
-    - 75-100%: High-speed operation (requires high-speed feedback gains)
+    - 75-100%: High-speed operation
     """
     velocity: np.ndarray  # rad/s per joint
     acceleration: np.ndarray  # rad/s² per joint
@@ -105,7 +92,7 @@ class ArmConfig:
     gripper_actuator: str
     gripper_bodies: list[str]  # Bodies that are part of gripper (for collision filtering)
     kinematic_limits: KinematicLimits = field(default_factory=KinematicLimits.ur5e_default)
-    feedback_gains: FeedbackGains = field(default_factory=FeedbackGains.default)
+    tracking_thresholds: TrackingThresholds = field(default_factory=TrackingThresholds.default)
 
 
 @dataclass
@@ -213,7 +200,7 @@ class GeodudConfig:
             data = yaml.safe_load(f)
 
         def parse_arm_config(arm_data: dict) -> ArmConfig:
-            """Parse arm config with optional kinematic limits."""
+            """Parse arm config with optional kinematic limits and tracking thresholds."""
             kinematic_limits = KinematicLimits.ur5e_default()
             if "kinematic_limits" in arm_data:
                 limits_data = arm_data.pop("kinematic_limits")
@@ -221,7 +208,17 @@ class GeodudConfig:
                     velocity=np.array(limits_data["velocity"]),
                     acceleration=np.array(limits_data["acceleration"]),
                 )
-            return ArmConfig(**arm_data, kinematic_limits=kinematic_limits)
+            tracking_thresholds = TrackingThresholds.default()
+            if "tracking_thresholds" in arm_data:
+                thresh_data = arm_data.pop("tracking_thresholds")
+                tracking_thresholds = TrackingThresholds(
+                    max_error=np.deg2rad(thresh_data.get("max_error_deg", 10.0)),
+                )
+            return ArmConfig(
+                **arm_data,
+                kinematic_limits=kinematic_limits,
+                tracking_thresholds=tracking_thresholds,
+            )
 
         left_base = None
         if "left_base" in data:

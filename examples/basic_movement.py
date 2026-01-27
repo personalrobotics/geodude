@@ -63,19 +63,12 @@ def execute_path_with_viewer(robot, arm, path: list[np.ndarray], viewer):
     The trajectory is automatically retimed to respect velocity and acceleration
     limits. The viewer is synced during execution for smooth visualization.
 
-    IMPORTANT: Actively holds the other arm in place with feedback control
-    to prevent flailing while this arm moves.
+    IMPORTANT: Actively holds the other arm in place during execution.
     """
     from geodude.trajectory import Trajectory
 
-    # State should be clean now (planner restores it), but verify
-    q_current = arm.get_joint_positions()
-    q_start = path[0]
-    start_discontinuity = np.linalg.norm(q_start - q_current)
-
-    if start_discontinuity > 0.01:  # More than ~0.5 degrees
-        print(f"      WARNING: Unexpected discontinuity {np.rad2deg(start_discontinuity):.2f}° (planner should have restored state!)")
-        sys.stdout.flush()
+    # Get tracking threshold from config (abort if any joint exceeds this)
+    max_joint_error_threshold = arm.config.tracking_thresholds.max_error
 
     # Set actuator commands to match current position for both arms
     other_arm = robot.left_arm if arm.name == "right" else robot.right_arm
@@ -92,58 +85,60 @@ def execute_path_with_viewer(robot, arm, path: list[np.ndarray], viewer):
         arm.config.kinematic_limits.acceleration,
     )
 
-    # Get executor for moving arm
-    executor = arm._get_executor(viewer=viewer, executor_type="closed_loop")
+    # Get executor for moving arm (physics for realistic dynamics)
+    executor = arm._get_executor(viewer=viewer, executor_type="physics")
 
     # Get the other arm to hold it in place during execution
     other_arm = robot.left_arm if arm.name == "right" else robot.right_arm
-    other_executor = other_arm._get_executor(viewer=None, executor_type="closed_loop")
+    other_executor = other_arm._get_executor(viewer=None, executor_type="physics")
     # Capture hold position AFTER any transition (not before)
     other_q_hold = other_arm.get_joint_positions()
 
-    # Track errors for both arms
+    # Track per-joint errors for reporting
     moving_arm_errors = []
-    other_arm_errors = []
-    moving_arm_vel_errors = []
-    other_arm_vel_errors = []
 
-    # Execute trajectory with both arms controlled
-    print(f"      Executing {trajectory.num_waypoints} waypoints (kp={executor.kp}, kd={executor.kd})...")
+    # Detect if using kinematic or physics execution
+    from geodude.executor import KinematicExecutor
+    use_kinematic = isinstance(executor, KinematicExecutor)
+
+    if use_kinematic:
+        print(f"      Executing {trajectory.num_waypoints} waypoints (KINEMATIC - perfect tracking)...")
+    else:
+        lookahead_time = executor.lookahead_time
+        print(f"      Executing {trajectory.num_waypoints} waypoints (lookahead={lookahead_time}s)...")
     sys.stdout.flush()
 
-    # Tracking quality thresholds
-    max_acceptable_error = np.deg2rad(15.0)  # 15 degrees max instantaneous error
-    catastrophic_error = np.deg2rad(45.0)  # 45 degrees = immediate abort
-
     for i in range(trajectory.num_waypoints):
-        # === Control moving arm with feedback ===
         q_desired = trajectory.positions[i]
         qd_desired = trajectory.velocities[i]
 
-        q_actual = np.array([robot.data.qpos[idx] for idx in executor.joint_qpos_indices])
-        qd_actual = np.array([robot.data.qvel[idx] for idx in executor.joint_qpos_indices])
+        if use_kinematic:
+            # === KINEMATIC: Directly set joint positions (perfect tracking) ===
+            for joint_idx, qpos_idx in enumerate(executor.joint_qpos_indices):
+                robot.data.qpos[qpos_idx] = q_desired[joint_idx]
+                robot.data.qvel[qpos_idx] = qd_desired[joint_idx]
 
-        position_error = q_desired - q_actual
-        velocity_error = qd_desired - qd_actual
-        q_command = q_desired + executor.kp * position_error + executor.kd * velocity_error
+            # Hold other arm at its position
+            for joint_idx, qpos_idx in enumerate(other_executor.joint_qpos_indices):
+                robot.data.qpos[qpos_idx] = other_q_hold[joint_idx]
+                robot.data.qvel[qpos_idx] = 0.0
 
-        for joint_idx, actuator_id in enumerate(executor.actuator_ids):
-            robot.data.ctrl[actuator_id] = q_command[joint_idx]
+            # Forward kinematics only (no dynamics)
+            mujoco.mj_forward(robot.model, robot.data)
+        else:
+            # === PHYSICS: Send commands to actuators with feedforward ===
+            q_command = q_desired + lookahead_time * qd_desired
 
-        # === Hold other arm in place with feedback ===
-        other_q_actual = np.array([robot.data.qpos[idx] for idx in other_executor.joint_qpos_indices])
-        other_qd_actual = np.array([robot.data.qvel[idx] for idx in other_executor.joint_qpos_indices])
+            for joint_idx, actuator_id in enumerate(executor.actuator_ids):
+                robot.data.ctrl[actuator_id] = q_command[joint_idx]
 
-        other_position_error = other_q_hold - other_q_actual
-        other_velocity_error = -other_qd_actual  # Target velocity is zero
-        other_q_command = other_q_hold + other_executor.kp * other_position_error + other_executor.kd * other_velocity_error
+            # Hold other arm in place
+            for joint_idx, actuator_id in enumerate(other_executor.actuator_ids):
+                robot.data.ctrl[actuator_id] = other_q_hold[joint_idx]
 
-        for joint_idx, actuator_id in enumerate(other_executor.actuator_ids):
-            robot.data.ctrl[actuator_id] = other_q_command[joint_idx]
-
-        # Step physics
-        for _ in range(executor.steps_per_control):
-            mujoco.mj_step(robot.model, robot.data)
+            # Step physics
+            for _ in range(executor.steps_per_control):
+                mujoco.mj_step(robot.model, robot.data)
 
         # Check for collisions after physics step
         if robot.data.ncon > 0:
@@ -176,105 +171,63 @@ def execute_path_with_viewer(robot, arm, path: list[np.ndarray], viewer):
         if viewer is not None:
             viewer.sync()
 
-        # Track errors after physics
+        # Track errors after physics (per-joint)
         q_actual = np.array([robot.data.qpos[idx] for idx in executor.joint_qpos_indices])
-        qd_actual = np.array([robot.data.qvel[idx] for idx in executor.joint_qpos_indices])
-        other_q_actual = np.array([robot.data.qpos[idx] for idx in other_executor.joint_qpos_indices])
-        other_qd_actual = np.array([robot.data.qvel[idx] for idx in other_executor.joint_qpos_indices])
+        joint_errors = np.abs(trajectory.positions[i] - q_actual)
+        max_joint_error = np.max(joint_errors)
+        moving_arm_errors.append(joint_errors)
 
-        current_error = np.linalg.norm(trajectory.positions[i] - q_actual)
-        moving_arm_errors.append(current_error)
-        moving_arm_vel_errors.append(np.linalg.norm(trajectory.velocities[i] - qd_actual))
-        other_arm_errors.append(np.linalg.norm(other_q_hold - other_q_actual))
-        other_arm_vel_errors.append(np.linalg.norm(other_qd_actual))  # Should be ~0
-
-        # Check for catastrophic tracking failure
-        if current_error > catastrophic_error:
-            print(f"        ABORT: Catastrophic tracking error {np.rad2deg(current_error):.1f}° at waypoint {i}")
+        # Check if any joint exceeds threshold - abort if so
+        if max_joint_error > max_joint_error_threshold:
+            worst_joint = np.argmax(joint_errors)
+            print(f"        ABORT: Joint {worst_joint} error {np.rad2deg(max_joint_error):.1f}° exceeds {np.rad2deg(max_joint_error_threshold):.0f}° at waypoint {i}")
             sys.stdout.flush()
             return False
 
         # Print real-time error every 20 waypoints
         if i > 0 and i % 20 == 0:
-            recent_pos_error = np.mean(moving_arm_errors[-20:])
-            print(f"        Waypoint {i}/{trajectory.num_waypoints}: pos_error={np.rad2deg(recent_pos_error):.2f}°")
+            recent_errors = np.array(moving_arm_errors[-20:])
+            recent_max = np.rad2deg(np.max(recent_errors))
+            print(f"        Waypoint {i}/{trajectory.num_waypoints}: max_joint_error={recent_max:.2f}°")
             sys.stdout.flush()
 
         time.sleep(executor.control_dt)
 
-    # Final settling with both arms controlled
+    # Final settling
     q_final = trajectory.positions[-1]
 
-    for _ in range(executor.steps_per_control * 20):
-        # Moving arm feedback to final position
-        q_actual = np.array([robot.data.qpos[idx] for idx in executor.joint_qpos_indices])
-        qd_actual = np.array([robot.data.qvel[idx] for idx in executor.joint_qpos_indices])
-
-        position_error = q_final - q_actual
-        velocity_error = -qd_actual
-        q_command = q_final + executor.kp * position_error + executor.kd * velocity_error
-
-        for joint_idx, actuator_id in enumerate(executor.actuator_ids):
-            robot.data.ctrl[actuator_id] = q_command[joint_idx]
-
-        # Other arm feedback to hold position
-        other_q_actual = np.array([robot.data.qpos[idx] for idx in other_executor.joint_qpos_indices])
-        other_qd_actual = np.array([robot.data.qvel[idx] for idx in other_executor.joint_qpos_indices])
-
-        other_position_error = other_q_hold - other_q_actual
-        other_velocity_error = -other_qd_actual
-        other_q_command = other_q_hold + other_executor.kp * other_position_error + other_executor.kd * other_velocity_error
-
-        for joint_idx, actuator_id in enumerate(other_executor.actuator_ids):
-            robot.data.ctrl[actuator_id] = other_q_command[joint_idx]
-
-        mujoco.mj_step(robot.model, robot.data)
+    if use_kinematic:
+        # Kinematic: just set final position (already there)
+        for joint_idx, qpos_idx in enumerate(executor.joint_qpos_indices):
+            robot.data.qpos[qpos_idx] = q_final[joint_idx]
+            robot.data.qvel[qpos_idx] = 0.0
+        mujoco.mj_forward(robot.model, robot.data)
+    else:
+        # Physics: let actuators settle
+        for _ in range(executor.steps_per_control * 20):
+            for joint_idx, actuator_id in enumerate(executor.actuator_ids):
+                robot.data.ctrl[actuator_id] = q_final[joint_idx]
+            for joint_idx, actuator_id in enumerate(other_executor.actuator_ids):
+                robot.data.ctrl[actuator_id] = other_q_hold[joint_idx]
+            mujoco.mj_step(robot.model, robot.data)
 
     # Final viewer sync
     if viewer is not None:
         viewer.sync()
 
-    # Report tracking statistics
-    moving_arm_errors = np.array(moving_arm_errors)
-    other_arm_errors = np.array(other_arm_errors)
-    moving_arm_vel_errors = np.array(moving_arm_vel_errors)
-    other_arm_vel_errors = np.array(other_arm_vel_errors)
+    # Report tracking statistics (per-joint)
+    all_errors = np.array(moving_arm_errors)  # Shape: (num_waypoints, num_joints)
+    avg_per_joint = np.rad2deg(np.mean(all_errors, axis=0))
+    max_per_joint = np.rad2deg(np.max(all_errors, axis=0))
 
-    avg_pos_error = np.rad2deg(np.mean(moving_arm_errors))
-    max_pos_error = np.rad2deg(np.max(moving_arm_errors))
-    avg_hold_error = np.rad2deg(np.mean(other_arm_errors))
-    max_hold_error = np.rad2deg(np.max(other_arm_errors))
-
-    print(f"      {arm.name.upper()} arm tracking:")
-    print(f"        Position: avg={avg_pos_error:.2f}°, max={max_pos_error:.2f}°")
-    print(f"        Velocity: avg={np.rad2deg(np.mean(moving_arm_vel_errors)):.2f}°/s, max={np.rad2deg(np.max(moving_arm_vel_errors)):.2f}°/s")
-    print(f"      {other_arm.name.upper()} arm hold error:")
-    print(f"        Position: avg={avg_hold_error:.2f}°, max={max_hold_error:.2f}°")
-    print(f"        Velocity: avg={np.rad2deg(np.mean(other_arm_vel_errors)):.2f}°/s, max={np.rad2deg(np.max(other_arm_vel_errors)):.2f}°/s")
-
-    # Determine success based on tracking quality
-    # Success criteria:
-    # - Average position error < 1° (excellent tracking)
-    # - Max position error < 10° (no catastrophic failures)
-    # - Stationary arm hold error < 1° (good coordination)
-    success = (avg_pos_error < 1.0 and
-               max_pos_error < 10.0 and
-               max_hold_error < 1.0)
-
-    if success:
-        print(f"      SUCCESS: Trajectory executed successfully")
-    else:
-        print(f"      FAILURE: Trajectory execution quality issues:")
-        if avg_pos_error >= 1.0:
-            print(f"        - Poor average tracking: {avg_pos_error:.2f}° (threshold: 1.0°)")
-        if max_pos_error >= 10.0:
-            print(f"        - Large tracking spikes: {max_pos_error:.2f}° (threshold: 10.0°)")
-        if max_hold_error >= 1.0:
-            print(f"        - Stationary arm drift: {max_hold_error:.2f}° (threshold: 1.0°)")
+    print(f"      {arm.name.upper()} arm tracking (per joint):")
+    print(f"        Avg: {avg_per_joint.round(2)}°")
+    print(f"        Max: {max_per_joint.round(2)}°")
+    print(f"      SUCCESS: Trajectory completed (threshold: {np.rad2deg(max_joint_error_threshold):.0f}°)")
 
     sys.stdout.flush()
 
-    return success
+    return True
 
 
 def animate_base_move(robot, base, target_height: float, viewer, steps: int = 50):

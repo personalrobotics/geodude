@@ -8,6 +8,12 @@ import numpy as np
 
 from geodude.trajectory import Trajectory
 
+# Import for type hints only - avoids circular import
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from geodude.grasp_manager import GraspManager
+
 
 class Executor(Protocol):
     """Protocol for trajectory execution.
@@ -39,6 +45,9 @@ class KinematicExecutor:
 
     This executor has NO physics - joints are set directly. There is no
     position hold because there are no dynamics to fight against.
+
+    For manipulation tasks, set a GraspManager to automatically update
+    attached object poses when the gripper moves.
     """
 
     def __init__(
@@ -48,6 +57,7 @@ class KinematicExecutor:
         joint_qpos_indices: list[int],
         control_dt: float = 0.008,  # 125 Hz to match UR5e
         viewer=None,
+        grasp_manager: "GraspManager | None" = None,
     ):
         """Initialize kinematic executor.
 
@@ -57,12 +67,15 @@ class KinematicExecutor:
             joint_qpos_indices: Indices into data.qpos for the arm joints
             control_dt: Control update rate in seconds (default: 125 Hz)
             viewer: Optional MuJoCo viewer to sync during execution
+            grasp_manager: Optional GraspManager for kinematic manipulation.
+                          When set, attached objects move with the gripper.
         """
         self.model = model
         self.data = data
         self.joint_qpos_indices = joint_qpos_indices
         self.control_dt = control_dt
         self.viewer = viewer
+        self.grasp_manager = grasp_manager
 
     def execute(self, trajectory: Trajectory) -> bool:
         """Execute trajectory kinematically with perfect tracking.
@@ -92,6 +105,11 @@ class KinematicExecutor:
             # Forward kinematics only (no dynamics)
             mujoco.mj_forward(self.model, self.data)
 
+            # Update attached object poses
+            if self.grasp_manager is not None:
+                self.grasp_manager.update_attached_poses()
+                mujoco.mj_forward(self.model, self.data)
+
             # Sync viewer if provided
             if self.viewer is not None:
                 self.viewer.sync()
@@ -106,6 +124,11 @@ class KinematicExecutor:
 
         mujoco.mj_forward(self.model, self.data)
 
+        # Final update of attached objects
+        if self.grasp_manager is not None:
+            self.grasp_manager.update_attached_poses()
+            mujoco.mj_forward(self.model, self.data)
+
         if self.viewer is not None:
             self.viewer.sync()
 
@@ -114,6 +137,8 @@ class KinematicExecutor:
     def set_position(self, q: np.ndarray) -> None:
         """Set joint positions directly (kinematic - no physics).
 
+        Also updates poses of any kinematically attached objects.
+
         Args:
             q: Joint positions to set
         """
@@ -121,6 +146,11 @@ class KinematicExecutor:
             self.data.qpos[qpos_idx] = q[joint_idx]
             self.data.qvel[qpos_idx] = 0.0
         mujoco.mj_forward(self.model, self.data)
+
+        # Update attached object poses
+        if self.grasp_manager is not None:
+            self.grasp_manager.update_attached_poses()
+            mujoco.mj_forward(self.model, self.data)
 
 
 class PhysicsExecutor:

@@ -22,6 +22,9 @@ class GraspManager:
 
     This allows planning motions with a grasped object without false
     collisions between the object and the robot's arm.
+
+    For kinematic execution (no physics), this class also tracks object
+    attachments so grasped objects move with the gripper.
     """
 
     def __init__(self, model: mujoco.MjModel, data: mujoco.MjData):
@@ -29,6 +32,8 @@ class GraspManager:
         self.data = data
         self.grasped: dict[str, str] = {}  # object_name -> arm_name
         self._original_collision_groups: dict[str, list[tuple[int, int]]] = {}
+        # Kinematic attachments: object_name -> (gripper_body_name, T_gripper_object)
+        self._attachments: dict[str, tuple[str, np.ndarray]] = {}
 
     def mark_grasped(self, object_name: str, arm: str) -> None:
         """Mark an object as grasped by the specified arm.
@@ -72,6 +77,116 @@ class GraspManager:
     def get_holder(self, object_name: str) -> str | None:
         """Get the arm holding an object, or None if not grasped."""
         return self.grasped.get(object_name)
+
+    def attach_object(self, object_name: str, gripper_body_name: str) -> None:
+        """Attach an object to a gripper for kinematic manipulation.
+
+        Computes and stores the relative transform between gripper and object
+        so the object can move with the gripper.
+
+        Args:
+            object_name: Name of the object body in MuJoCo
+            gripper_body_name: Name of the gripper body to attach to
+        """
+        # Get current poses
+        T_world_gripper = self._get_body_pose(gripper_body_name)
+        T_world_object = self._get_body_pose(object_name)
+
+        # Compute relative transform: T_gripper_object = inv(T_world_gripper) @ T_world_object
+        T_gripper_object = np.linalg.inv(T_world_gripper) @ T_world_object
+
+        self._attachments[object_name] = (gripper_body_name, T_gripper_object)
+
+    def detach_object(self, object_name: str) -> None:
+        """Detach an object from kinematic attachment.
+
+        Args:
+            object_name: Name of the object body
+        """
+        self._attachments.pop(object_name, None)
+
+    def is_attached(self, object_name: str) -> bool:
+        """Check if an object is kinematically attached."""
+        return object_name in self._attachments
+
+    def get_attached_objects(self) -> list[str]:
+        """Get list of all kinematically attached objects."""
+        return list(self._attachments.keys())
+
+    def update_attached_poses(self) -> None:
+        """Update poses of all kinematically attached objects.
+
+        Call this after moving the gripper to update attached object positions.
+        """
+        for object_name, (gripper_body_name, T_gripper_object) in self._attachments.items():
+            # Get current gripper pose
+            T_world_gripper = self._get_body_pose(gripper_body_name)
+
+            # Compute new object pose: T_world_object = T_world_gripper @ T_gripper_object
+            T_world_object = T_world_gripper @ T_gripper_object
+
+            # Set object pose
+            self._set_body_pose(object_name, T_world_object)
+
+    def _get_body_pose(self, body_name: str) -> np.ndarray:
+        """Get the 4x4 pose matrix of a body.
+
+        Args:
+            body_name: Name of the body
+
+        Returns:
+            4x4 homogeneous transformation matrix
+        """
+        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        if body_id == -1:
+            raise ValueError(f"Body '{body_name}' not found in model")
+
+        pos = self.data.xpos[body_id].copy()
+        mat = self.data.xmat[body_id].reshape(3, 3).copy()
+
+        T = np.eye(4)
+        T[:3, :3] = mat
+        T[:3, 3] = pos
+        return T
+
+    def _set_body_pose(self, body_name: str, T: np.ndarray) -> None:
+        """Set the pose of a freejoint body.
+
+        Args:
+            body_name: Name of the body (must have a freejoint)
+            T: 4x4 homogeneous transformation matrix
+        """
+        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        if body_id == -1:
+            raise ValueError(f"Body '{body_name}' not found in model")
+
+        # Find the joint for this body
+        joint_id = self.model.body_jntadr[body_id]
+        if joint_id == -1:
+            raise ValueError(f"Body '{body_name}' has no joint - cannot set pose")
+
+        # Check if it's a freejoint
+        if self.model.jnt_type[joint_id] != mujoco.mjtJoint.mjJNT_FREE:
+            raise ValueError(f"Body '{body_name}' joint is not a freejoint")
+
+        # Get qpos address for this joint
+        qpos_adr = self.model.jnt_qposadr[joint_id]
+
+        # Extract position and convert rotation matrix to quaternion
+        pos = T[:3, 3]
+        mat = T[:3, :3]
+        quat = self._mat_to_quat(mat)
+
+        # Set qpos: [x, y, z, qw, qx, qy, qz]
+        self.data.qpos[qpos_adr:qpos_adr + 3] = pos
+        self.data.qpos[qpos_adr + 3:qpos_adr + 7] = quat
+
+    def _mat_to_quat(self, mat: np.ndarray) -> np.ndarray:
+        """Convert 3x3 rotation matrix to quaternion [w, x, y, z]."""
+        # Use MuJoCo's conversion
+        quat = np.zeros(4)
+        mujoco.mju_mat2Quat(quat, mat.flatten())
+        return quat
 
     def _get_body_geom_ids(self, body_name: str) -> list[int]:
         """Get all geom IDs belonging to a body."""

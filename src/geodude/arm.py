@@ -17,11 +17,12 @@ from geodude.trajectory import Trajectory
 # Optional pycbirrt imports for motion planning
 try:
     from pycbirrt.backends.eaik import EAIKSolver
-    from pycbirrt import CBiRRT, CBiRRTConfig
+    from pycbirrt import CBiRRT, CBiRRTConfig, PlanningError
 
     PYCBIRRT_AVAILABLE = True
 except ImportError:
     PYCBIRRT_AVAILABLE = False
+    PlanningError = Exception  # Fallback for type hints
 
 # For backwards compatibility
 EAIK_AVAILABLE = PYCBIRRT_AVAILABLE
@@ -636,8 +637,8 @@ class Arm:
         try:
             # Pass goal configuration directly - no FK/IK round-trip needed
             path = planner.plan(start=q_start, goal=q_goal, seed=seed)
-        except ValueError:
-            # Invalid goal configuration (collision or constraint violation)
+        except (ValueError, PlanningError):
+            # Invalid configuration (collision or constraint violation)
             path = None
         finally:
             # Restore robot state from snapshot (planning corrupts state)
@@ -694,8 +695,8 @@ class Arm:
                 constraint_tsrs=constraint_tsrs,
                 seed=seed,
             )
-        except ValueError:
-            # No valid goal configurations found (IK failed or all in collision)
+        except (ValueError, PlanningError):
+            # No valid configurations found (IK failed or all in collision)
             path = None
         finally:
             # Restore robot state from snapshot (planning corrupts state)

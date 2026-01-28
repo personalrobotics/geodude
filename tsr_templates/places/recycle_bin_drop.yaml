@@ -1,0 +1,28 @@
+name: Recycle Bin Drop
+description: |
+  Drop position above recycle bin with palm facing down.
+  Small box region above the bin center.
+  Palm-down orientation so object falls into bin when fingers open.
+
+  Bin dimensions: ~24cm x 24cm inner area, ~30cm tall (top at z≈0.30)
+  TSR convention: gripper z = approach direction.
+  With -z approach, gripper z points downward,
+  so opening the fingers releases the object into the bin.
+
+task: recycle
+subject: robotiq_2f140
+reference: recycle_bin
+
+position:
+  type: box
+  x: [-0.05, 0.05]   # Centered over bin opening
+  y: [-0.05, 0.05]
+  z: [0.50, 0.55]    # 20-25cm above bin top (bin top at z≈0.30)
+
+orientation:
+  approach: -z
+  roll: [0, 0]
+  pitch: [0, 0]
+  yaw: [0, 360]  # Any yaw is fine for dropping
+
+standoff: 0.0  # Position is directly above bin

@@ -1,0 +1,27 @@
+name: Can on Table (Flipped)
+description: |
+  Statically stable placement for can on worktop - upside-down orientation.
+  Full 360° yaw rotation (can is symmetric around its axis).
+
+  Reference frame: worktop site (1.2m x 0.8m, center at origin of site frame)
+  Bounds: worktop extents minus can radius (0.033m margin)
+    x: [-0.567, 0.567]  = [-0.6 + 0.033, 0.6 - 0.033]
+    y: [-0.367, 0.367]  = [-0.4 + 0.033, 0.4 - 0.033]
+
+task: place
+subject: can
+reference: worktop
+
+position:
+  type: box
+  x: [-0.567, 0.567]  # worktop x extent (0.6) minus can radius (0.033)
+  y: [-0.367, 0.367]  # worktop y extent (0.4) minus can radius (0.033)
+  z: [0.0615, 0.0615]  # Can body frame at center; offset by half-height so bottom sits on surface
+
+orientation:
+  approach: -z
+  roll: [0, 0]
+  pitch: [180, 180]  # Flipped upside-down
+  yaw: [0, 360]  # Can be placed at any yaw (symmetric)
+
+standoff: 0.0  # Object sits directly on table

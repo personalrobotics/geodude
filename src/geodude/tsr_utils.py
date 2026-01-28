@@ -2,6 +2,10 @@
 
 This module provides helper functions to create Task Space Regions (TSRs) for
 common manipulation tasks like grasping and placing objects.
+
+It also handles gripper-specific frame compensation. The TSR library uses a
+canonical gripper convention (z = approach, y = finger opening), but specific
+grippers may have different internal frame conventions that require compensation.
 """
 
 from __future__ import annotations
@@ -15,6 +19,111 @@ try:
     TSR_AVAILABLE = True
 except ImportError:
     TSR_AVAILABLE = False
+
+
+# =============================================================================
+# Gripper Frame Compensation
+# =============================================================================
+#
+# The TSR library uses a canonical gripper frame convention:
+#   - z-axis: approach direction (where the gripper "looks")
+#   - y-axis: finger opening direction
+#   - x-axis: perpendicular (by right-hand rule)
+#
+# Specific grippers may have different internal conventions. For example,
+# the Robotiq 2F-140 MuJoCo model has an internal -90° z rotation on its
+# base body (see geodude_assets issue #5). This means poses computed with
+# the canonical convention need to be rotated before being used with IK.
+#
+# The compensation is applied as: adjusted_pose = canonical_pose @ R_offset
+# where R_offset converts from canonical frame to the gripper's mount frame.
+
+def _rotation_z(angle_rad: float) -> np.ndarray:
+    """Create a 4x4 rotation matrix around z-axis."""
+    c, s = np.cos(angle_rad), np.sin(angle_rad)
+    return np.array([
+        [c, -s, 0, 0],
+        [s, c, 0, 0],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1],
+    ])
+
+
+# Known gripper frame offsets (from canonical TSR convention to mount frame)
+# Each entry is a 4x4 rotation matrix to post-multiply with canonical poses.
+GRIPPER_FRAME_OFFSETS: dict[str, np.ndarray] = {
+    # Robotiq 2F-140: model has -90° z rotation internally, so we apply +90°
+    # to convert from canonical (y=fingers) to mount frame (−x=fingers)
+    "robotiq_2f140": _rotation_z(np.pi / 2),
+}
+
+
+def get_gripper_frame_offset(gripper_name: str) -> np.ndarray:
+    """Get the frame compensation matrix for a specific gripper.
+
+    The returned matrix should be post-multiplied with canonical TSR poses
+    to get poses suitable for the gripper's mount frame:
+        adjusted_pose = canonical_pose @ offset
+
+    Args:
+        gripper_name: Name of the gripper (e.g., "robotiq_2f140")
+
+    Returns:
+        4x4 rotation matrix for frame compensation (identity if unknown gripper)
+    """
+    return GRIPPER_FRAME_OFFSETS.get(gripper_name, np.eye(4))
+
+
+def apply_gripper_frame_compensation(
+    pose: np.ndarray,
+    gripper_name: str,
+) -> np.ndarray:
+    """Apply gripper-specific frame compensation to a pose.
+
+    Converts a pose from the canonical TSR convention (z=approach, y=fingers)
+    to the specific gripper's mount frame convention.
+
+    Args:
+        pose: 4x4 homogeneous transform in canonical TSR convention
+        gripper_name: Name of the gripper (e.g., "robotiq_2f140")
+
+    Returns:
+        4x4 homogeneous transform adjusted for the gripper's frame convention
+    """
+    offset = get_gripper_frame_offset(gripper_name)
+    return pose @ offset
+
+
+def compensate_tsr_for_gripper(
+    tsr: "TSR",
+    gripper_name: str,
+) -> "TSR":
+    """Create a new TSR with gripper-specific frame compensation applied to Tw_e.
+
+    This modifies the Tw_e transform to account for the gripper's internal
+    frame convention, so that sampled poses work correctly with IK.
+
+    Args:
+        tsr: Original TSR with canonical convention
+        gripper_name: Name of the gripper (e.g., "robotiq_2f140")
+
+    Returns:
+        New TSR with compensated Tw_e
+    """
+    if not TSR_AVAILABLE:
+        raise ImportError("TSR not available. Install with: pip install tsr")
+
+    offset = get_gripper_frame_offset(gripper_name)
+
+    # Apply compensation to Tw_e: new_Tw_e = Tw_e @ offset
+    # This rotates the end-effector frame relative to the TSR frame
+    compensated_Tw_e = tsr.Tw_e @ offset
+
+    return TSR(
+        T0_w=tsr.T0_w.copy(),
+        Tw_e=compensated_Tw_e,
+        Bw=tsr.Bw.copy(),
+    )
 
 
 def create_top_grasp_tsr(

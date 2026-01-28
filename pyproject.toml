@@ -15,10 +15,14 @@ dependencies = [
     "toppra>=0.6.3",
     "mj_environment @ git+https://github.com/personalrobotics/mj_environment.git",
     "geodude-assets",
+    "prl-assets",
+    "tsr",
 ]
 
 [tool.uv.sources]
 geodude-assets = { path = "../geodude_assets", editable = true }
+prl-assets = { path = "../prl_assets", editable = true }
+tsr = { path = "../tsr", editable = true }
 
 [project.optional-dependencies]
 dev = [

@@ -73,6 +73,74 @@ class ArmRobotModel:
         return self._arm._get_ee_pose_at_config(q)
 
 
+class ContextRobotModel:
+    """Robot model adapter using a PlanningContext's data for thread-safe FK.
+
+    Unlike ArmRobotModel which uses the shared Arm data, this uses an isolated
+    MjData from a PlanningContext, making it safe for parallel planning.
+    """
+
+    def __init__(
+        self,
+        model: mujoco.MjModel,
+        data: mujoco.MjData,
+        joint_qpos_indices: list[int],
+        ee_site_id: int,
+        joint_limits: tuple[np.ndarray, np.ndarray],
+    ):
+        """Initialize the context-based robot model.
+
+        Args:
+            model: MuJoCo model (shared, read-only)
+            data: MjData for this context (private copy)
+            joint_qpos_indices: Indices into qpos for arm joints
+            ee_site_id: Site ID for end-effector
+            joint_limits: (lower, upper) joint limit arrays
+        """
+        self._model = model
+        self._data = data
+        self._joint_qpos_indices = joint_qpos_indices
+        self._ee_site_id = ee_site_id
+        self._joint_limits = joint_limits
+
+    @property
+    def dof(self) -> int:
+        """Number of degrees of freedom."""
+        return len(self._joint_qpos_indices)
+
+    @property
+    def joint_limits(self) -> tuple[np.ndarray, np.ndarray]:
+        """Joint limits as (lower, upper) bounds arrays."""
+        return self._joint_limits
+
+    def forward_kinematics(self, q: np.ndarray) -> np.ndarray:
+        """Compute end-effector pose from joint configuration.
+
+        Uses this context's MjData (thread-safe).
+
+        Args:
+            q: Joint configuration array of shape (dof,)
+
+        Returns:
+            4x4 homogeneous transform of end-effector in world frame
+        """
+        # Set arm joints in our private data
+        for i, qpos_idx in enumerate(self._joint_qpos_indices):
+            self._data.qpos[qpos_idx] = q[i]
+
+        # Compute FK
+        mujoco.mj_forward(self._model, self._data)
+
+        # Read EE pose
+        pos = self._data.site_xpos[self._ee_site_id]
+        rot_mat = self._data.site_xmat[self._ee_site_id].reshape(3, 3)
+
+        transform = np.eye(4)
+        transform[:3, :3] = rot_mat
+        transform[:3, 3] = pos
+        return transform
+
+
 class ArmIKSolver:
     """Adapter that wraps an Arm's IK to provide the pycbirrt IKSolver interface.
 
@@ -340,6 +408,96 @@ class Arm:
 
         return self._planner
 
+    def create_planner(self, config: "CBiRRTConfig | None" = None) -> "CBiRRT":
+        """Create an isolated CBiRRT planner for thread-safe parallel planning.
+
+        Unlike _get_planner() which uses shared state, this creates a planner
+        with its own MjData copy. Safe for concurrent use - call from multiple
+        threads for different arms or different goals.
+
+        Args:
+            config: Optional planner configuration. If None, uses default config.
+
+        Returns:
+            CBiRRT planner instance with isolated state
+
+        Raises:
+            ImportError: If pycbirrt is not installed
+
+        Example:
+            # Plan both arms in parallel
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                left_future = executor.submit(
+                    lambda: robot.left_arm.create_planner().plan(start, goal=left_goal)
+                )
+                right_future = executor.submit(
+                    lambda: robot.right_arm.create_planner().plan(start, goal=right_goal)
+                )
+                left_path = left_future.result()
+                right_path = right_future.result()
+        """
+        if not PYCBIRRT_AVAILABLE:
+            raise ImportError(
+                "pycbirrt not available. Install with: pip install pycbirrt[eaik]\n"
+                "Or: uv add pycbirrt[eaik]"
+            )
+
+        from geodude.parallel import fork_for_planning
+
+        # Create isolated planning context
+        ctx = fork_for_planning(self)
+
+        # Create robot model using context's data
+        robot_model = ContextRobotModel(
+            model=ctx.model,
+            data=ctx.data,
+            joint_qpos_indices=self.joint_qpos_indices,
+            ee_site_id=self.ee_site_id,
+            joint_limits=self.get_joint_limits(),
+        )
+
+        # Use same IK solver (EAIK is stateless)
+        ik_solver = ArmIKSolver(self)
+
+        # Use context's snapshot-based collision checker
+        collision_checker = ctx.collision_checker
+
+        planner_config = config or CBiRRTConfig(
+            max_iterations=5000,
+            step_size=0.1,
+            goal_bias=0.1,
+            ik_num_seeds=1,
+            smoothing_iterations=100,
+        )
+
+        return CBiRRT(
+            robot=robot_model,
+            ik_solver=ik_solver,
+            collision_checker=collision_checker,
+            config=planner_config,
+        )
+
+    # Internal properties for parallel planning module
+    @property
+    def _model(self) -> mujoco.MjModel:
+        """MuJoCo model (for parallel module access)."""
+        return self.model
+
+    @property
+    def _data(self) -> mujoco.MjData:
+        """MuJoCo data (for parallel module access)."""
+        return self.data
+
+    @property
+    def _config(self) -> ArmConfig:
+        """Arm configuration (for parallel module access)."""
+        return self.config
+
+    @property
+    def _grasp_manager(self) -> GraspManager:
+        """Grasp manager (for parallel module access)."""
+        return self.grasp_manager
+
     def get_base_pose(self) -> np.ndarray:
         """Get the arm base pose in world frame as 4x4 transform.
 
@@ -437,8 +595,6 @@ class Arm:
             return self._cached_base_rotation
 
         # Compare FK at reference configuration to compute R
-        # Debug: print that we're computing R
-        print(f"[DEBUG] Computing base rotation R for {self.config.name} arm...", flush=True)
         q_ref = np.zeros(6)
 
         # Get EAIK FK at q_ref (returns pose in EAIK's base frame)

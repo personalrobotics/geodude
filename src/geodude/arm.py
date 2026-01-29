@@ -16,7 +16,6 @@ from geodude.trajectory import Trajectory
 
 # Optional pycbirrt imports for motion planning
 try:
-    from pycbirrt.backends.eaik import EAIKSolver
     from pycbirrt import CBiRRT, CBiRRTConfig, PlanningError
 
     PYCBIRRT_AVAILABLE = True
@@ -24,8 +23,13 @@ except ImportError:
     PYCBIRRT_AVAILABLE = False
     PlanningError = Exception  # Fallback for type hints
 
-# For backwards compatibility
-EAIK_AVAILABLE = PYCBIRRT_AVAILABLE
+# Optional EAIK import for analytical IK
+try:
+    from pycbirrt.backends.eaik import EAIKSolver
+
+    EAIK_AVAILABLE = True
+except ImportError:
+    EAIK_AVAILABLE = False
 
 if TYPE_CHECKING:
     from geodude.robot import Geodude
@@ -418,20 +422,52 @@ class Arm:
     def _get_base_rotation(self) -> np.ndarray:
         """Get the rotation from EAIK's base frame to MuJoCo's base body frame.
 
-        The MuJoCo model may have a rotation applied to the UR5e base body
-        (e.g., quat="0 0 0 -1" for 180° around Z). EAIK assumes the standard
-        UR5e base orientation. This method computes that rotation offset.
+        EAIK uses the standard UR5e DH convention where the base is at identity.
+        The MuJoCo model may have the arm mounted at a different orientation.
+
+        This computes R such that:
+            T_mjbase_mujoco = R @ T_eaikbase_eaik
+
+        by comparing EAIK FK with MuJoCo FK at a reference configuration.
 
         Returns:
-            4x4 rotation matrix R such that:
-            T_mujoco_base = R @ T_eaik_base
+            4x4 rotation matrix R
         """
-        # The UR5e in MuJoCo has quat="0 0 0 -1" which is 180° rotation around Z
-        # This means: x_mujoco = -x_eaik, y_mujoco = -y_eaik, z_mujoco = z_eaik
-        # This is R_z(180°) = [[-1, 0, 0], [0, -1, 0], [0, 0, 1]]
+        if hasattr(self, '_cached_base_rotation'):
+            return self._cached_base_rotation
+
+        # Compare FK at reference configuration to compute R
+        # Debug: print that we're computing R
+        print(f"[DEBUG] Computing base rotation R for {self.config.name} arm...", flush=True)
+        q_ref = np.zeros(6)
+
+        # Get EAIK FK at q_ref (returns pose in EAIK's base frame)
+        ik_solver = self._get_ik_solver()
+        T_eaikbase_eaik = ik_solver.forward_kinematics(q_ref)
+
+        # Get MuJoCo FK at q_ref and convert to base body frame
+        old_q = self.get_joint_positions()
+        self.set_joint_positions(q_ref)
+        T_world_mujoco = self.get_ee_pose()
+        self.set_joint_positions(old_q)
+
+        T_world_base = self.get_base_pose()
+        T_mjbase_mujoco = np.linalg.inv(T_world_base) @ T_world_mujoco
+
+        # Solve for R: T_mjbase_mujoco = R @ T_eaikbase_eaik @ T_eaik_mujoco
+        # Since T_eaik_mujoco is nearly identity (computed in _get_ee_offset),
+        # we can approximate: R ≈ T_mjbase_mujoco @ inv(T_eaikbase_eaik)
+        # But this won't give a pure rotation. Instead, extract rotation only.
+        #
+        # For rotation part: R_mjbase_mujoco = R_rot @ R_eaikbase_eaik
+        # So: R_rot = R_mjbase_mujoco @ inv(R_eaikbase_eaik)
+        R_mjbase = T_mjbase_mujoco[:3, :3]
+        R_eaik = T_eaikbase_eaik[:3, :3]
+        R_rot = R_mjbase @ np.linalg.inv(R_eaik)
+
         R = np.eye(4)
-        R[0, 0] = -1
-        R[1, 1] = -1
+        R[:3, :3] = R_rot
+        self._cached_base_rotation = R
         return R
 
     def _get_ee_offset(self) -> np.ndarray:

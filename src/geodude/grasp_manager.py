@@ -113,26 +113,52 @@ class GraspManager:
         """Get list of all kinematically attached objects."""
         return list(self._attachments.keys())
 
-    def update_attached_poses(self) -> None:
+    def get_attachment_body(self, object_name: str) -> str | None:
+        """Get the gripper body name that an object is attached to.
+
+        Args:
+            object_name: Name of the attached object
+
+        Returns:
+            Name of the gripper body holding this object, or None if not attached
+        """
+        if object_name not in self._attachments:
+            return None
+        gripper_body_name, _ = self._attachments[object_name]
+        return gripper_body_name
+
+    def update_attached_poses(self, data: mujoco.MjData | None = None) -> None:
         """Update poses of all kinematically attached objects.
 
         Call this after moving the gripper to update attached object positions.
+
+        Args:
+            data: MjData to update (defaults to self.data). Use this to update
+                  poses in a temporary MjData during collision checking.
         """
+        if data is None:
+            data = self.data
+
         for object_name, (gripper_body_name, T_gripper_object) in self._attachments.items():
             # Get current gripper pose
-            T_world_gripper = self._get_body_pose(gripper_body_name)
+            T_world_gripper = self._get_body_pose_from_data(gripper_body_name, data)
 
             # Compute new object pose: T_world_object = T_world_gripper @ T_gripper_object
             T_world_object = T_world_gripper @ T_gripper_object
 
             # Set object pose
-            self._set_body_pose(object_name, T_world_object)
+            self._set_body_pose_in_data(object_name, T_world_object, data)
 
     def _get_body_pose(self, body_name: str) -> np.ndarray:
-        """Get the 4x4 pose matrix of a body.
+        """Get the 4x4 pose matrix of a body from self.data."""
+        return self._get_body_pose_from_data(body_name, self.data)
+
+    def _get_body_pose_from_data(self, body_name: str, data: mujoco.MjData) -> np.ndarray:
+        """Get the 4x4 pose matrix of a body from specified MjData.
 
         Args:
             body_name: Name of the body
+            data: MjData to read from
 
         Returns:
             4x4 homogeneous transformation matrix
@@ -141,8 +167,8 @@ class GraspManager:
         if body_id == -1:
             raise ValueError(f"Body '{body_name}' not found in model")
 
-        pos = self.data.xpos[body_id].copy()
-        mat = self.data.xmat[body_id].reshape(3, 3).copy()
+        pos = data.xpos[body_id].copy()
+        mat = data.xmat[body_id].reshape(3, 3).copy()
 
         T = np.eye(4)
         T[:3, :3] = mat
@@ -150,11 +176,16 @@ class GraspManager:
         return T
 
     def _set_body_pose(self, body_name: str, T: np.ndarray) -> None:
-        """Set the pose of a freejoint body.
+        """Set the pose of a freejoint body in self.data."""
+        self._set_body_pose_in_data(body_name, T, self.data)
+
+    def _set_body_pose_in_data(self, body_name: str, T: np.ndarray, data: mujoco.MjData) -> None:
+        """Set the pose of a freejoint body in specified MjData.
 
         Args:
             body_name: Name of the body (must have a freejoint)
             T: 4x4 homogeneous transformation matrix
+            data: MjData to modify
         """
         body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
         if body_id == -1:
@@ -178,8 +209,8 @@ class GraspManager:
         quat = self._mat_to_quat(mat)
 
         # Set qpos: [x, y, z, qw, qx, qy, qz]
-        self.data.qpos[qpos_adr:qpos_adr + 3] = pos
-        self.data.qpos[qpos_adr + 3:qpos_adr + 7] = quat
+        data.qpos[qpos_adr:qpos_adr + 3] = pos
+        data.qpos[qpos_adr + 3:qpos_adr + 7] = quat
 
     def _mat_to_quat(self, mat: np.ndarray) -> np.ndarray:
         """Convert 3x3 rotation matrix to quaternion [w, x, y, z]."""
@@ -211,9 +242,11 @@ class GraspManager:
         ]
 
         # Update to grasped collision group
+        # contype=GRASPED means only gripper pads (conaffinity=3) will see this as a collision partner
+        # conaffinity includes NORMAL so grasped objects still collide with environment
         for geom_id in geom_ids:
             self.model.geom_contype[geom_id] = COLLISION_GROUP_GRASPED
-            self.model.geom_conaffinity[geom_id] = COLLISION_GROUP_GRASPED
+            self.model.geom_conaffinity[geom_id] = COLLISION_GROUP_GRASPED | COLLISION_GROUP_NORMAL
 
     def _restore_collision_group(self, object_name: str) -> None:
         """Restore original collision groups for an object."""

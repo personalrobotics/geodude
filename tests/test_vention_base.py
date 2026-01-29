@@ -162,7 +162,7 @@ class TestVentionBaseMoveTo:
         """move_to with collision check succeeds on clear path."""
         robot = Geodude()
         # Arms start in home position - path should be clear
-        robot.go_to("home")
+        robot.go_to("ready")
 
         success = robot.left_base.move_to(0.3, check_collisions=True)
 
@@ -206,7 +206,7 @@ class TestVentionBaseMoveTo:
     def test_move_to_preserves_arm_config(self):
         """move_to preserves arm joint configuration."""
         robot = Geodude()
-        robot.go_to("home")
+        robot.go_to("ready")
         original_q = robot.left_arm.get_joint_positions().copy()
 
         robot.left_base.move_to(0.3, check_collisions=True)
@@ -255,7 +255,7 @@ class TestVentionBaseWithObstacles:
         frame, gripper parts touching each other, etc.) do not block base movement.
         """
         robot = Geodude()
-        robot.go_to("home")
+        robot.go_to("ready")
 
         # In home position, the arm may have contacts with the vention frame
         # but this should NOT block base movement

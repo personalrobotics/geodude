@@ -51,31 +51,21 @@ class TestGeodude:
         assert robot.right_arm.dof == 6
 
     def test_named_poses(self):
-        """named_poses returns configuration dict."""
+        """named_poses returns configuration dict from keyframes."""
         robot = Geodude()
-        assert "home" in robot.named_poses
         assert "ready" in robot.named_poses
 
-    def test_go_to_home(self):
-        """go_to 'home' moves both arms to home pose."""
-        robot = Geodude()
-        success = robot.go_to("home")
-
-        assert success
-        expected = [-1.5708, -1.5708, 1.5708, -1.5708, -1.5708, 0]
-        assert np.allclose(robot.left_arm.get_joint_positions(), expected, atol=0.01)
-        assert np.allclose(robot.right_arm.get_joint_positions(), expected, atol=0.01)
-
     def test_go_to_ready(self):
-        """go_to 'ready' moves both arms to ready pose."""
+        """go_to 'ready' moves both arms to ready pose (from keyframe)."""
         robot = Geodude()
         success = robot.go_to("ready")
 
         assert success
-        # Both arms use same ready pose config
-        expected = [-1.57, -1.2, 0.8, -1.17, -1.57, 0]
-        assert np.allclose(robot.left_arm.get_joint_positions(), expected, atol=0.01)
-        assert np.allclose(robot.right_arm.get_joint_positions(), expected, atol=0.01)
+        # Arms have mirrored configurations (shoulder_pan differs in sign)
+        expected_left = [-1.5708, -1.5708, 1.5708, -1.5708, 1.5708, 0]
+        expected_right = [1.5708, -1.5708, 1.5708, -1.5708, 1.5708, 0]
+        assert np.allclose(robot.left_arm.get_joint_positions(), expected_left, atol=0.01)
+        assert np.allclose(robot.right_arm.get_joint_positions(), expected_right, atol=0.01)
 
     def test_go_to_unknown_pose_raises(self):
         """go_to with unknown pose raises ValueError."""
@@ -176,7 +166,7 @@ class TestGeodueEndEffectors:
     def test_left_arm_ee_pose_valid_transform(self):
         """Left arm EE pose is a valid transform."""
         robot = Geodude()
-        robot.go_to("home")
+        robot.go_to("ready")
         pose = robot.left_arm.get_ee_pose()
 
         assert pose.shape == (4, 4)
@@ -187,7 +177,7 @@ class TestGeodueEndEffectors:
     def test_right_arm_ee_pose_valid_transform(self):
         """Right arm EE pose is a valid transform."""
         robot = Geodude()
-        robot.go_to("home")
+        robot.go_to("ready")
         pose = robot.right_arm.get_ee_pose()
 
         assert pose.shape == (4, 4)

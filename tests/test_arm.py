@@ -577,7 +577,7 @@ class TestArmPickPlace:
         arm = robot.right_arm
 
         # Use home pose which is known to be collision-free
-        robot.go_to("home")
+        robot.go_to("ready")
 
         # Verify start config is collision-free
         checker = arm._get_collision_checker()
@@ -609,7 +609,7 @@ class TestArmPickPlace:
         arm = robot.right_arm
 
         # Use home pose which is known to be collision-free
-        robot.go_to("home")
+        robot.go_to("ready")
 
         # Verify start config is collision-free
         checker = arm._get_collision_checker()
@@ -639,7 +639,7 @@ class TestArmPickPlace:
         arm = robot.right_arm
 
         # Use home pose
-        robot.go_to("home")
+        robot.go_to("ready")
 
         # Close gripper first
         arm.close_gripper()

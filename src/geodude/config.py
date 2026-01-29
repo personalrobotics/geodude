@@ -178,19 +178,15 @@ class GeodudConfig:
                 joint_name="right_arm_linear_vention",
                 actuator_name="right_linear_actuator",
             ),
-            named_poses={
-                "home": {
-                    # Arms tucked in, elbows bent up
-                    "left": [-1.5708, -1.5708, 1.5708, -1.5708, -1.5708, 0],
-                    "right": [-1.5708, -1.5708, 1.5708, -1.5708, -1.5708, 0],
-                },
-                "ready": {
-                    # Arms extended forward, gripper pointing down, ready to work
-                    # shoulder_pan, shoulder_lift, elbow, wrist1, wrist2, wrist3
-                    "left": [-1.57, -1.2, 0.8, -1.17, -1.57, 0],
-                    "right": [-1.57, -1.2, 0.8, -1.17, -1.57, 0],
-                },
-            },
+            # Named poses are loaded from MuJoCo keyframes in the model XML.
+            # To add custom poses here, use format:
+            #   named_poses={
+            #       "pose_name": {
+            #           "left": [shoulder_pan, shoulder_lift, elbow, wrist1, wrist2, wrist3],
+            #           "right": [shoulder_pan, shoulder_lift, elbow, wrist1, wrist2, wrist3],
+            #       },
+            #   }
+            named_poses={},
         )
 
     @classmethod

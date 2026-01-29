@@ -24,7 +24,7 @@ class Geodude:
 
     Example:
         robot = Geodude()
-        robot.right_arm.go_to('home')
+        robot.right_arm.go_to('ready')
         robot.right_arm.pick('cup')
         robot.right_arm.place('cup', on='table')
     """
@@ -71,6 +71,10 @@ class Geodude:
             self._right_base = VentionBase(
                 self.model, self.data, self.config.right_base, self._right_arm
             )
+
+        # Load named poses: keyframes take precedence over config
+        keyframe_poses = self._load_keyframe_poses()
+        self._named_poses = {**self.config.named_poses, **keyframe_poses}
 
         # Run forward to initialize state
         mujoco.mj_forward(self.model, self.data)
@@ -129,14 +133,14 @@ class Geodude:
 
     @property
     def named_poses(self) -> dict[str, dict[str, list[float]]]:
-        """Named pose configurations."""
-        return self.config.named_poses
+        """Named pose configurations (from keyframes + config)."""
+        return self._named_poses
 
     def go_to(self, pose_name: str, speed: float = 1.0) -> bool:
         """Move both arms to a named configuration.
 
         Args:
-            pose_name: Name of the configuration (e.g., 'home', 'ready')
+            pose_name: Name of the configuration (e.g., 'ready')
             speed: Execution speed multiplier
 
         Returns:
@@ -167,13 +171,61 @@ class Geodude:
         return self.data.time
 
     def reset(self) -> None:
-        """Reset simulation to initial state."""
-        mujoco.mj_resetData(self.model, self.data)
+        """Reset simulation to initial state (ready keyframe if available)."""
+        key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, "ready")
+        if key_id != -1:
+            mujoco.mj_resetDataKeyframe(self.model, self.data, key_id)
+        else:
+            mujoco.mj_resetData(self.model, self.data)
         mujoco.mj_forward(self.model, self.data)
 
         # Clear grasp state
         for obj in list(self.grasp_manager.grasped.keys()):
             self.grasp_manager.mark_released(obj)
+
+    def reset_to_keyframe(self, name: str) -> None:
+        """Reset robot to a MuJoCo keyframe by name.
+
+        Args:
+            name: Name of the keyframe (e.g., 'ready')
+
+        Raises:
+            ValueError: If keyframe not found in model
+        """
+        key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, name)
+        if key_id == -1:
+            raise ValueError(f"Keyframe '{name}' not found in model")
+        mujoco.mj_resetDataKeyframe(self.model, self.data, key_id)
+        mujoco.mj_forward(self.model, self.data)
+
+    def _load_keyframe_poses(self) -> dict[str, dict[str, list[float]]]:
+        """Extract named poses from MuJoCo keyframes.
+
+        Reads keyframes from the model and extracts arm-specific joint values
+        for use with go_to() and other pose-based methods.
+
+        Returns:
+            Dict mapping keyframe names to arm poses:
+            {"ready": {"left": [6 floats], "right": [6 floats]}}
+        """
+        poses: dict[str, dict[str, list[float]]] = {}
+
+        for key_id in range(self.model.nkey):
+            name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_KEY, key_id)
+            if name is None:
+                continue
+
+            # Extract arm joint values from full keyframe qpos
+            key_qpos = self.model.key_qpos[key_id]
+            left_qpos = [float(key_qpos[idx]) for idx in self._left_arm.joint_qpos_indices]
+            right_qpos = [float(key_qpos[idx]) for idx in self._right_arm.joint_qpos_indices]
+
+            poses[name] = {
+                "left": left_qpos,
+                "right": right_qpos,
+            }
+
+        return poses
 
     # Environment interaction (placeholder for mj_environment integration)
 

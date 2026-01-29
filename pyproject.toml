@@ -17,12 +17,15 @@ dependencies = [
     "geodude-assets",
     "prl-assets",
     "tsr",
+    "pycbirrt",
+    "eaik",
 ]
 
 [tool.uv.sources]
 geodude-assets = { path = "../geodude_assets", editable = true }
 prl-assets = { path = "../prl_assets", editable = true }
 tsr = { path = "../tsr", editable = true }
+pycbirrt = { path = "../pycbirrt", editable = true }
 
 [project.optional-dependencies]
 dev = [

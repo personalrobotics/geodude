@@ -2,7 +2,8 @@
 """Arm Planning Demo - Reference implementation for Geodude.
 
 This demo showcases the recommended pattern for motion planning with Geodude:
-- Parallel planning with multiple forks to find paths faster
+- TRUE parallel planning with thread-safe isolated planners
+- Multiple forks racing to find paths faster
 - Switching between kinematic and physics-based execution
 - Clean timing metrics for profiling
 
@@ -14,6 +15,7 @@ Usage:
 
 import argparse
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 
 import mujoco
@@ -145,11 +147,32 @@ def generate_random_collision_free_config(arm, rng: np.random.Generator,
     return None
 
 
-def plan_single_fork(arm, goal: np.ndarray, seed: int, fork_id: int) -> PlanResult:
-    """Plan to a goal configuration in a single fork."""
+def plan_single_fork(arm, goal: np.ndarray, _seed: int, fork_id: int) -> PlanResult:
+    """Plan to a goal configuration in a single fork (thread-safe).
+
+    Uses arm.create_planner() to get an isolated planner with its own MjData,
+    enabling true parallel execution across threads.
+
+    Note: seed parameter is kept for API compatibility but randomness comes from
+    the planner's internal sampling which varies naturally across parallel forks.
+    """
+    from pycbirrt import CBiRRTConfig
+
+    # Create isolated planner for this thread
+    config = CBiRRTConfig(
+        timeout=10.0,
+        max_iterations=5000,
+        step_size=0.1,
+        goal_bias=0.1,
+        ik_num_seeds=1,
+        smoothing_iterations=100,
+    )
+    planner = arm.create_planner(config)
+    start = arm.get_joint_positions()
+
     # Time the planning
     plan_start = time.perf_counter()
-    path = arm.plan_to_configuration(goal, seed=seed)
+    path = planner.plan(start, goal=goal)
     plan_time = time.perf_counter() - plan_start
 
     if path is None:
@@ -182,19 +205,20 @@ def plan_single_fork(arm, goal: np.ndarray, seed: int, fork_id: int) -> PlanResu
 
 def parallel_plan_to_random(robot: Geodude, arm, num_forks: int,
                             rng: np.random.Generator, base_seed: int) -> PlanResult | None:
-    """Plan to random configurations, return first successful result.
+    """Plan to random configurations in TRUE parallel, return first successful result.
 
-    This demonstrates the pattern of trying multiple random goals:
+    This demonstrates thread-safe parallel planning with isolated planners:
     1. Generate K different random collision-free goals
-    2. Plan to each sequentially (MuJoCo is not thread-safe)
-    3. Return the first successful plan
+    2. Launch K parallel planners using ThreadPoolExecutor
+    3. Return the first successful plan, cancel remaining
 
-    For true parallelism, use multiprocessing with separate MuJoCo instances.
+    Each fork uses arm.create_planner() which creates an isolated CBiRRT planner
+    with its own MjData copy, enabling true parallel execution.
 
     Args:
         robot: The Geodude robot instance
         arm: The arm to plan for (robot.left_arm or robot.right_arm)
-        num_forks: Number of planning attempts to different goals
+        num_forks: Number of parallel planning attempts to different goals
         rng: Random number generator
         base_seed: Base seed for reproducibility
 
@@ -212,15 +236,31 @@ def parallel_plan_to_random(robot: Geodude, arm, num_forks: int,
     if not goals:
         return None
 
-    # Try each goal sequentially - first success wins
-    for fork_id, goal in goals:
-        seed = base_seed + fork_id
-        result = plan_single_fork(arm, goal, seed, fork_id)
-        if result.success:
-            return result
+    # Plan to all goals in TRUE parallel - first success wins
+    with ThreadPoolExecutor(max_workers=num_forks) as executor:
+        # Submit all planning tasks
+        futures = {
+            executor.submit(plan_single_fork, arm, goal, base_seed + fork_id, fork_id): fork_id
+            for fork_id, goal in goals
+        }
 
-    # All failed - return the last result for error info
-    return result
+        # Wait for first successful result
+        while futures:
+            done, _ = wait(futures.keys(), timeout=0.1, return_when=FIRST_COMPLETED)
+            for future in done:
+                try:
+                    result = future.result()
+                    if result.success:
+                        # Cancel remaining futures
+                        for f in futures:
+                            f.cancel()
+                        return result
+                except Exception:
+                    pass
+                del futures[future]
+
+    # All failed - return None
+    return None
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -1,230 +1,187 @@
-# Geodude - Bimanual UR5e Robot Control
+# Geodude
 
-Python library for controlling a bimanual UR5e robot system with Vention linear actuators and Robotiq grippers.
+A Python library for bimanual robot manipulation with collision-free motion planning.
 
-## Features
+<p align="center">
+  <img src="docs/images/geodude.png" alt="Geodude bimanual robot" width="500">
+</p>
 
-- **Collision-free motion planning** using CBiRRT
-- **Analytical inverse kinematics** via EAIK
-- **Time-optimal trajectory generation** with TOPP-RA
-- **Physics-based simulation** in MuJoCo
-- **Bimanual coordination** with grasp management
+## What It Does
+
+Geodude controls a bimanual UR5e robot system—two arms on height-adjustable Vention rails with Robotiq grippers. It handles the hard parts of manipulation:
+
+- **Motion planning**: Find collision-free paths using CBiRRT with TSR goals
+- **Grasp-aware collision**: Objects you're holding don't collide with your arm
+- **Parallel planning**: Plan both arms simultaneously, or try multiple goals at once
+- **Time-optimal trajectories**: TOPP-RA retiming respects joint velocity/acceleration limits
 
 ## Installation
 
 ```bash
-# Install geodude
-uv add geodude
-
-# Install geodude_assets (required for MuJoCo models)
-uv add geodude_assets
+uv add geodude geodude_assets
 ```
 
 ## Quick Start
 
 ```python
 from geodude import Geodude
-import numpy as np
 
-# Initialize robot
+# Initialize robot (loads MuJoCo model)
 robot = Geodude()
 
-# Move to named pose
+# Move to a named pose
 robot.go_to("ready")
 
-# Plan and execute motion
-target = np.array([-1.0, -1.5, 1.5, -1.5, -1.5, 0])
-path = robot.right_arm.plan_to_configuration(target)
+# Plan and execute a motion
+import numpy as np
+goal = np.array([-1.0, -1.5, 1.5, -1.5, -1.5, 0])
+path = robot.right_arm.plan_to_configuration(goal)
 if path:
+    robot.right_arm.execute(path)
+
+# Gripper control
+robot.right_arm.close_gripper()
+robot.right_arm.open_gripper()
+```
+
+## TSR-Based Planning
+
+Plan to grasp regions instead of fixed poses using Task Space Regions:
+
+```python
+from geodude.tsr_utils import create_side_grasp_tsr
+
+# Get object pose
+obj_pose = robot.get_object_pose("can")
+
+# Create grasp TSR (allows rotation around object axis)
+grasp_tsr = create_side_grasp_tsr(obj_pose, object_height=0.12)
+
+# Plan to any valid grasp
+path = robot.right_arm.plan_to_tsrs([grasp_tsr])
+if path:
+    robot.right_arm.execute(path)
+    robot.right_arm.close_gripper()
+```
+
+## Parallel Planning
+
+Plan multiple goals simultaneously—first success wins:
+
+```python
+from geodude import plan_first_success
+
+# Try multiple grasp approaches in parallel
+path = plan_first_success(robot.right_arm, [tsr1, tsr2, tsr3], timeout=10.0)
+```
+
+Plan both arms at once:
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+
+with ThreadPoolExecutor(max_workers=2) as executor:
+    left = executor.submit(
+        lambda: robot.left_arm.create_planner().plan(start, goal=left_goal)
+    )
+    right = executor.submit(
+        lambda: robot.right_arm.create_planner().plan(start, goal=right_goal)
+    )
+    left_path, right_path = left.result(), right.result()
+```
+
+## Height-Adaptive Planning
+
+The Vention bases allow height adjustment. Plan at multiple heights to find reachable goals:
+
+```python
+from geodude.parallel import plan_with_base_heights
+
+# Try planning at different base heights
+heights = [0.0, 0.2, 0.4]
+winning_height, path = plan_with_base_heights(
+    robot.right_arm,
+    robot.right_base,
+    grasp_tsr,
+    heights
+)
+if path:
+    robot.right_base.set_height(winning_height)
     robot.right_arm.execute(path)
 ```
 
-## Trajectory Execution System
+## Grasp Management
 
-### Overview
-
-Geodude uses physics-based trajectory execution that simulates realistic robot dynamics:
-
-1. **Geometric Path Planning**: CBiRRT generates collision-free waypoint paths
-2. **Trajectory Retiming**: TOPP-RA computes time-optimal velocity profiles respecting kinematic limits
-3. **Physics-Based Control**: Position commands sent to actuators at 125 Hz with realistic dynamics
-
-### Control Architecture
-
-```
-Geometric Path          Time-Parameterized         Physics Execution
-[q₀, q₁, q₂, ...]  →   Trajectory(t)          →   Actuator Control
-CBiRRT planner          TOPP-RA retiming           MuJoCo simulation
-```
-
-**Control Frequency**: 125 Hz (8 ms period)
-- Matches UR5e internal servo rate [1]
-- Commands sent via RTDE interface on real robot [2]
-
-**Kinematic Limits** (from UR5e datasheet [3]):
-- Joint velocities: ±180°/s (shoulder/elbow), ±360°/s (wrist)
-- Default safety scaling: 10% of maximum
-- Adjustable via `KinematicLimits.ur5e_default(vel_scale=0.5)`
-
-### Simulation vs Real Robot
-
-**Real UR5e Performance [4,5]:**
-- Position control bandwidth: ~50-65 Hz
-- Pose repeatability: ±0.03 mm
-- Internal control loop: 500 Hz
-- Settling time: ~20-50 ms
-
-**Simulation Characteristics:**
-- Actuator bandwidth: ~5 Hz (limited by MuJoCo fixed-gain position control)
-- Tracking error: typically < 2° with 10% speed scaling
-- Settling time: ~100-200 ms
-
-**Why the difference?**
-
-Real UR5e robots use sophisticated servo systems with:
-- Velocity and current control loops
-- Feedforward compensation
-- Model-based control
-
-MuJoCo position actuators with fixed gains are simpler and more conservative. This is a common sim-to-real gap [6].
-
-**Practical Impact:**
-
-✅ **Simulation (10% speed)**: Ensures reliable tracking with conservative dynamics
-✅ **Real Robot**: Will execute trajectories much faster and more accurately
-✅ **Safety**: Conservative simulation means real robot will always perform better
-
-### Executor Types
-
-Geodude provides three executor types for different use cases:
-
-**ClosedLoopExecutor (DEFAULT)** - Closed-loop feedback control
-- 6.5x better tracking than open-loop physics (2.5° avg error vs 16.5°)
-- Best balance of accuracy and realism
-- Recommended for most applications
-
-**KinematicExecutor** - Perfect tracking for validation
-- Zero tracking error (directly sets positions)
-- Fast validation of collision-free paths
-- No physics simulation
-
-**PhysicsExecutor** - Open-loop physics simulation
-- Realistic actuator dynamics with bandwidth limitations
-- Higher tracking error but good for contact tasks
+When you grasp an object, collision checking updates automatically:
 
 ```python
-# Default: closed-loop feedback (recommended)
+# Mark object as grasped
+robot.grasp_manager.mark_grasped("can", "right")
+robot.grasp_manager.attach_object("can", "right_ur5e/gripper/right_follower")
+
+# Now planning treats the can as part of the robot
+# (won't report false collisions with the arm)
+path = robot.right_arm.plan_to_tsrs([place_tsr])
+
+# Release
+robot.grasp_manager.mark_released("can")
+robot.grasp_manager.detach_object("can")
+```
+
+## Execution Modes
+
+```python
+# Physics simulation (default) - realistic dynamics
 robot.right_arm.execute(path)
 
-# Kinematic: perfect tracking for validation
+# Kinematic - instant, perfect tracking for validation
 robot.right_arm.execute(path, executor_type="kinematic")
-
-# Physics: open-loop for contact-rich tasks
-robot.right_arm.execute(path, executor_type="physics")
 ```
 
-### Speed Scaling
+## Architecture
 
-```python
-from geodude.config import KinematicLimits
-
-# Conservative (simulation default)
-limits_10 = KinematicLimits.ur5e_default(vel_scale=0.1, acc_scale=0.1)
-
-# Moderate speed (visualization)
-limits_50 = KinematicLimits.ur5e_default(vel_scale=0.5, acc_scale=0.5)
-
-# Apply to robot
-robot.right_arm.config.kinematic_limits = limits_50
 ```
-
-### Collision Safety
-
-The planner generates **collision-free geometric paths**. During execution:
-
-- Trajectory tracking errors are typically < 2° (with 10% scaling)
-- Collision checking validates actual robot state
-- No collisions detected even with tracking error [7]
-
-Conservative speed limits ensure the robot stays close to the planned collision-free path.
+Geodude
+├── left_arm / right_arm (Arm)
+│   ├── Planning (CBiRRT + EAIK)
+│   ├── Execution (TOPP-RA + MuJoCo)
+│   └── Gripper control
+├── left_base / right_base (VentionBase)
+│   └── Height adjustment
+├── GraspManager
+│   └── Tracks grasped objects, updates collision groups
+└── Collision checkers
+    └── Grasp-aware, thread-safe for parallel planning
+```
 
 ## Examples
 
-See `examples/` directory:
-
-- `basic_movement.py` - Visual demonstration of robot capabilities
-- `named_config_planning.py` - Simple motion planning example
-- `bimanual_pick_place.py` - Coordinated bimanual manipulation
-
-Run with:
 ```bash
-uv run mjpython examples/basic_movement.py
+# Basic motion demonstration
+uv run python examples/basic_movement.py
+
+# Parallel planning with base heights
+uv run python examples/arm_planning.py
+
+# Pick and place with physics
+uv run python examples/recycle_objects.py --physics
 ```
 
 ## Testing
 
 ```bash
-# Run all tests
 uv run pytest
-
-# Run specific test file
-uv run pytest tests/test_arm.py -v
 ```
 
-All 148 tests should pass.
+## Dependencies
 
-## Architecture
-
-- **geodude/** - Main library
-  - `arm.py` - Single arm control with planning and execution
-  - `trajectory.py` - TOPP-RA trajectory generation
-  - `executor.py` - SimExecutor and RealExecutor
-  - `config.py` - Robot configuration and kinematic limits
-  - `collision.py` - Collision checking
-  - `grasp_manager.py` - Grasp state management
-  - `vention_base.py` - Linear actuator control
-
-- **geodude_assets/** - MuJoCo models and meshes
-
-## References
-
-[1] Universal Robots RTDE Guide - Real-Time Data Exchange interface documentation
-    https://docs.universal-robots.com/tutorials/communication-protocol-tutorials/rtde-guide.html
-
-[2] UR5e servoj() control at 125Hz - Community discussion on UR control frequencies
-    https://groups.google.com/g/swri-ros-pkg-dev/c/Zyi0FfBVSLA
-
-[3] UR5e Technical Specifications - Official datasheet
-    https://www.universal-robots.com/media/1807465/ur5e_e-series_datasheets_web.pdf
-
-[4] Virtual UR5 Robot Control Study (2024) - Research on UR5 control bandwidth
-    MDPI Applied Sciences: https://www.mdpi.com/2218-6581/12/1/23
-
-[5] UR5e User Manual - Complete operational guide
-    https://s3-eu-west-1.amazonaws.com/ur-support-site/40971/UR5e_User_Manual_en_Global.pdf
-
-[6] MuJoCo Position Control - Fixed-gain actuator limitations
-    Discussion: https://github.com/ros-industrial-attic/ur_modern_driver/issues/153
-
-[7] Geodude trajectory following analysis - Internal testing with 50% speed scaling
-    - Planned paths: 100% collision-free
-    - Execution: 0 collisions detected (1010 waypoints tested)
-    - Max tracking error: ~2° with 10% scaling, ~49° with 50% scaling
+- **pycbirrt**: CBiRRT motion planner with TSR constraints
+- **tsr**: Task Space Region definitions
+- **eaik**: Analytical inverse kinematics for UR robots
+- **toppra**: Time-optimal path parameterization
+- **mujoco**: Physics simulation
+- **geodude_assets**: Robot models and meshes
 
 ## License
 
-MIT License - See LICENSE file for details.
-
-## Contributing
-
-Contributions welcome! Please ensure:
-- All tests pass (`uv run pytest`)
-- Code follows existing style
-- Add tests for new features
-
-## Support
-
-For issues and questions:
-- Open an issue on GitHub
-- Check existing examples in `examples/`
-- Review test files in `tests/` for usage patterns
+MIT

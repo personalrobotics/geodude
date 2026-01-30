@@ -157,9 +157,6 @@ Geodude
 ## Examples
 
 ```bash
-# Basic motion demonstration
-uv run python examples/basic_movement.py
-
 # Parallel planning with base heights
 uv run python examples/arm_planning.py
 

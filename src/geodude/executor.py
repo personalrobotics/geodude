@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from geodude.grasp_manager import GraspManager
+    from geodude.robot import Geodude
 
 
 class Executor(Protocol):
@@ -412,3 +413,243 @@ class RealExecutor:
             NotImplementedError: This executor is not yet implemented
         """
         raise NotImplementedError("RealExecutor not yet implemented")
+
+
+class RobotPhysicsController:
+    """Physics controller that manages all robot actuators.
+
+    In physics simulation, ALL actuators must be controlled - otherwise joints
+    will fall under gravity. This controller ensures that when one arm executes
+    a trajectory, all other actuators hold their positions.
+
+    Usage:
+        controller = RobotPhysicsController(robot, viewer=viewer)
+
+        # Execute on right arm (left arm automatically holds position)
+        controller.execute_right(trajectory)
+
+        # Or create an executor for a specific arm
+        executor = controller.get_executor("right")
+        executor.execute(trajectory)
+    """
+
+    def __init__(
+        self,
+        robot: "Geodude",
+        control_dt: float = 0.008,
+        lookahead_time: float = 0.1,
+        viewer=None,
+    ):
+        """Initialize physics controller for the robot.
+
+        Args:
+            robot: Geodude robot instance
+            control_dt: Control update rate in seconds
+            lookahead_time: Velocity feedforward gain
+            viewer: Optional MuJoCo viewer to sync
+        """
+        self.robot = robot
+        self.model = robot.model
+        self.data = robot.data
+        self.control_dt = control_dt
+        self.lookahead_time = lookahead_time
+        self.viewer = viewer
+        self.steps_per_control = max(1, int(control_dt / self.model.opt.timestep))
+
+        # Collect actuator info for both arms and grippers
+        self._arms = {}
+        self._grippers = {}
+        for arm_name in ["left", "right"]:
+            arm = getattr(robot, f"{arm_name}_arm")
+            # Actuator names: "left_ur5e/shoulder_pan", "left_ur5e/elbow", etc.
+            # Joint names: "left_ur5e/shoulder_pan_joint", etc.
+            # Strip "_joint" suffix and use the full joint name path
+            actuator_ids = []
+            for jname in arm.config.joint_names:
+                # Remove "_joint" suffix if present
+                act_name = jname.replace("_joint", "")
+                actuator_ids.append(self.model.actuator(act_name).id)
+            self._arms[arm_name] = {
+                "arm": arm,
+                "actuator_ids": actuator_ids,
+                "joint_qpos_indices": arm.joint_qpos_indices,
+                "target_position": arm.get_joint_positions().copy(),
+                "target_velocity": np.zeros(len(actuator_ids)),
+            }
+
+            # Store gripper info
+            gripper = arm.gripper
+            if gripper and gripper.actuator_id is not None:
+                self._grippers[arm_name] = {
+                    "gripper": gripper,
+                    "actuator_id": gripper.actuator_id,
+                    "ctrl_open": gripper.ctrl_open,
+                    "ctrl_closed": gripper.ctrl_closed,
+                    "target_ctrl": self.data.ctrl[gripper.actuator_id],
+                }
+
+    def hold_all(self) -> None:
+        """Update all position hold targets to current positions."""
+        for info in self._arms.values():
+            info["target_position"] = np.array([
+                self.data.qpos[idx] for idx in info["joint_qpos_indices"]
+            ])
+            info["target_velocity"] = np.zeros(len(info["actuator_ids"]))
+
+    def step(self) -> None:
+        """Apply control to all actuators and step physics."""
+        # Apply control to all arms
+        for info in self._arms.values():
+            q_command = info["target_position"] + self.lookahead_time * info["target_velocity"]
+            for joint_idx, actuator_id in enumerate(info["actuator_ids"]):
+                self.data.ctrl[actuator_id] = q_command[joint_idx]
+
+        # Apply control to all grippers
+        for info in self._grippers.values():
+            self.data.ctrl[info["actuator_id"]] = info["target_ctrl"]
+
+        # Step physics
+        for _ in range(self.steps_per_control):
+            mujoco.mj_step(self.model, self.data)
+
+        # Sync viewer
+        if self.viewer is not None:
+            self.viewer.sync()
+
+    def execute(self, arm_name: str, trajectory: Trajectory) -> bool:
+        """Execute trajectory on specified arm while others hold position.
+
+        Args:
+            arm_name: "left" or "right"
+            trajectory: Trajectory to execute
+
+        Returns:
+            True if execution completed
+        """
+        if arm_name not in self._arms:
+            raise ValueError(f"Unknown arm: {arm_name}")
+
+        info = self._arms[arm_name]
+
+        if trajectory.dof != len(info["joint_qpos_indices"]):
+            raise ValueError(
+                f"Trajectory DOF {trajectory.dof} doesn't match "
+                f"arm joint count {len(info['joint_qpos_indices'])}"
+            )
+
+        # Execute trajectory
+        for i in range(trajectory.num_waypoints):
+            info["target_position"] = trajectory.positions[i]
+            info["target_velocity"] = trajectory.velocities[i]
+            self.step()
+            time.sleep(self.control_dt)
+
+        # Set final target for position hold
+        info["target_position"] = trajectory.positions[-1].copy()
+        info["target_velocity"] = np.zeros(len(info["actuator_ids"]))
+
+        # Settling period
+        for _ in range(self.steps_per_control * 20):
+            self.step()
+
+        return True
+
+    def execute_right(self, trajectory: Trajectory) -> bool:
+        """Execute trajectory on right arm."""
+        return self.execute("right", trajectory)
+
+    def execute_left(self, trajectory: Trajectory) -> bool:
+        """Execute trajectory on left arm."""
+        return self.execute("left", trajectory)
+
+    def close_gripper(self, arm_name: str, steps: int = 200) -> str | None:
+        """Close gripper while maintaining all arm positions.
+
+        Args:
+            arm_name: "left" or "right"
+            steps: Number of control steps for closing
+
+        Returns:
+            Name of grasped object, or None
+        """
+        if arm_name not in self._grippers:
+            return None
+
+        gripper_info = self._grippers[arm_name]
+        gripper = gripper_info["gripper"]
+
+        # Gradually close gripper
+        start_ctrl = gripper_info["target_ctrl"]
+        end_ctrl = gripper_info["ctrl_closed"]
+
+        for i in range(steps):
+            t = (i + 1) / steps
+            gripper_info["target_ctrl"] = start_ctrl + t * (end_ctrl - start_ctrl)
+            self.step()
+            time.sleep(self.control_dt * 0.5)  # Slower for gripper
+
+        # Detect grasp using gripper's detection
+        from geodude.grasp_manager import detect_grasped_object
+
+        grasped = detect_grasped_object(
+            self.model,
+            self.data,
+            gripper.gripper_body_names,
+            gripper._candidate_objects,
+        )
+
+        if grasped:
+            gripper.grasp_manager.mark_grasped(grasped, arm_name)
+
+        return grasped
+
+    def open_gripper(self, arm_name: str, steps: int = 100) -> None:
+        """Open gripper while maintaining all arm positions.
+
+        Args:
+            arm_name: "left" or "right"
+            steps: Number of control steps for opening
+        """
+        if arm_name not in self._grippers:
+            return
+
+        gripper_info = self._grippers[arm_name]
+        gripper = gripper_info["gripper"]
+
+        # Release any grasped objects first
+        for obj in gripper.grasp_manager.get_grasped_by(arm_name):
+            gripper.grasp_manager.mark_released(obj)
+
+        # Gradually open gripper
+        start_ctrl = gripper_info["target_ctrl"]
+        end_ctrl = gripper_info["ctrl_open"]
+
+        for i in range(steps):
+            t = (i + 1) / steps
+            gripper_info["target_ctrl"] = start_ctrl + t * (end_ctrl - start_ctrl)
+            self.step()
+            time.sleep(self.control_dt * 0.5)
+
+    def get_executor(self, arm_name: str) -> "ArmPhysicsExecutor":
+        """Get an executor interface for a specific arm.
+
+        Returns an object with the standard Executor interface that internally
+        uses this controller.
+        """
+        return ArmPhysicsExecutor(self, arm_name)
+
+
+class ArmPhysicsExecutor:
+    """Executor interface for a single arm, backed by RobotPhysicsController.
+
+    This provides the standard Executor interface while ensuring all other
+    actuators hold their positions during execution.
+    """
+
+    def __init__(self, controller: RobotPhysicsController, arm_name: str):
+        self.controller = controller
+        self.arm_name = arm_name
+
+    def execute(self, trajectory: Trajectory) -> bool:
+        """Execute trajectory on this arm."""
+        return self.controller.execute(self.arm_name, trajectory)

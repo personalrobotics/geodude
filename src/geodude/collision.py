@@ -580,3 +580,237 @@ class SnapshotCollisionChecker:
             if self.model.body_parentid[i] == body_id:
                 result.update(self._get_body_and_descendants(i))
         return result
+
+
+class CollisionChecker:
+    """Unified collision checker with grasp-aware filtering.
+
+    Takes grasp state as constructor arguments (not a live GraspManager),
+    making it suitable for both single-threaded and parallel planning.
+    Each instance uses its own MjData for thread safety.
+    """
+
+    def __init__(
+        self,
+        model: mujoco.MjModel,
+        data: mujoco.MjData,
+        joint_names: list[str],
+        grasped_objects: frozenset[tuple[str, str]],
+        attachments: dict[str, tuple[str, np.ndarray]],
+    ):
+        """Initialize the collision checker.
+
+        Args:
+            model: MuJoCo model (shared, read-only)
+            data: MjData for this checker (should be a private copy)
+            joint_names: Names of joints to control
+            grasped_objects: Frozenset of (object_name, arm_name) tuples
+            attachments: Dict of {object_name: (gripper_body_name, T_gripper_object)}
+        """
+        self.model = model
+        self.data = data
+        self._grasped_objects = grasped_objects
+        self._attachments = attachments
+
+        # Get joint indices for the controlled joints
+        self.joint_indices = []
+        for name in joint_names:
+            joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+            if joint_id == -1:
+                raise ValueError(f"Joint '{name}' not found in model")
+            qpos_adr = model.jnt_qposadr[joint_id]
+            self.joint_indices.append(qpos_adr)
+
+        # Build set of body IDs that belong to this arm (including gripper)
+        self._arm_body_ids: set[int] = set()
+        for name in joint_names:
+            joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+            body_id = model.jnt_bodyid[joint_id]
+            self._arm_body_ids.add(body_id)
+            self._add_child_bodies(body_id)
+
+    def _add_child_bodies(self, parent_id: int) -> None:
+        """Recursively add child bodies (e.g., gripper) to arm body set."""
+        for i in range(self.model.nbody):
+            if self.model.body_parentid[i] == parent_id and i not in self._arm_body_ids:
+                self._arm_body_ids.add(i)
+                self._add_child_bodies(i)
+
+    def _is_grasped(self, body_name: str) -> bool:
+        """Check if a body is grasped."""
+        return any(obj == body_name for obj, _ in self._grasped_objects)
+
+    def _get_attachment_body(self, object_name: str) -> str | None:
+        """Get the gripper body that an object is attached to."""
+        if object_name in self._attachments:
+            return self._attachments[object_name][0]
+        return None
+
+    def is_valid(self, q: np.ndarray) -> bool:
+        """Check if a configuration is collision-free.
+
+        Args:
+            q: Joint configuration (only the controlled joints)
+
+        Returns:
+            True if collision-free, False otherwise
+        """
+        # Set joint positions
+        for i, qpos_idx in enumerate(self.joint_indices):
+            self.data.qpos[qpos_idx] = q[i]
+
+        # Run forward kinematics
+        mujoco.mj_forward(self.model, self.data)
+
+        # Update attached object poses
+        self._update_attached_poses()
+        mujoco.mj_forward(self.model, self.data)
+
+        # Check for collisions
+        return self._count_invalid_contacts() == 0
+
+    def is_valid_batch(self, qs: np.ndarray) -> np.ndarray:
+        """Check multiple configurations for collisions."""
+        results = np.zeros(len(qs), dtype=bool)
+        for i, q in enumerate(qs):
+            results[i] = self.is_valid(q)
+        return results
+
+    def _update_attached_poses(self) -> None:
+        """Update poses of attached objects."""
+        for obj_name, (gripper_body_name, T_gripper_object) in self._attachments.items():
+            gripper_body_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_BODY, gripper_body_name
+            )
+            if gripper_body_id == -1:
+                continue
+
+            # Get current gripper pose
+            pos = self.data.xpos[gripper_body_id].copy()
+            mat = self.data.xmat[gripper_body_id].reshape(3, 3).copy()
+            T_world_gripper = np.eye(4)
+            T_world_gripper[:3, :3] = mat
+            T_world_gripper[:3, 3] = pos
+
+            # Compute new object pose
+            T_world_object = T_world_gripper @ T_gripper_object
+
+            # Set object pose
+            self._set_body_pose(obj_name, T_world_object)
+
+    def _set_body_pose(self, body_name: str, T: np.ndarray) -> None:
+        """Set the pose of a freejoint body."""
+        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        if body_id == -1:
+            return
+
+        joint_id = self.model.body_jntadr[body_id]
+        if joint_id == -1:
+            return
+
+        if self.model.jnt_type[joint_id] != mujoco.mjtJoint.mjJNT_FREE:
+            return
+
+        qpos_adr = self.model.jnt_qposadr[joint_id]
+
+        pos = T[:3, 3]
+        mat = T[:3, :3]
+        quat = np.zeros(4)
+        mujoco.mju_mat2Quat(quat, mat.flatten())
+
+        self.data.qpos[qpos_adr : qpos_adr + 3] = pos
+        self.data.qpos[qpos_adr + 3 : qpos_adr + 7] = quat
+
+    def _count_invalid_contacts(self) -> int:
+        """Count contacts that indicate invalid collisions."""
+        invalid_count = 0
+
+        for i in range(self.data.ncon):
+            contact = self.data.contact[i]
+            body1 = self.model.geom_bodyid[contact.geom1]
+            body2 = self.model.geom_bodyid[contact.geom2]
+
+            body1_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, body1)
+            body2_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, body2)
+
+            body1_is_arm = body1 in self._arm_body_ids
+            body2_is_arm = body2 in self._arm_body_ids
+            body1_is_grasped = body1_name is not None and self._is_grasped(body1_name)
+            body2_is_grasped = body2_name is not None and self._is_grasped(body2_name)
+
+            body1_is_robot = body1_is_arm or body1_is_grasped
+            body2_is_robot = body2_is_arm or body2_is_grasped
+
+            if not body1_is_robot and not body2_is_robot:
+                continue
+
+            if body1_is_robot and body2_is_robot:
+                if self._is_gripper_object_contact(
+                    body1, body1_name, body1_is_arm, body1_is_grasped,
+                    body2, body2_name, body2_is_arm, body2_is_grasped,
+                ):
+                    continue
+                invalid_count += 1
+                continue
+
+            invalid_count += 1
+
+        return invalid_count
+
+    def _is_gripper_object_contact(
+        self,
+        body1: int, body1_name: str | None, body1_is_arm: bool, body1_is_grasped: bool,
+        body2: int, body2_name: str | None, body2_is_arm: bool, body2_is_grasped: bool,
+    ) -> bool:
+        """Check if contact is between a grasped object and the gripper holding it."""
+        if body1_is_grasped and body2_is_arm:
+            grasped_name = body1_name
+            arm_body_id = body2
+        elif body2_is_grasped and body1_is_arm:
+            grasped_name = body2_name
+            arm_body_id = body1
+        else:
+            return False
+
+        gripper_body_name = self._get_attachment_body(grasped_name)
+        if gripper_body_name is None:
+            return False
+
+        gripper_base_name = self._get_gripper_base_name(gripper_body_name)
+        if gripper_base_name is None:
+            gripper_base_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_BODY, gripper_body_name
+            )
+        else:
+            gripper_base_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_BODY, gripper_base_name
+            )
+
+        if gripper_base_id == -1:
+            return False
+
+        gripper_body_ids = self._get_body_and_descendants(gripper_base_id)
+        return arm_body_id in gripper_body_ids
+
+    def _get_gripper_base_name(self, attachment_body_name: str) -> str | None:
+        """Find the gripper base body name from an attachment body name."""
+        parts = attachment_body_name.rsplit("/", 1)
+        if len(parts) < 2:
+            return None
+
+        gripper_prefix = parts[0]
+        gripper_base_name = f"{gripper_prefix}/base"
+
+        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, gripper_base_name)
+        if body_id != -1:
+            return gripper_base_name
+
+        return None
+
+    def _get_body_and_descendants(self, body_id: int) -> set[int]:
+        """Get a body ID and all its descendant body IDs."""
+        result = {body_id}
+        for i in range(self.model.nbody):
+            if self.model.body_parentid[i] == body_id:
+                result.update(self._get_body_and_descendants(i))
+        return result

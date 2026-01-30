@@ -7,114 +7,9 @@ import pytest
 
 from geodude import Geodude
 from geodude.parallel import (
-    GraspStateSnapshot,
-    PlanningContext,
-    fork_for_planning,
     plan_best_of_all,
     plan_first_success,
 )
-
-
-class TestGraspStateSnapshot:
-    """Tests for GraspStateSnapshot."""
-
-    def test_from_grasp_manager_empty(self):
-        """Snapshot from empty grasp manager has no grasped objects."""
-        robot = Geodude()
-        snapshot = GraspStateSnapshot.from_grasp_manager(robot.grasp_manager)
-
-        assert len(snapshot.grasped_objects) == 0
-        assert len(snapshot.attachments) == 0
-
-    def test_snapshot_is_immutable(self):
-        """Snapshot is immutable (frozen dataclass)."""
-        robot = Geodude()
-        snapshot = GraspStateSnapshot.from_grasp_manager(robot.grasp_manager)
-
-        # Should not be able to modify
-        with pytest.raises(AttributeError):
-            snapshot.grasped_objects = frozenset()
-
-    def test_snapshot_isolation(self):
-        """Grasp state changes don't affect existing snapshots."""
-        robot = Geodude()
-        snapshot = GraspStateSnapshot.from_grasp_manager(robot.grasp_manager)
-
-        # Modify live state (simulate grasping an object)
-        robot.grasp_manager.grasped["test_obj"] = "right"
-
-        # Snapshot should be unchanged
-        assert not snapshot.is_grasped("test_obj")
-        assert snapshot.get_holder("test_obj") is None
-
-        # Clean up
-        del robot.grasp_manager.grasped["test_obj"]
-
-    def test_is_grasped(self):
-        """is_grasped correctly reports grasp state."""
-        robot = Geodude()
-
-        # Add a fake grasp
-        robot.grasp_manager.grasped["box1"] = "right"
-        snapshot = GraspStateSnapshot.from_grasp_manager(robot.grasp_manager)
-
-        assert snapshot.is_grasped("box1")
-        assert not snapshot.is_grasped("nonexistent")
-
-        # Clean up
-        del robot.grasp_manager.grasped["box1"]
-
-    def test_get_holder(self):
-        """get_holder returns correct arm name."""
-        robot = Geodude()
-
-        robot.grasp_manager.grasped["box1"] = "left"
-        snapshot = GraspStateSnapshot.from_grasp_manager(robot.grasp_manager)
-
-        assert snapshot.get_holder("box1") == "left"
-        assert snapshot.get_holder("nonexistent") is None
-
-        # Clean up
-        del robot.grasp_manager.grasped["box1"]
-
-
-class TestPlanningContext:
-    """Tests for PlanningContext."""
-
-    def test_context_has_own_data(self):
-        """PlanningContext has its own MjData copy."""
-        robot = Geodude()
-        robot.go_to("ready")
-
-        ctx = fork_for_planning(robot.right_arm)
-
-        # Context should have different MjData object
-        assert ctx.data is not robot.data
-
-        # But same model (shared)
-        assert ctx.model is robot.model
-
-    def test_context_syncs_state(self):
-        """PlanningContext copies current state from source."""
-        robot = Geodude()
-        robot.go_to("ready")
-
-        original_qpos = robot.data.qpos.copy()
-        ctx = fork_for_planning(robot.right_arm)
-
-        # Context's data should have same qpos
-        assert np.allclose(ctx.data.qpos, original_qpos)
-
-    def test_context_has_collision_checker(self):
-        """PlanningContext creates a SnapshotCollisionChecker."""
-        robot = Geodude()
-        robot.go_to("ready")
-
-        ctx = fork_for_planning(robot.right_arm)
-
-        # Should have a collision checker
-        assert ctx.collision_checker is not None
-        assert hasattr(ctx.collision_checker, "is_valid")
 
 
 class TestCreatePlanner:
@@ -141,18 +36,32 @@ class TestCreatePlanner:
         # Should be different instances
         assert planner1 is not planner2
 
-    def test_planner_uses_snapshot(self):
-        """Planner created by create_planner uses snapshot-based collision."""
+    def test_planner_uses_collision_checker(self):
+        """Planner created by create_planner uses CollisionChecker."""
         robot = Geodude()
         robot.go_to("ready")
 
         planner = robot.right_arm.create_planner()
 
-        # The collision checker should be a SnapshotCollisionChecker
-        from geodude.collision import SnapshotCollisionChecker
+        # The collision checker should be a CollisionChecker
+        from geodude.collision import CollisionChecker
 
         # CBiRRT stores collision checker as 'collision'
-        assert isinstance(planner.collision, SnapshotCollisionChecker)
+        assert isinstance(planner.collision, CollisionChecker)
+
+    def test_create_planner_with_base_height(self):
+        """create_planner accepts base_joint_name and base_height params."""
+        robot = Geodude()
+        robot.go_to("ready")
+
+        # Create planner with custom base height
+        planner = robot.right_arm.create_planner(
+            base_joint_name="right_vention/joint",
+            base_height=0.2,
+        )
+
+        # Should have a planner
+        assert hasattr(planner, "plan")
 
 
 class TestParallelPlanning:
@@ -217,6 +126,33 @@ class TestParallelPlanning:
         # All should succeed (small motions)
         successful = [p for p in paths if p is not None]
         assert len(successful) >= 1, "At least one planning should succeed"
+
+    def test_parallel_planning_at_different_heights(self):
+        """Can plan same arm at different base heights in parallel."""
+        robot = Geodude()
+        robot.go_to("ready")
+
+        start = robot.right_arm.get_joint_positions()
+        goal = start + 0.05
+
+        heights = [0.0, 0.1, 0.2]
+
+        def plan_at_height(h):
+            planner = robot.right_arm.create_planner(
+                base_joint_name="right_vention/joint",
+                base_height=h,
+            )
+            return planner.plan(start, goal=goal)
+
+        paths = []
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = [executor.submit(plan_at_height, h) for h in heights]
+            for future in futures:
+                paths.append(future.result())
+
+        # At least one should succeed
+        successful = [p for p in paths if p is not None]
+        assert len(successful) >= 1, "At least one height should produce a path"
 
 
 class TestPlanFirstSuccess:

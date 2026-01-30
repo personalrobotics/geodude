@@ -153,15 +153,16 @@ def create_scene_xml(
         if object_type == "cylinder":
             r = object_size.get("radius", 0.033)
             h = object_size.get("height", 0.123)
+            # Cylinder center at origin (matches MuJoCo body frame convention)
             ref_object_section = f'''
         <body name="ref_object_body" pos="0 0 0">
-            <geom name="ref_object" type="cylinder" size="{r} {h/2}" pos="0 0 {h/2}" rgba="0.8 0.2 0.2 0.7" contype="0" conaffinity="0"/>
+            <geom name="ref_object" type="cylinder" size="{r} {h/2}" rgba="0.8 0.2 0.2 0.7" contype="0" conaffinity="0"/>
         </body>'''
         else:
             size = object_size.get("size", [0.05, 0.05, 0.05])
             sx, sy, sz = size[0]/2, size[1]/2, size[2]/2
-            # For surfaces (worktop, table): top at z=0; for objects: bottom at z=0
-            z_offset = -sz if ref_is_surface else sz
+            # For surfaces (worktop, table): top at z=0; for objects: center at origin
+            z_offset = -sz if ref_is_surface else 0
             ref_object_section = f'''
         <body name="ref_object_body" pos="0 0 0">
             <geom name="ref_object" type="box" size="{sx} {sy} {sz}" pos="0 0 {z_offset}" rgba="0.8 0.2 0.2 0.7" contype="0" conaffinity="0"/>
@@ -274,6 +275,7 @@ def main():
     parser.add_argument("--no-compensation", action="store_true", help="Don't apply gripper frame compensation")
     parser.add_argument("--object-height", type=float, default=None, help="Override object height")
     parser.add_argument("--object-radius", type=float, default=None, help="Override object radius")
+    parser.add_argument("--cycle", action="store_true", help="Cycle through Bw limits continuously")
     args = parser.parse_args()
 
     # Load template
@@ -397,12 +399,22 @@ def main():
                 tf.unlink()
 
     data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
 
-    # Create TSR with object at origin
-    object_pose = np.eye(4)
+    # Get reference object body position (matches MuJoCo convention)
+    # This handles models where the body has a pos offset (like prl_assets/can)
+    ref_body_name = template.reference
+    try:
+        ref_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, ref_body_name)
+        object_pose = np.eye(4)
+        object_pose[:3, 3] = data.xpos[ref_body_id]
+    except Exception:
+        # Fallback to origin if body not found
+        object_pose = np.eye(4)
+
     tsr = TSR(T0_w=object_pose, Tw_e=template.Tw_e, Bw=template.Bw)
 
-    # Set object frame (frame_0) at origin
+    # Set object frame (frame_0) at reference body position
     set_body_pose(model, data, "frame_0", object_pose)
 
     # Compute canonical pose at Bw midpoint using TSR's sample() method
@@ -459,10 +471,63 @@ def main():
         viewer.cam.distance = 0.5
         viewer.cam.lookat[:] = [0, 0, 0.1]
 
-        while viewer.is_running():
-            # No physics stepping - static visualization
-            viewer.sync()
-            time.sleep(0.05)
+        if args.cycle:
+            # Cycle through Bw limits
+            dim_names = ["X", "Y", "Z", "Roll", "Pitch", "Yaw"]
+            cycle_speed = 2.0  # seconds per full cycle of one dimension
+            steps_per_dim = 60  # frames per dimension cycle
+
+            print("\nCycling through Bw limits (press Ctrl+C or close window to exit)")
+            dim_idx = 0
+            step = 0
+            direction = 1  # 1 = min->max, -1 = max->min
+
+            while viewer.is_running():
+                # Compute interpolation parameter (0 to 1)
+                t = step / steps_per_dim
+
+                # Start from midpoint values
+                xyzrpy = (tsr.Bw[:, 0] + tsr.Bw[:, 1]) / 2
+
+                # Interpolate current dimension from min to max (or max to min)
+                bw_min, bw_max = tsr.Bw[dim_idx, 0], tsr.Bw[dim_idx, 1]
+                if direction == 1:
+                    xyzrpy[dim_idx] = bw_min + t * (bw_max - bw_min)
+                else:
+                    xyzrpy[dim_idx] = bw_max - t * (bw_max - bw_min)
+
+                # Sample pose at this point
+                pose = tsr.sample(xyzrpy)
+                if not args.no_compensation:
+                    pose = apply_gripper_frame_compensation(pose, template.subject)
+
+                # Update gripper and frame poses
+                set_body_pose(model, data, "frame_1", pose)
+                if subject_body_name:
+                    set_body_pose(model, data, subject_body_name, pose)
+
+                mujoco.mj_forward(model, data)
+                viewer.sync()
+
+                # Advance animation
+                step += 1
+                if step >= steps_per_dim:
+                    step = 0
+                    direction *= -1  # Reverse direction
+                    if direction == 1:
+                        # Completed full back-and-forth, move to next dimension
+                        dim_idx = (dim_idx + 1) % 6
+                        # Skip dimensions with zero range
+                        while tsr.Bw[dim_idx, 0] == tsr.Bw[dim_idx, 1]:
+                            dim_idx = (dim_idx + 1) % 6
+                        print(f"  Cycling {dim_names[dim_idx]}: [{tsr.Bw[dim_idx, 0]:.3f}, {tsr.Bw[dim_idx, 1]:.3f}]")
+
+                time.sleep(cycle_speed / steps_per_dim)
+        else:
+            while viewer.is_running():
+                # No physics stepping - static visualization
+                viewer.sync()
+                time.sleep(0.05)
 
 
 if __name__ == "__main__":

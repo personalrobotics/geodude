@@ -25,13 +25,7 @@ def __getattr__(name):
         from geodude import tsr_utils
         return getattr(tsr_utils, name)
     # Parallel planning utilities
-    if name in (
-        "GraspStateSnapshot",
-        "PlanningContext",
-        "fork_for_planning",
-        "plan_first_success",
-        "plan_best_of_all",
-    ):
+    if name in ("plan_first_success", "plan_best_of_all"):
         from geodude import parallel
         return getattr(parallel, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -48,9 +42,6 @@ __all__ = [
     "create_retract_tsr",
     "create_approach_tsr",
     # Parallel planning utilities
-    "GraspStateSnapshot",
-    "PlanningContext",
-    "fork_for_planning",
     "plan_first_success",
     "plan_best_of_all",
 ]

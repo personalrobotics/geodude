@@ -9,7 +9,6 @@ Python library for controlling a bimanual UR5e robot system with Vention linear 
 - **Time-optimal trajectory generation** with TOPP-RA
 - **Physics-based simulation** in MuJoCo
 - **Bimanual coordination** with grasp management
-- **MCP server integration** for LLM control
 
 ## Installation
 

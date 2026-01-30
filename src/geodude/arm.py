@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import mujoco
 import numpy as np
 
-from geodude.collision import GraspAwareCollisionChecker
+from geodude.collision import CollisionChecker, GraspAwareCollisionChecker
 from geodude.config import ArmConfig
 from geodude.executor import KinematicExecutor, PhysicsExecutor
 from geodude.grasp_manager import GraspManager
@@ -16,7 +16,6 @@ from geodude.trajectory import Trajectory
 
 # Optional pycbirrt imports for motion planning
 try:
-    from pycbirrt.backends.eaik import EAIKSolver
     from pycbirrt import CBiRRT, CBiRRTConfig, PlanningError
 
     PYCBIRRT_AVAILABLE = True
@@ -24,8 +23,13 @@ except ImportError:
     PYCBIRRT_AVAILABLE = False
     PlanningError = Exception  # Fallback for type hints
 
-# For backwards compatibility
-EAIK_AVAILABLE = PYCBIRRT_AVAILABLE
+# Optional EAIK import for analytical IK
+try:
+    from pycbirrt.backends.eaik import EAIKSolver
+
+    EAIK_AVAILABLE = True
+except ImportError:
+    EAIK_AVAILABLE = False
 
 if TYPE_CHECKING:
     from geodude.robot import Geodude
@@ -69,6 +73,74 @@ class ArmRobotModel:
         return self._arm._get_ee_pose_at_config(q)
 
 
+class ContextRobotModel:
+    """Robot model adapter using a PlanningContext's data for thread-safe FK.
+
+    Unlike ArmRobotModel which uses the shared Arm data, this uses an isolated
+    MjData from a PlanningContext, making it safe for parallel planning.
+    """
+
+    def __init__(
+        self,
+        model: mujoco.MjModel,
+        data: mujoco.MjData,
+        joint_qpos_indices: list[int],
+        ee_site_id: int,
+        joint_limits: tuple[np.ndarray, np.ndarray],
+    ):
+        """Initialize the context-based robot model.
+
+        Args:
+            model: MuJoCo model (shared, read-only)
+            data: MjData for this context (private copy)
+            joint_qpos_indices: Indices into qpos for arm joints
+            ee_site_id: Site ID for end-effector
+            joint_limits: (lower, upper) joint limit arrays
+        """
+        self._model = model
+        self._data = data
+        self._joint_qpos_indices = joint_qpos_indices
+        self._ee_site_id = ee_site_id
+        self._joint_limits = joint_limits
+
+    @property
+    def dof(self) -> int:
+        """Number of degrees of freedom."""
+        return len(self._joint_qpos_indices)
+
+    @property
+    def joint_limits(self) -> tuple[np.ndarray, np.ndarray]:
+        """Joint limits as (lower, upper) bounds arrays."""
+        return self._joint_limits
+
+    def forward_kinematics(self, q: np.ndarray) -> np.ndarray:
+        """Compute end-effector pose from joint configuration.
+
+        Uses this context's MjData (thread-safe).
+
+        Args:
+            q: Joint configuration array of shape (dof,)
+
+        Returns:
+            4x4 homogeneous transform of end-effector in world frame
+        """
+        # Set arm joints in our private data
+        for i, qpos_idx in enumerate(self._joint_qpos_indices):
+            self._data.qpos[qpos_idx] = q[i]
+
+        # Compute FK
+        mujoco.mj_forward(self._model, self._data)
+
+        # Read EE pose
+        pos = self._data.site_xpos[self._ee_site_id]
+        rot_mat = self._data.site_xmat[self._ee_site_id].reshape(3, 3)
+
+        transform = np.eye(4)
+        transform[:3, :3] = rot_mat
+        transform[:3, 3] = pos
+        return transform
+
+
 class ArmIKSolver:
     """Adapter that wraps an Arm's IK to provide the pycbirrt IKSolver interface.
 
@@ -110,6 +182,73 @@ class ArmIKSolver:
             List of valid joint configurations (may be empty)
         """
         return self._arm.inverse_kinematics(pose, validate=True, sort_by_distance=False)
+
+
+class SimpleIKSolver:
+    """IK solver with pre-computed base pose. No MjData access during solve.
+
+    This is the preferred IK solver for parallel planning. It computes all
+    transforms at construction time, so solve() is pure math with no MuJoCo calls.
+    """
+
+    def __init__(
+        self,
+        base_pose: np.ndarray,
+        base_rotation: np.ndarray,
+        ee_offset: np.ndarray,
+        joint_limits: tuple[np.ndarray, np.ndarray],
+    ):
+        """Initialize the IK solver with pre-computed transforms.
+
+        Args:
+            base_pose: 4x4 transform of arm base in world frame
+            base_rotation: 4x4 rotation from EAIK frame to MuJoCo base frame
+            ee_offset: 4x4 transform from EAIK EE to MuJoCo EE site
+            joint_limits: (lower, upper) joint limit arrays
+        """
+        self._base_pose = base_pose
+        self._base_rotation = base_rotation
+        self._ee_offset = ee_offset
+        # Create EAIK solver without collision checker (planner will validate)
+        self._eaik = EAIKSolver.for_ur5e(joint_limits=joint_limits, collision_checker=None)
+
+    def solve(
+        self, pose: np.ndarray, q_init: np.ndarray | None = None
+    ) -> list[np.ndarray]:
+        """Solve IK for a single end-effector pose (raw, unvalidated).
+
+        Pure math - no MjData access. Thread-safe.
+
+        Args:
+            pose: 4x4 homogeneous transform of desired EE pose in world frame
+            q_init: Ignored (EAIK finds all solutions analytically)
+
+        Returns:
+            List of joint configurations (may include invalid ones)
+        """
+        # Transform from world frame to MuJoCo base frame
+        T_base = np.linalg.inv(self._base_pose) @ pose
+        # Transform from MuJoCo base frame to EAIK frame
+        T_eaik = np.linalg.inv(self._base_rotation) @ T_base @ np.linalg.inv(self._ee_offset)
+        solutions = self._eaik.solve(T_eaik)
+        return solutions if solutions else []
+
+    def solve_valid(
+        self, pose: np.ndarray, q_init: np.ndarray | None = None
+    ) -> list[np.ndarray]:
+        """Solve IK and return solutions (planner validates).
+
+        Note: Returns same as solve() because validation is done by the
+        CBiRRT planner using its collision checker, not here.
+
+        Args:
+            pose: 4x4 homogeneous transform of desired EE pose in world frame
+            q_init: Ignored (EAIK finds all solutions analytically)
+
+        Returns:
+            List of joint configurations (planner will validate them)
+        """
+        return self.solve(pose, q_init)
 
 
 class Arm:
@@ -204,6 +343,14 @@ class Arm:
         self._ik_solver = None
         self._executor = None
         self._ee_offset = None  # Cached EE offset transform
+        self._cached_base_rotation = None  # Cached base rotation
+
+        # Eagerly compute IK frame constants (if EAIK available)
+        # These are mounting constants that never change, so compute once at init
+        # while still single-threaded
+        if EAIK_AVAILABLE:
+            self._cached_base_rotation = self._get_base_rotation()
+            _ = self._get_ee_offset()  # Sets self._ee_offset
 
     @property
     def name(self) -> str:
@@ -319,7 +466,6 @@ class Arm:
                 max_iterations=5000,
                 step_size=0.1,
                 goal_bias=0.1,
-                ik_num_seeds=1,  # EAIK finds all solutions analytically
                 smoothing_iterations=100,  # Default smoothing
             )
 
@@ -335,6 +481,150 @@ class Arm:
             return planner
 
         return self._planner
+
+    def create_planner(
+        self,
+        config: "CBiRRTConfig | None" = None,
+        *,
+        base_joint_name: str | None = None,
+        base_height: float | None = None,
+    ) -> "CBiRRT":
+        """Create an isolated CBiRRT planner for thread-safe parallel planning.
+
+        Each call creates a planner with its own MjData copy. Safe for concurrent
+        use - call from multiple threads for different arms or different goals.
+
+        Args:
+            config: Optional planner configuration. If None, uses default config.
+            base_joint_name: Optional joint name for setting base height (e.g., "right_vention/joint")
+            base_height: Optional height to set the base to (requires base_joint_name)
+
+        Returns:
+            CBiRRT planner instance with isolated state
+
+        Raises:
+            ImportError: If pycbirrt is not installed
+
+        Example:
+            # Plan both arms in parallel
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                left_future = executor.submit(
+                    lambda: robot.left_arm.create_planner().plan(start, goal=left_goal)
+                )
+                right_future = executor.submit(
+                    lambda: robot.right_arm.create_planner().plan(start, goal=right_goal)
+                )
+                left_path = left_future.result()
+                right_path = right_future.result()
+
+            # Plan at different base heights
+            planner = arm.create_planner(base_joint_name="right_vention/joint", base_height=0.2)
+            path = planner.plan(start, goal_tsrs=[tsr])
+        """
+        if not PYCBIRRT_AVAILABLE:
+            raise ImportError(
+                "pycbirrt not available. Install with: pip install pycbirrt[eaik]\n"
+                "Or: uv add pycbirrt[eaik]"
+            )
+
+        # 1. Create isolated MjData copy
+        data = mujoco.MjData(self.model)
+        data.qpos[:] = self.data.qpos
+
+        # 2. Optionally set base height
+        if base_height is not None and base_joint_name is not None:
+            joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, base_joint_name)
+            if joint_id != -1:
+                data.qpos[self.model.jnt_qposadr[joint_id]] = base_height
+
+        # 3. Forward kinematics
+        mujoco.mj_forward(self.model, data)
+
+        # 4. Get base pose from this data (computed ONCE, not per IK call)
+        base_pose = self._get_body_pose_from_data(data, self._base_body_id)
+
+        # 5. Snapshot grasp state (just data, not a class)
+        grasped = frozenset(self.grasp_manager.grasped.items())
+        attachments = {k: (b, t.copy()) for k, (b, t) in self.grasp_manager._attachments.items()}
+
+        # 6. Create components
+        ik_solver = SimpleIKSolver(
+            base_pose,
+            self._cached_base_rotation,
+            self._ee_offset,
+            self.get_joint_limits(),
+        )
+        collision_checker = CollisionChecker(
+            self.model,
+            data,
+            self.config.joint_names,
+            grasped,
+            attachments,
+        )
+        robot_model = ContextRobotModel(
+            model=self.model,
+            data=data,
+            joint_qpos_indices=self.joint_qpos_indices,
+            ee_site_id=self.ee_site_id,
+            joint_limits=self.get_joint_limits(),
+        )
+
+        # 7. Create and return planner
+        planner_config = config or CBiRRTConfig(
+            max_iterations=5000,
+            step_size=0.1,
+            goal_bias=0.1,
+            smoothing_iterations=100,
+        )
+
+        return CBiRRT(
+            robot=robot_model,
+            ik_solver=ik_solver,
+            collision_checker=collision_checker,
+            config=planner_config,
+        )
+
+    def _get_body_pose_from_data(self, data: mujoco.MjData, body_id: int) -> np.ndarray:
+        """Get body pose from a specific MjData instance.
+
+        Args:
+            data: MjData to read from
+            body_id: Body ID to get pose for
+
+        Returns:
+            4x4 homogeneous transform
+        """
+        if body_id == -1:
+            return np.eye(4)
+
+        pos = data.xpos[body_id]
+        rot_mat = data.xmat[body_id].reshape(3, 3)
+
+        transform = np.eye(4)
+        transform[:3, :3] = rot_mat
+        transform[:3, 3] = pos
+        return transform
+
+    # Internal properties for parallel planning module
+    @property
+    def _model(self) -> mujoco.MjModel:
+        """MuJoCo model (for parallel module access)."""
+        return self.model
+
+    @property
+    def _data(self) -> mujoco.MjData:
+        """MuJoCo data (for parallel module access)."""
+        return self.data
+
+    @property
+    def _config(self) -> ArmConfig:
+        """Arm configuration (for parallel module access)."""
+        return self.config
+
+    @property
+    def _grasp_manager(self) -> GraspManager:
+        """Grasp manager (for parallel module access)."""
+        return self.grasp_manager
 
     def get_base_pose(self) -> np.ndarray:
         """Get the arm base pose in world frame as 4x4 transform.
@@ -418,20 +708,50 @@ class Arm:
     def _get_base_rotation(self) -> np.ndarray:
         """Get the rotation from EAIK's base frame to MuJoCo's base body frame.
 
-        The MuJoCo model may have a rotation applied to the UR5e base body
-        (e.g., quat="0 0 0 -1" for 180° around Z). EAIK assumes the standard
-        UR5e base orientation. This method computes that rotation offset.
+        EAIK uses the standard UR5e DH convention where the base is at identity.
+        The MuJoCo model may have the arm mounted at a different orientation.
+
+        This computes R such that:
+            T_mjbase_mujoco = R @ T_eaikbase_eaik
+
+        by comparing EAIK FK with MuJoCo FK at a reference configuration.
 
         Returns:
-            4x4 rotation matrix R such that:
-            T_mujoco_base = R @ T_eaik_base
+            4x4 rotation matrix R
         """
-        # The UR5e in MuJoCo has quat="0 0 0 -1" which is 180° rotation around Z
-        # This means: x_mujoco = -x_eaik, y_mujoco = -y_eaik, z_mujoco = z_eaik
-        # This is R_z(180°) = [[-1, 0, 0], [0, -1, 0], [0, 0, 1]]
+        if self._cached_base_rotation is not None:
+            return self._cached_base_rotation
+
+        # Compare FK at reference configuration to compute R
+        q_ref = np.zeros(6)
+
+        # Get EAIK FK at q_ref (returns pose in EAIK's base frame)
+        ik_solver = self._get_ik_solver()
+        T_eaikbase_eaik = ik_solver.forward_kinematics(q_ref)
+
+        # Get MuJoCo FK at q_ref and convert to base body frame
+        old_q = self.get_joint_positions()
+        self.set_joint_positions(q_ref)
+        T_world_mujoco = self.get_ee_pose()
+        self.set_joint_positions(old_q)
+
+        T_world_base = self.get_base_pose()
+        T_mjbase_mujoco = np.linalg.inv(T_world_base) @ T_world_mujoco
+
+        # Solve for R: T_mjbase_mujoco = R @ T_eaikbase_eaik @ T_eaik_mujoco
+        # Since T_eaik_mujoco is nearly identity (computed in _get_ee_offset),
+        # we can approximate: R ≈ T_mjbase_mujoco @ inv(T_eaikbase_eaik)
+        # But this won't give a pure rotation. Instead, extract rotation only.
+        #
+        # For rotation part: R_mjbase_mujoco = R_rot @ R_eaikbase_eaik
+        # So: R_rot = R_mjbase_mujoco @ inv(R_eaikbase_eaik)
+        R_mjbase = T_mjbase_mujoco[:3, :3]
+        R_eaik = T_eaikbase_eaik[:3, :3]
+        R_rot = R_mjbase @ np.linalg.inv(R_eaik)
+
         R = np.eye(4)
-        R[0, 0] = -1
-        R[1, 1] = -1
+        R[:3, :3] = R_rot
+        self._cached_base_rotation = R
         return R
 
     def _get_ee_offset(self) -> np.ndarray:
@@ -629,7 +949,6 @@ class Arm:
             timeout=timeout,
             step_size=0.1,
             goal_bias=0.1,
-            ik_num_seeds=1,
             smoothing_iterations=100,  # Default smoothing
         )
         planner = self._get_planner(config)
@@ -682,7 +1001,6 @@ class Arm:
             max_iterations=5000,
             step_size=0.1,
             goal_bias=0.1,
-            ik_num_seeds=1,
             timeout=timeout,
             smoothing_iterations=100,  # Default smoothing
         )

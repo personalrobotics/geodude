@@ -59,6 +59,7 @@ class KinematicExecutor:
         control_dt: float = 0.008,  # 125 Hz to match UR5e
         viewer=None,
         grasp_manager: "GraspManager | None" = None,
+        recorder=None,
     ):
         """Initialize kinematic executor.
 
@@ -70,6 +71,7 @@ class KinematicExecutor:
             viewer: Optional MuJoCo viewer to sync during execution
             grasp_manager: Optional GraspManager for kinematic manipulation.
                           When set, attached objects move with the gripper.
+            recorder: Optional FrameRecorder to capture frames during execution
         """
         self.model = model
         self.data = data
@@ -77,6 +79,7 @@ class KinematicExecutor:
         self.control_dt = control_dt
         self.viewer = viewer
         self.grasp_manager = grasp_manager
+        self.recorder = recorder
 
     def execute(self, trajectory: Trajectory) -> bool:
         """Execute trajectory kinematically with perfect tracking.
@@ -114,6 +117,10 @@ class KinematicExecutor:
             # Sync viewer if provided
             if self.viewer is not None:
                 self.viewer.sync()
+
+            # Capture frame for recording (every 8th frame for reasonable GIF size)
+            if self.recorder is not None and i % 8 == 0:
+                self.recorder.capture()
 
             # Wait for control period
             time.sleep(self.control_dt)
@@ -439,6 +446,7 @@ class RobotPhysicsController:
         control_dt: float = 0.008,
         lookahead_time: float = 0.1,
         viewer=None,
+        recorder=None,
     ):
         """Initialize physics controller for the robot.
 
@@ -447,6 +455,7 @@ class RobotPhysicsController:
             control_dt: Control update rate in seconds
             lookahead_time: Velocity feedforward gain
             viewer: Optional MuJoCo viewer to sync
+            recorder: Optional FrameRecorder to capture frames during execution
         """
         self.robot = robot
         self.model = robot.model
@@ -454,7 +463,9 @@ class RobotPhysicsController:
         self.control_dt = control_dt
         self.lookahead_time = lookahead_time
         self.viewer = viewer
+        self.recorder = recorder
         self.steps_per_control = max(1, int(control_dt / self.model.opt.timestep))
+        self._step_count = 0  # For frame capture interval
 
         # Collect actuator info for both arms and grippers
         self._arms = {}
@@ -515,6 +526,11 @@ class RobotPhysicsController:
         # Sync viewer
         if self.viewer is not None:
             self.viewer.sync()
+
+        # Capture frame for recording (every 4th step)
+        self._step_count += 1
+        if self.recorder is not None and self._step_count % 4 == 0:
+            self.recorder.capture()
 
     def execute(self, arm_name: str, trajectory: Trajectory) -> bool:
         """Execute trajectory on specified arm while others hold position.

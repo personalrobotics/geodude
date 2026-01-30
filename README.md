@@ -3,7 +3,7 @@
 A Python library for bimanual robot manipulation with collision-free motion planning.
 
 <p align="center">
-  <img src="docs/images/geodude.png" alt="Geodude bimanual robot" width="500">
+  <img src="docs/images/recycle_demo.gif" alt="Pick and place demo" width="480">
 </p>
 
 ## What It Does

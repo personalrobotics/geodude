@@ -9,9 +9,12 @@ Demonstrates:
 Usage:
     uv run mjpython examples/recycle_objects.py
     uv run mjpython examples/recycle_objects.py --physics
+    uv run mjpython examples/recycle_objects.py --record  # Save GIF
 """
 
 import argparse
+import subprocess
+import tempfile
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
@@ -310,9 +313,96 @@ def run_demo(robot, executor, viewer, use_physics: bool, already_at_ready: bool 
     print("\nDemo complete. Close viewer to exit.", flush=True)
 
 
+class FrameRecorder:
+    """Records frames for GIF creation."""
+
+    def __init__(self, model, data, width=640, height=480):
+        self.renderer = mujoco.Renderer(model, width=width, height=height)
+        self.model = model
+        self.data = data
+        self.frames = []
+        self.frame_dir = tempfile.mkdtemp()
+
+        # Set up camera for front view centered on right arm
+        self.camera = mujoco.MjvCamera()
+        self.camera.azimuth = 270
+        self.camera.elevation = -15
+        self.camera.distance = 1.8
+        self.camera.lookat[:] = [0.5, -0.25, 0.85]
+
+    def capture(self):
+        """Capture current frame."""
+        self.renderer.update_scene(self.data, camera=self.camera)
+        frame = self.renderer.render()
+        self.frames.append(frame.copy())
+
+    def save_gif(self, output_path: str, fps: int = 15):
+        """Save captured frames as GIF using ffmpeg."""
+        import os
+
+        # Save frames as PNGs
+        for i, frame in enumerate(self.frames):
+            from PIL import Image
+
+            img = Image.fromarray(frame)
+            img.save(f"{self.frame_dir}/frame_{i:04d}.png")
+
+        # Use ffmpeg to create GIF with palette for quality
+        palette_path = f"{self.frame_dir}/palette.png"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-framerate",
+                str(fps),
+                "-i",
+                f"{self.frame_dir}/frame_%04d.png",
+                "-vf",
+                "palettegen=stats_mode=diff",
+                palette_path,
+            ],
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-framerate",
+                str(fps),
+                "-i",
+                f"{self.frame_dir}/frame_%04d.png",
+                "-i",
+                palette_path,
+                "-lavfi",
+                "paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+                output_path,
+            ],
+            capture_output=True,
+        )
+
+        # Cleanup
+        for f in os.listdir(self.frame_dir):
+            os.remove(f"{self.frame_dir}/{f}")
+        os.rmdir(self.frame_dir)
+
+        print(f"Saved GIF to {output_path} ({len(self.frames)} frames)")
+
+
+class DummyViewer:
+    """Dummy viewer for headless recording mode."""
+
+    def sync(self):
+        pass
+
+    def is_running(self):
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Recycling Demo")
     parser.add_argument("--physics", action="store_true", help="Use physics execution")
+    parser.add_argument("--record", action="store_true", help="Record and save as GIF (headless)")
+    parser.add_argument("--output", default="recycle_demo.gif", help="Output GIF path")
     args = parser.parse_args()
 
     xml_path = create_scene_with_object()
@@ -321,6 +411,31 @@ def main():
     data = robot.data
     arm = robot.right_arm
 
+    # Setup recorder if requested (headless mode)
+    recorder = None
+    if args.record:
+        recorder = FrameRecorder(model, data, width=480, height=360)
+        print("Recording in headless mode...", flush=True)
+
+        # Run headless
+        viewer = DummyViewer()
+        mujoco.mj_forward(model, data)
+
+        controller = None
+        executor = KinematicExecutor(
+            model=model,
+            data=data,
+            joint_qpos_indices=arm.joint_qpos_indices,
+            viewer=viewer,
+            grasp_manager=robot.grasp_manager,
+            recorder=recorder,
+        )
+
+        run_demo(robot, executor, viewer, use_physics=False, already_at_ready=False, controller=None)
+        recorder.save_gif(args.output)
+        return
+
+    # Normal mode with viewer (requires mjpython on macOS)
     with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.cam.azimuth = 135
         viewer.cam.elevation = -25

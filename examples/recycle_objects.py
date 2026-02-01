@@ -5,6 +5,7 @@ Demonstrates:
 - TSR-based grasp and place planning
 - Parallel planning at different Vention base heights
 - Interchangeable kinematic/physics execution
+- Object management via mj_environment
 
 Usage:
     uv run mjpython examples/recycle_objects.py
@@ -32,62 +33,59 @@ from tsr.core.tsr_primitive import load_template_file
 
 GEODUDE_TSR_DIR = Path(__file__).parent.parent / "tsr_templates"
 
+# Fixed positions
+RECYCLE_BIN_POS = [0.75, -0.35, 0.50]  # On floor
 
-def create_scene_with_object():
-    """Load Geodude model and add a can and recycle bin."""
-    import re
-    import tempfile
 
-    from geodude_assets import get_model_path
-    from prl_assets import OBJECTS_DIR
+def sample_can_placement(model, data):
+    """Sample a random can placement from upright or flipped TSR (50/50)."""
+    import random
 
-    xml_path = get_model_path()
-    with open(xml_path) as f:
-        xml_content = f.read()
+    # Load both placement TSRs
+    upright = load_template_file(str(GEODUDE_TSR_DIR / "places" / "can_on_table_upright.yaml"))
+    flipped = load_template_file(str(GEODUDE_TSR_DIR / "places" / "can_on_table_flipped.yaml"))
 
-    meshdir = str(xml_path.parent) + "/"
-    xml_content = xml_content.replace(
-        '<compiler autolimits="true" angle="radian"/>',
-        f'<compiler autolimits="true" angle="radian" meshdir="{meshdir}"/>',
-    )
+    # Choose randomly
+    template = random.choice([upright, flipped])
+    is_flipped = template.name == "Can on Table (Flipped)"
 
-    # Load recycle bin from prl_assets
-    bin_xml_path = OBJECTS_DIR / "recycle_bin" / "recycle_bin.xml"
-    with open(bin_xml_path) as f:
-        bin_xml = f.read()
+    # Get worktop site pose (TSR reference frame)
+    worktop_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "worktop")
+    worktop_pos = data.site_xpos[worktop_id].copy()
 
-    bin_body = re.search(r'(<body name="recycle_bin".*?</body>)', bin_xml, re.DOTALL)
-    bin_material = re.search(r'(<material name="bin_blue"[^/]*/?>)', bin_xml)
+    # Sample position within TSR bounds (relative to worktop)
+    x = random.uniform(-0.4, 0.4)  # Narrower than full bounds for reachability
+    y = random.uniform(-0.25, 0.25)
+    z = 0.0615  # Half-height offset so bottom sits on surface
 
-    if bin_material:
-        if "<asset>" in xml_content:
-            xml_content = xml_content.replace("<asset>", f"<asset>\n    {bin_material.group(1)}")
-        else:
-            xml_content = xml_content.replace(
-                "<worldbody>", f"<asset>\n    {bin_material.group(1)}\n  </asset>\n\n  <worldbody>"
-            )
+    # Transform to world coordinates
+    pos = worktop_pos + np.array([x, y, z])
 
-    objects_xml = f"""
-    <!-- Graspable can -->
-    <body name="can" pos="0.4 -0.2 0.81">
-      <freejoint name="can_joint"/>
-      <geom name="can_geom" type="cylinder" size="0.033 0.06"
-            rgba="0.8 0.1 0.1 1" mass="0.05"
-            contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
-    </body>
+    # Quaternion: identity for upright, 180° pitch for flipped
+    if is_flipped:
+        # Rotation of 180° around x-axis: [cos(90°), sin(90°), 0, 0] = [0, 1, 0, 0]
+        quat = np.array([0, 1, 0, 0], dtype=float)
+    else:
+        quat = np.array([1, 0, 0, 0], dtype=float)
 
-    <!-- Recycle bin -->
-    <body name="recycle_bin_base" pos="0.75 -0.35 0.50">
-      {bin_body.group(1) if bin_body else ""}
-    </body>
-  </worldbody>"""
+    return pos, quat, is_flipped
 
-    xml_content = xml_content.replace("</worldbody>", objects_xml)
 
-    temp_file = tempfile.NamedTemporaryFile(mode="w", suffix=".xml", delete=False)
-    temp_file.write(xml_content)
-    temp_file.close()
-    return temp_file.name
+def create_robot_with_objects():
+    """Create Geodude robot with can and recycle bin from prl_assets."""
+    robot = Geodude(objects={"can": 1, "recycle_bin": 1})
+
+    # Sample can placement from TSR
+    can_pos, can_quat, is_flipped = sample_can_placement(robot.model, robot.data)
+    orientation = "flipped" if is_flipped else "upright"
+    print(f"Can placement: {orientation} at {can_pos.round(3)}")
+
+    # Activate objects
+    robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
+    robot.env.registry.activate("recycle_bin", pos=RECYCLE_BIN_POS)
+    mujoco.mj_forward(robot.model, robot.data)
+
+    return robot
 
 
 def load_grasp_tsrs(object_pos: np.ndarray, pregrasp_standoff: float = 0.15):
@@ -114,7 +112,7 @@ def load_place_tsr(model, data):
     """Load recycle bin drop TSR."""
     template = load_template_file(str(GEODUDE_TSR_DIR / "places" / "recycle_bin_drop.yaml"))
 
-    bin_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "recycle_bin")
+    bin_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "recycle_bin_0")
     bin_pose = np.eye(4)
     bin_pose[:3, 3] = data.xpos[bin_id].copy()
 
@@ -205,7 +203,7 @@ def run_demo(robot, executor, viewer, use_physics: bool, already_at_ready: bool 
     gripper = arm.gripper
 
     # Get object position (MuJoCo body frame is at object center)
-    can_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "can")
+    can_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "can_0")
     object_pos = data.xpos[can_id].copy()
     print(f"\nCan position: {object_pos.round(3)}", flush=True)
 
@@ -246,15 +244,15 @@ def run_demo(robot, executor, viewer, use_physics: bool, already_at_ready: bool 
 
     # 4. Close gripper
     print("\n4. Closing gripper...", flush=True)
-    gripper.set_candidate_objects(["can"])
+    gripper.set_candidate_objects(["can_0"])
     if use_physics:
         # Use controller's gripper method to maintain arm positions during close
         controller.close_gripper("right", steps=200)
     else:
         gripper.kinematic_close()
     # Mark grasp for collision checking during planning (both modes)
-    robot.grasp_manager.mark_grasped("can", "right")
-    robot.grasp_manager.attach_object("can", "right_ur5e/gripper/right_follower")
+    robot.grasp_manager.mark_grasped("can_0", "right")
+    robot.grasp_manager.attach_object("can_0", "right_ur5e/gripper/right_follower")
     viewer.sync()
     time.sleep(0.3)
 
@@ -291,8 +289,8 @@ def run_demo(robot, executor, viewer, use_physics: bool, already_at_ready: bool 
     else:
         gripper.kinematic_open()
     # Mark release (both modes)
-    robot.grasp_manager.mark_released("can")
-    robot.grasp_manager.detach_object("can")
+    robot.grasp_manager.mark_released("can_0")
+    robot.grasp_manager.detach_object("can_0")
     viewer.sync()
     time.sleep(0.3)
 
@@ -405,8 +403,7 @@ def main():
     parser.add_argument("--output", default="recycle_demo.gif", help="Output GIF path")
     args = parser.parse_args()
 
-    xml_path = create_scene_with_object()
-    robot = Geodude.from_xml(xml_path)
+    robot = create_robot_with_objects()
     model = robot.model
     data = robot.data
     arm = robot.right_arm

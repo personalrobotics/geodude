@@ -19,36 +19,58 @@ class Geodude:
     Provides:
     - Easy access to left and right arms
     - Grasp state management
-    - Environment interaction
+    - Environment interaction with optional object management
     - Named configurations
 
     Example:
+        # Robot only
         robot = Geodude()
         robot.right_arm.go_to('ready')
-        robot.right_arm.pick('cup')
-        robot.right_arm.place('cup', on='table')
+
+        # With manipulable objects from prl_assets
+        robot = Geodude(objects={"can": 2, "recycle_bin": 1})
+        robot.env.registry.activate("can", pos=[0.4, -0.2, 0.81])
     """
 
-    def __init__(self, config: GeodudConfig | None = None):
+    def __init__(
+        self,
+        config: GeodudConfig | None = None,
+        objects: dict[str, int] | None = None,
+    ):
         """Initialize the Geodude robot.
 
         Args:
             config: Robot configuration. If None, uses default configuration.
+            objects: Optional dict mapping object type to count, e.g.
+                {"can": 2, "recycle_bin": 1}. Objects are loaded from prl_assets
+                and start hidden. Use robot.env.registry.activate() to show them.
         """
         self.config = config or GeodudConfig.default()
 
-        # Load MuJoCo model via mj_environment (robot-only, no objects)
+        # Load MuJoCo model via mj_environment
         if not self.config.model_path.exists():
             raise FileNotFoundError(
                 f"MuJoCo model not found: {self.config.model_path}\n"
                 "Make sure geodude_assets is available."
             )
 
-        self._env = Environment(
-            base_scene_xml=str(self.config.model_path),
-            objects_dir=None,
-            scene_config_yaml=None,
-        )
+        if objects:
+            # Load with object management from prl_assets
+            from prl_assets import OBJECTS_DIR
+
+            scene_config = self._create_temp_scene_config(objects)
+            self._env = Environment(
+                base_scene_xml=str(self.config.model_path),
+                objects_dir=str(OBJECTS_DIR),
+                scene_config_yaml=scene_config,
+            )
+        else:
+            # Robot-only mode (no objects)
+            self._env = Environment(
+                base_scene_xml=str(self.config.model_path),
+                objects_dir=None,
+                scene_config_yaml=None,
+            )
         self.model = self._env.model
         self.data = self._env.data
 
@@ -292,3 +314,29 @@ class Geodude:
         quat = np.zeros(4)
         mujoco.mju_mat2Quat(quat, mat.flatten())
         return quat
+
+    def _create_temp_scene_config(self, objects: dict[str, int]) -> str:
+        """Create temporary scene_config.yaml from objects dict.
+
+        Args:
+            objects: Dict mapping object type to count, e.g. {"can": 2}
+
+        Returns:
+            Path to temporary YAML file.
+        """
+        import tempfile
+
+        import yaml
+
+        config = {
+            "objects": {
+                obj_type: {"count": count} for obj_type, count in objects.items()
+            }
+        }
+
+        temp_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        )
+        yaml.dump(config, temp_file)
+        temp_file.close()
+        return temp_file.name

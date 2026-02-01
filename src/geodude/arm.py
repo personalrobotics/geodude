@@ -439,19 +439,21 @@ class Arm:
         upper = np.array([self.model.jnt_range[jid, 1] for jid in self.joint_ids])
         return lower, upper
 
-    def get_ft_sensor(self) -> tuple[np.ndarray, np.ndarray]:
+    def get_ft_sensor(self) -> tuple[np.ndarray, np.ndarray] | None:
         """Get force/torque sensor reading at the tool flange.
 
         Returns the F/T sensor values in the tool0 frame (Z+ out of flange,
         X+ left, Y+ up), with any tare offset subtracted.
 
-        Note: Only works with physics execution. In kinematic mode, forces
-        are not computed and values will be zero.
+        Note: Only meaningful with physics execution (mj_step). Returns None
+        if physics has not been stepped yet (data.time == 0), since kinematic
+        mode (mj_forward) produces artifacts, not real forces.
 
         Returns:
             Tuple of (force, torque) where:
                 - force: np.ndarray of shape (3,) with [Fx, Fy, Fz] in Newtons
                 - torque: np.ndarray of shape (3,) with [Tx, Ty, Tz] in Nm
+            Returns None if physics simulation has not been run yet.
 
         Raises:
             RuntimeError: If F/T sensors are not available in the model
@@ -462,6 +464,10 @@ class Arm:
                 "Make sure you are using a geodude_assets version >= 0.1.1 "
                 "that includes F/T sensor support."
             )
+
+        # Check if physics has been stepped (time advances only with mj_step)
+        if self.data.time == 0:
+            return None
 
         # Read raw sensor values from sensordata
         force_adr = self.model.sensor_adr[self._ft_force_sensor_id]

@@ -690,9 +690,21 @@ class TestForceTorqueSensor:
         gm = GraspManager(model, data)
         return Arm(mock_robot, arm_config, gm)
 
+    def test_get_ft_sensor_returns_none_without_physics(self, arm):
+        """get_ft_sensor() returns None when physics hasn't run."""
+        # Without physics (data.time == 0), should return None
+        result = arm.get_ft_sensor()
+        assert result is None, "Should return None when physics hasn't been stepped"
+
     def test_get_ft_sensor_returns_correct_shapes(self, arm):
         """get_ft_sensor() returns force and torque as 3-element arrays."""
-        force, torque = arm.get_ft_sensor()
+        # Run physics first
+        for _ in range(10):
+            mujoco.mj_step(arm.model, arm.data)
+
+        result = arm.get_ft_sensor()
+        assert result is not None, "Should return values after physics"
+        force, torque = result
 
         assert isinstance(force, np.ndarray)
         assert isinstance(torque, np.ndarray)
@@ -701,6 +713,10 @@ class TestForceTorqueSensor:
 
     def test_get_ft_sensor_returns_finite_values(self, arm):
         """get_ft_sensor() returns finite numeric values."""
+        # Run physics first
+        for _ in range(10):
+            mujoco.mj_step(arm.model, arm.data)
+
         force, torque = arm.get_ft_sensor()
 
         assert np.all(np.isfinite(force))
@@ -708,6 +724,10 @@ class TestForceTorqueSensor:
 
     def test_tare_ft_sensor_zeros_reading(self, arm):
         """tare_ft_sensor() causes subsequent reads to return zero."""
+        # Run physics first
+        for _ in range(10):
+            mujoco.mj_step(arm.model, arm.data)
+
         # Get initial reading
         initial_force, initial_torque = arm.get_ft_sensor()
 
@@ -721,6 +741,10 @@ class TestForceTorqueSensor:
 
     def test_tare_stores_offset(self, arm):
         """tare_ft_sensor() stores current reading as offset."""
+        # Run physics first
+        for _ in range(10):
+            mujoco.mj_step(arm.model, arm.data)
+
         # Get initial reading
         initial_force, initial_torque = arm.get_ft_sensor()
 
@@ -792,3 +816,29 @@ class TestForceTorqueSensor:
 
         np.testing.assert_array_equal(arm._ft_tare_force, np.zeros(3))
         np.testing.assert_array_equal(arm._ft_tare_torque, np.zeros(3))
+
+    def test_ft_sensor_kinematic_vs_physics(self, arm):
+        """F/T sensor returns None in kinematic mode, values in physics mode.
+
+        In kinematic mode (data.time == 0), get_ft_sensor() returns None
+        because the sensor values are artifacts, not real forces.
+        In physics mode (data.time > 0), it returns actual force readings.
+        """
+        # Kinematic mode: just mj_forward, time stays at 0
+        mujoco.mj_forward(arm.model, arm.data)
+        assert arm.data.time == 0, "Time should be 0 after mj_forward"
+        result_kinematic = arm.get_ft_sensor()
+        assert result_kinematic is None, "Should return None in kinematic mode"
+
+        # Physics mode: run mj_step, time advances
+        for _ in range(100):
+            mujoco.mj_step(arm.model, arm.data)
+        assert arm.data.time > 0, "Time should advance after mj_step"
+
+        result_physics = arm.get_ft_sensor()
+        assert result_physics is not None, "Should return values in physics mode"
+
+        force, torque = result_physics
+        force_magnitude = np.linalg.norm(force)
+        # Physics should measure gravity load (~13N from gripper+wrist)
+        assert force_magnitude > 5.0, "Physics mode should measure gravity load"

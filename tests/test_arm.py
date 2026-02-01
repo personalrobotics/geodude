@@ -654,3 +654,141 @@ class TestArmPickPlace:
 
         # Gripper should be open (pick opens it first)
         # Note: After failed pick, gripper state depends on implementation
+
+
+class TestForceTorqueSensor:
+    """Tests for F/T sensor API."""
+
+    @pytest.fixture
+    def arm_config(self):
+        """Create arm configuration for the right arm."""
+        return ArmConfig(
+            name="right",
+            joint_names=[
+                "right_ur5e/shoulder_pan_joint",
+                "right_ur5e/shoulder_lift_joint",
+                "right_ur5e/elbow_joint",
+                "right_ur5e/wrist_1_joint",
+                "right_ur5e/wrist_2_joint",
+                "right_ur5e/wrist_3_joint",
+            ],
+            ee_site="right_ur5e/gripper_attachment_site",
+            gripper_actuator="right_ur5e/gripper/fingers_actuator",
+            gripper_bodies=[
+                "right_ur5e/gripper/right_follower",
+                "right_ur5e/gripper/left_follower",
+                "right_ur5e/gripper/right_pad",
+                "right_ur5e/gripper/left_pad",
+            ],
+        )
+
+    @pytest.fixture
+    def arm(self, mujoco_model_and_data, arm_config):
+        """Create an Arm instance for testing."""
+        model, data = mujoco_model_and_data
+        mock_robot = MockRobot(model, data)
+        gm = GraspManager(model, data)
+        return Arm(mock_robot, arm_config, gm)
+
+    def test_get_ft_sensor_returns_correct_shapes(self, arm):
+        """get_ft_sensor() returns force and torque as 3-element arrays."""
+        force, torque = arm.get_ft_sensor()
+
+        assert isinstance(force, np.ndarray)
+        assert isinstance(torque, np.ndarray)
+        assert force.shape == (3,)
+        assert torque.shape == (3,)
+
+    def test_get_ft_sensor_returns_finite_values(self, arm):
+        """get_ft_sensor() returns finite numeric values."""
+        force, torque = arm.get_ft_sensor()
+
+        assert np.all(np.isfinite(force))
+        assert np.all(np.isfinite(torque))
+
+    def test_tare_ft_sensor_zeros_reading(self, arm):
+        """tare_ft_sensor() causes subsequent reads to return zero."""
+        # Get initial reading
+        initial_force, initial_torque = arm.get_ft_sensor()
+
+        # Tare the sensor
+        arm.tare_ft_sensor()
+
+        # Reading should now be approximately zero
+        force, torque = arm.get_ft_sensor()
+        np.testing.assert_allclose(force, np.zeros(3), atol=1e-10)
+        np.testing.assert_allclose(torque, np.zeros(3), atol=1e-10)
+
+    def test_tare_stores_offset(self, arm):
+        """tare_ft_sensor() stores current reading as offset."""
+        # Get initial reading
+        initial_force, initial_torque = arm.get_ft_sensor()
+
+        # Tare
+        arm.tare_ft_sensor()
+
+        # Offset should match initial reading
+        np.testing.assert_allclose(arm._ft_tare_force, initial_force, atol=1e-10)
+        np.testing.assert_allclose(arm._ft_tare_torque, initial_torque, atol=1e-10)
+
+    def test_ft_sensor_reads_gravity_load_with_physics(self, mujoco_model_and_data):
+        """F/T sensor detects gripper weight under gravity with physics."""
+        model, data = mujoco_model_and_data
+
+        # Run physics steps to let forces develop
+        for _ in range(100):
+            mujoco.mj_step(model, data)
+
+        # Read sensor directly
+        force_id = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_SENSOR, "right_ur5e/ft_sensor_force"
+        )
+        force_adr = model.sensor_adr[force_id]
+        force = data.sensordata[force_adr : force_adr + 3]
+
+        # Force magnitude should be non-zero due to gravity
+        force_magnitude = np.linalg.norm(force)
+        assert force_magnitude > 0.1, "Expected non-zero force from gravity"
+
+    def test_ft_sensor_both_arms(self, mujoco_model_and_data):
+        """Both arms have working F/T sensors."""
+        model, data = mujoco_model_and_data
+
+        # Check left arm sensor exists
+        left_force_id = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_SENSOR, "left_ur5e/ft_sensor_force"
+        )
+        left_torque_id = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_SENSOR, "left_ur5e/ft_sensor_torque"
+        )
+        assert left_force_id != -1, "Left arm force sensor not found"
+        assert left_torque_id != -1, "Left arm torque sensor not found"
+
+        # Check right arm sensor exists
+        right_force_id = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_SENSOR, "right_ur5e/ft_sensor_force"
+        )
+        right_torque_id = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_SENSOR, "right_ur5e/ft_sensor_torque"
+        )
+        assert right_force_id != -1, "Right arm force sensor not found"
+        assert right_torque_id != -1, "Right arm torque sensor not found"
+
+    def test_ft_sensor_init_caches_sensor_ids(self, arm):
+        """Arm caches F/T sensor IDs during initialization."""
+        assert arm._ft_force_sensor_id != -1
+        assert arm._ft_torque_sensor_id != -1
+
+    def test_ft_sensor_tare_offset_initially_zero(
+        self, mujoco_model_and_data, arm_config
+    ):
+        """F/T tare offsets are initialized to zero."""
+        model, data = mujoco_model_and_data
+        mock_robot = MockRobot(model, data)
+        gm = GraspManager(model, data)
+
+        # Create fresh arm
+        arm = Arm(mock_robot, arm_config, gm)
+
+        np.testing.assert_array_equal(arm._ft_tare_force, np.zeros(3))
+        np.testing.assert_array_equal(arm._ft_tare_torque, np.zeros(3))

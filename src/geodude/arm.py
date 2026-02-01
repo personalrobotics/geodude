@@ -352,6 +352,20 @@ class Arm:
             self._cached_base_rotation = self._get_base_rotation()
             _ = self._get_ee_offset()  # Sets self._ee_offset
 
+        # F/T sensor tare offsets (software zeroing)
+        self._ft_tare_force = np.zeros(3)
+        self._ft_tare_torque = np.zeros(3)
+
+        # Cache F/T sensor IDs for efficient lookup
+        force_sensor_name = f"{config.name}_ur5e/ft_sensor_force"
+        torque_sensor_name = f"{config.name}_ur5e/ft_sensor_torque"
+        self._ft_force_sensor_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_SENSOR, force_sensor_name
+        )
+        self._ft_torque_sensor_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_SENSOR, torque_sensor_name
+        )
+
     @property
     def name(self) -> str:
         """Arm name ('left' or 'right')."""
@@ -424,6 +438,71 @@ class Arm:
         lower = np.array([self.model.jnt_range[jid, 0] for jid in self.joint_ids])
         upper = np.array([self.model.jnt_range[jid, 1] for jid in self.joint_ids])
         return lower, upper
+
+    def get_ft_sensor(self) -> tuple[np.ndarray, np.ndarray]:
+        """Get force/torque sensor reading at the tool flange.
+
+        Returns the F/T sensor values in the tool0 frame (Z+ out of flange,
+        X+ left, Y+ up), with any tare offset subtracted.
+
+        Note: Only works with physics execution. In kinematic mode, forces
+        are not computed and values will be zero.
+
+        Returns:
+            Tuple of (force, torque) where:
+                - force: np.ndarray of shape (3,) with [Fx, Fy, Fz] in Newtons
+                - torque: np.ndarray of shape (3,) with [Tx, Ty, Tz] in Nm
+
+        Raises:
+            RuntimeError: If F/T sensors are not available in the model
+        """
+        if self._ft_force_sensor_id == -1 or self._ft_torque_sensor_id == -1:
+            raise RuntimeError(
+                f"F/T sensors not found for arm '{self.config.name}'. "
+                "Make sure you are using a geodude_assets version >= 0.1.1 "
+                "that includes F/T sensor support."
+            )
+
+        # Read raw sensor values from sensordata
+        force_adr = self.model.sensor_adr[self._ft_force_sensor_id]
+        torque_adr = self.model.sensor_adr[self._ft_torque_sensor_id]
+
+        raw_force = self.data.sensordata[force_adr : force_adr + 3].copy()
+        raw_torque = self.data.sensordata[torque_adr : torque_adr + 3].copy()
+
+        # Apply tare offset
+        return raw_force - self._ft_tare_force, raw_torque - self._ft_tare_torque
+
+    def tare_ft_sensor(self) -> None:
+        """Zero the F/T sensor by storing current reading as offset.
+
+        After calling this method, subsequent get_ft_sensor() calls will
+        return values relative to the current sensor state. This is useful
+        for compensating gravity loads or zeroing drift.
+
+        Typical usage:
+            # Tare with gripper empty to compensate gripper weight
+            robot.right_arm.tare_ft_sensor()
+
+            # Now readings reflect only external forces
+            force, torque = robot.right_arm.get_ft_sensor()
+
+        Raises:
+            RuntimeError: If F/T sensors are not available in the model
+        """
+        if self._ft_force_sensor_id == -1 or self._ft_torque_sensor_id == -1:
+            raise RuntimeError(
+                f"F/T sensors not found for arm '{self.config.name}'. "
+                "Make sure you are using a geodude_assets version >= 0.1.1 "
+                "that includes F/T sensor support."
+            )
+
+        # Read current raw values and store as tare offset
+        force_adr = self.model.sensor_adr[self._ft_force_sensor_id]
+        torque_adr = self.model.sensor_adr[self._ft_torque_sensor_id]
+
+        self._ft_tare_force = self.data.sensordata[force_adr : force_adr + 3].copy()
+        self._ft_tare_torque = self.data.sensordata[torque_adr : torque_adr + 3].copy()
 
     def _get_collision_checker(self) -> GraspAwareCollisionChecker:
         """Get or create the collision checker."""

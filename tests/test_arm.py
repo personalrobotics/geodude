@@ -842,3 +842,21 @@ class TestForceTorqueSensor:
         force_magnitude = np.linalg.norm(force)
         # Physics should measure gravity load (~13N from gripper+wrist)
         assert force_magnitude > 5.0, "Physics mode should measure gravity load"
+
+    def test_ft_sensor_values_are_clamped(self, arm):
+        """F/T sensor values are clamped to UR5e sensor range."""
+        # Run physics
+        for _ in range(10):
+            mujoco.mj_step(arm.model, arm.data)
+
+        force, torque = arm.get_ft_sensor()
+
+        # All force values should be within ±50N
+        assert np.all(np.abs(force) <= 50.0), "Force should be clamped to ±50N"
+        # All torque values should be within ±10Nm
+        assert np.all(np.abs(torque) <= 10.0), "Torque should be clamped to ±10Nm"
+
+    def test_ft_sensor_range_constants(self, arm):
+        """F/T sensor has correct range constants from UR5e specs."""
+        assert arm._FT_FORCE_RANGE == 50.0, "Force range should be ±50N"
+        assert arm._FT_TORQUE_RANGE == 10.0, "Torque range should be ±10Nm"

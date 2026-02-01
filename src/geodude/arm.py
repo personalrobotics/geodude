@@ -439,11 +439,18 @@ class Arm:
         upper = np.array([self.model.jnt_range[jid, 1] for jid in self.joint_ids])
         return lower, upper
 
+    # UR5e F/T sensor specifications (from datasheet)
+    _FT_FORCE_RANGE = 50.0  # ±50 N
+    _FT_TORQUE_RANGE = 10.0  # ±10 Nm
+
     def get_ft_sensor(self) -> tuple[np.ndarray, np.ndarray] | None:
         """Get force/torque sensor reading at the tool flange.
 
         Returns the F/T sensor values in the tool0 frame (Z+ out of flange,
-        X+ left, Y+ up), with any tare offset subtracted.
+        X+ left, Y+ up), with any tare offset subtracted. Values are clamped
+        to the UR5e sensor range (±50N force, ±10Nm torque) to simulate
+        hardware saturation. Noise matching real sensor precision (±3.5N,
+        ±0.2Nm) is applied in the MuJoCo model.
 
         Note: Only meaningful with physics execution (mj_step). Returns None
         if physics has not been stepped yet (data.time == 0), since kinematic
@@ -469,7 +476,7 @@ class Arm:
         if self.data.time == 0:
             return None
 
-        # Read raw sensor values from sensordata
+        # Read raw sensor values from sensordata (includes MuJoCo noise)
         force_adr = self.model.sensor_adr[self._ft_force_sensor_id]
         torque_adr = self.model.sensor_adr[self._ft_torque_sensor_id]
 
@@ -477,7 +484,14 @@ class Arm:
         raw_torque = self.data.sensordata[torque_adr : torque_adr + 3].copy()
 
         # Apply tare offset
-        return raw_force - self._ft_tare_force, raw_torque - self._ft_tare_torque
+        force = raw_force - self._ft_tare_force
+        torque = raw_torque - self._ft_tare_torque
+
+        # Clamp to sensor range (simulates hardware saturation)
+        force = np.clip(force, -self._FT_FORCE_RANGE, self._FT_FORCE_RANGE)
+        torque = np.clip(torque, -self._FT_TORQUE_RANGE, self._FT_TORQUE_RANGE)
+
+        return force, torque
 
     def tare_ft_sensor(self) -> None:
         """Zero the F/T sensor by storing current reading as offset.

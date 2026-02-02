@@ -38,35 +38,41 @@ RECYCLE_BIN_POS = [0.75, -0.35, 0.50]  # On floor
 
 
 def sample_can_placement(model, data):
-    """Sample a random can placement from upright or flipped TSR (50/50)."""
+    """Sample a random can placement from upright or flipped TSR (50/50).
+
+    Uses TSR bounds sampling to get valid placement pose, then transforms
+    from worktop frame to world frame.
+    """
     import random
 
     # Load both placement TSRs
-    upright = load_template_file(str(GEODUDE_TSR_DIR / "places" / "can_on_table_upright.yaml"))
-    flipped = load_template_file(str(GEODUDE_TSR_DIR / "places" / "can_on_table_flipped.yaml"))
+    templates = [
+        load_template_file(str(GEODUDE_TSR_DIR / "places" / "can_on_table_upright.yaml")),
+        load_template_file(str(GEODUDE_TSR_DIR / "places" / "can_on_table_flipped.yaml")),
+    ]
+    template = random.choice(templates)
+    is_flipped = "Flipped" in template.name
 
-    # Choose randomly
-    template = random.choice([upright, flipped])
-    is_flipped = template.name == "Can on Table (Flipped)"
-
-    # Get worktop site pose (TSR reference frame)
+    # Get worktop pose (TSR reference frame)
     worktop_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "worktop")
     worktop_pos = data.site_xpos[worktop_id].copy()
 
-    # Sample position within TSR bounds (relative to worktop)
-    x = random.uniform(-0.4, 0.4)  # Narrower than full bounds for reachability
-    y = random.uniform(-0.25, 0.25)
-    z = 0.0615  # Half-height offset so bottom sits on surface
+    # Create TSR and sample from bounds
+    # Note: We use narrower x/y bounds than the template for reachability
+    Bw_reachable = template.Bw.copy()
+    Bw_reachable[0, :] = [-0.4, 0.4]  # Narrower x bounds
+    Bw_reachable[1, :] = [-0.25, 0.25]  # Narrower y bounds
 
-    # Transform to world coordinates
-    pos = worktop_pos + np.array([x, y, z])
+    placement_tsr = TSR(Bw=Bw_reachable)
+    xyzrpy = placement_tsr.sample_xyzrpy()
 
-    # Quaternion: identity for upright, 180° pitch for flipped
-    if is_flipped:
-        # Rotation of 180° around x-axis: [cos(90°), sin(90°), 0, 0] = [0, 1, 0, 0]
-        quat = np.array([0, 1, 0, 0], dtype=float)
-    else:
-        quat = np.array([1, 0, 0, 0], dtype=float)
+    # Transform position to world frame (worktop is axis-aligned, so just add)
+    pos = worktop_pos + xyzrpy[:3]
+
+    # Convert rotation to quaternion
+    rot = TSR.rpy_to_rot(xyzrpy[3:6])
+    quat = np.zeros(4)
+    mujoco.mju_mat2Quat(quat, rot.flatten())
 
     return pos, quat, is_flipped
 
@@ -88,24 +94,25 @@ def create_robot_with_objects():
     return robot
 
 
-def load_grasp_tsrs(object_pos: np.ndarray, pregrasp_standoff: float = 0.15):
-    """Load can side grasp TSRs (pregrasp + grasp)."""
+def load_grasp_tsr(object_pos: np.ndarray):
+    """Load can side grasp TSR.
+
+    Args:
+        object_pos: Can position in world frame (body center)
+
+    Returns:
+        TSR for gripper poses that can grasp the can
+    """
     template = load_template_file(str(GEODUDE_TSR_DIR / "grasps" / "can_side_grasp.yaml"))
 
-    # T0_w is the object frame - use MuJoCo body position directly (center origin)
+    # T0_w is the object frame in world
     object_pose = np.eye(4)
     object_pose[:3, 3] = object_pos
 
     grasp_tsr = TSR(T0_w=object_pose, Tw_e=template.Tw_e, Bw=template.Bw)
-
-    Tw_e_pregrasp = template.Tw_e.copy()
-    Tw_e_pregrasp[0, 3] += pregrasp_standoff
-    pregrasp_tsr = TSR(T0_w=object_pose, Tw_e=Tw_e_pregrasp, Bw=template.Bw)
-
     grasp_tsr = compensate_tsr_for_gripper(grasp_tsr, template.subject)
-    pregrasp_tsr = compensate_tsr_for_gripper(pregrasp_tsr, template.subject)
 
-    return pregrasp_tsr, grasp_tsr
+    return grasp_tsr
 
 
 def load_place_tsr(model, data):
@@ -216,7 +223,7 @@ def run_demo(robot, executor, viewer, use_physics: bool, already_at_ready: bool 
 
     # 2. Plan to grasp with parallel base heights
     print("\n2. Planning to grasp...", flush=True)
-    _, grasp_tsr = load_grasp_tsrs(object_pos, pregrasp_standoff=0.20)
+    grasp_tsr = load_grasp_tsr(object_pos)
 
     current_height = base.height if base else 0.0
     base_heights = sorted(set([current_height, 0.0, 0.2, 0.4]))

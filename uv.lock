@@ -1150,7 +1150,7 @@ requires-dist = [
     { name = "pycbirrt", extras = ["mujoco", "eaik", "dev"], marker = "extra == 'all'" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
-    { name = "tsr" },
+    { name = "tsr", editable = "../tsr" },
 ]
 provides-extras = ["mujoco", "eaik", "dev", "all"]
 

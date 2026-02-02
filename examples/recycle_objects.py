@@ -197,11 +197,11 @@ def linear_move(arm, q_target, executor, steps=50):
     execute_path(arm, path, executor)
 
 
-def run_demo(robot, executor, viewer, use_physics: bool, already_at_ready: bool = False, controller=None):
-    """Run the pick and place demo."""
-    print("Recycling Demo", flush=True)
+def run_demo_cycle(robot, executor, viewer, use_physics: bool, controller=None, cycle: int = 1):
+    """Run one pick and place cycle. Returns True on success."""
+    print(f"\n{'=' * 40}", flush=True)
+    print(f"Cycle {cycle}", flush=True)
     print("=" * 40, flush=True)
-    print(f"Mode: {'Physics' if use_physics else 'Kinematic'}", flush=True)
 
     model = robot.model
     data = robot.data
@@ -212,17 +212,10 @@ def run_demo(robot, executor, viewer, use_physics: bool, already_at_ready: bool 
     # Get object position (MuJoCo body frame is at object center)
     can_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "can_0")
     object_pos = data.xpos[can_id].copy()
-    print(f"\nCan position: {object_pos.round(3)}", flush=True)
+    print(f"Can position: {object_pos.round(3)}", flush=True)
 
-    # 1. Go to ready (skip if already there from physics mode setup)
-    print("\n1. Moving to ready pose...", flush=True)
-    if not already_at_ready:
-        robot.go_to("ready")
-    viewer.sync()
-    time.sleep(0.5)
-
-    # 2. Plan to grasp with parallel base heights
-    print("\n2. Planning to grasp...", flush=True)
+    # 1. Plan to grasp with parallel base heights
+    print("\n1. Planning to grasp...", flush=True)
     grasp_tsr = load_grasp_tsr(object_pos)
 
     current_height = base.height if base else 0.0
@@ -240,17 +233,17 @@ def run_demo(robot, executor, viewer, use_physics: bool, already_at_ready: bool 
 
     if not path:
         print("   Planning failed!", flush=True)
-        return
+        return False
 
     print(f"   Path: {len(path)} waypoints", flush=True)
 
-    # 3. Execute to grasp
-    print("\n3. Executing to grasp...", flush=True)
+    # 2. Execute to grasp
+    print("\n2. Executing to grasp...", flush=True)
     execute_path(arm, path, executor)
     time.sleep(0.3)
 
-    # 4. Close gripper
-    print("\n4. Closing gripper...", flush=True)
+    # 3. Close gripper
+    print("\n3. Closing gripper...", flush=True)
     gripper.set_candidate_objects(["can_0"])
     if use_physics:
         # Use controller's gripper method to maintain arm positions during close
@@ -263,8 +256,8 @@ def run_demo(robot, executor, viewer, use_physics: bool, already_at_ready: bool 
     viewer.sync()
     time.sleep(0.3)
 
-    # 5. Lift to clear table
-    print("\n5. Lifting...", flush=True)
+    # 4. Lift to clear table
+    print("\n4. Lifting...", flush=True)
     lift_pose = arm.get_ee_pose().copy()
     lift_pose[2, 3] += 0.05
     solutions = arm.inverse_kinematics(lift_pose, validate=False)
@@ -275,21 +268,21 @@ def run_demo(robot, executor, viewer, use_physics: bool, already_at_ready: bool 
     viewer.sync()
     time.sleep(0.2)
 
-    # 6. Plan to place
-    print("\n6. Planning to place (recycle bin)...", flush=True)
+    # 5. Plan to place
+    print("\n5. Planning to place (recycle bin)...", flush=True)
     place_tsr = load_place_tsr(model, data)
     path = arm.plan_to_tsrs([place_tsr], timeout=15.0)
 
     if not path:
         print("   Planning failed!", flush=True)
-        return
+        return False
 
     print(f"   Path: {len(path)} waypoints", flush=True)
     execute_path(arm, path, executor)
     time.sleep(0.3)
 
-    # 7. Release
-    print("\n7. Opening gripper...", flush=True)
+    # 6. Release
+    print("\n6. Opening gripper...", flush=True)
     if use_physics:
         # Use controller's gripper method to maintain arm positions during open
         controller.open_gripper("right", steps=100)
@@ -301,21 +294,23 @@ def run_demo(robot, executor, viewer, use_physics: bool, already_at_ready: bool 
     viewer.sync()
     time.sleep(0.3)
 
-    # 8. Retract
-    print("\n8. Retracting...", flush=True)
-    retract_pose = arm.get_ee_pose().copy()
-    retract_pose[2, 3] += 0.15
-    solutions = arm.inverse_kinematics(retract_pose, validate=True, sort_by_distance=True)
-    if solutions:
-        path = arm.plan_to_configuration(solutions[0], timeout=10.0)
-        if path:
-            execute_path(arm, path, executor)
-
-    # Final position
+    # Hide the can immediately after release (before retract)
     final_pos = data.xpos[can_id].copy()
+    robot.env.registry.hide("can_0")
+    mujoco.mj_forward(model, data)
+    viewer.sync()
+
+    # 7. Plan back to ready
+    print("\n7. Returning to ready...", flush=True)
+    right_ready = np.array(robot.named_poses["ready"]["right"])
+    path = arm.plan_to_configuration(right_ready, timeout=10.0)
+    if path:
+        execute_path(arm, path, executor)
+
     print(f"\nCan final position: {final_pos.round(3)}", flush=True)
     print(f"Displacement: {np.linalg.norm(final_pos - object_pos):.3f}m", flush=True)
-    print("\nDemo complete. Close viewer to exit.", flush=True)
+
+    return True  # Cycle completed successfully
 
 
 class FrameRecorder:
@@ -435,7 +430,7 @@ def main():
             recorder=recorder,
         )
 
-        run_demo(robot, executor, viewer, use_physics=False, already_at_ready=False, controller=None)
+        run_demo_cycle(robot, executor, viewer, use_physics=False, controller=None, cycle=1)
         recorder.save_gif(args.output)
         return
 
@@ -450,19 +445,17 @@ def main():
         viewer.sync()
         time.sleep(0.5)
 
+        # Go to ready pose before starting (kinematic setup)
+        robot.go_to("ready")
+        mujoco.mj_forward(model, data)
+        viewer.sync()
+
         # Create executor based on mode
         if args.physics:
-            # In physics mode, go to ready BEFORE creating controller
-            # so controller captures the ready positions (not initial positions)
-            robot.go_to("ready")
-            mujoco.mj_forward(model, data)
-            viewer.sync()
-
             # RobotPhysicsController manages ALL actuators - arms not executing
             # trajectories automatically hold their positions
             controller = RobotPhysicsController(robot, viewer=viewer)
             executor = controller.get_executor("right")
-            already_at_ready = True
         else:
             controller = None
             executor = KinematicExecutor(
@@ -472,14 +465,46 @@ def main():
                 viewer=viewer,
                 grasp_manager=robot.grasp_manager,
             )
-            already_at_ready = False
+
+        print("Recycling Demo (looping)", flush=True)
+        print(f"Mode: {'Physics' if args.physics else 'Kinematic'}", flush=True)
+        print("Close viewer or Ctrl+C to exit", flush=True)
 
         try:
-            run_demo(robot, executor, viewer, args.physics, already_at_ready, controller)
+            cycle = 1
             while viewer.is_running():
-                time.sleep(0.1)
+                # Run one pick-and-place cycle
+                success = run_demo_cycle(robot, executor, viewer, args.physics, controller, cycle)
+
+                if not viewer.is_running():
+                    break
+
+                if success:
+                    # Can is already hidden by run_demo_cycle, just spawn new one
+                    print("\nSpawning new can...", flush=True)
+                    can_pos, can_quat, is_flipped = sample_can_placement(model, data)
+                    orientation = "flipped" if is_flipped else "upright"
+                    print(f"New placement: {orientation} at {can_pos.round(3)}", flush=True)
+
+                    robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
+                    mujoco.mj_forward(model, data)
+                    viewer.sync()
+                    time.sleep(0.5)
+
+                    cycle += 1
+                else:
+                    print("\nCycle failed, retrying with new placement...", flush=True)
+                    robot.env.registry.hide("can_0")
+                    can_pos, can_quat, is_flipped = sample_can_placement(model, data)
+                    robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
+                    mujoco.mj_forward(model, data)
+                    viewer.sync()
+                    time.sleep(0.5)
+
         except KeyboardInterrupt:
             print("\nInterrupted", flush=True)
+
+        print(f"\nCompleted {cycle - 1} cycles. Goodbye!", flush=True)
 
 
 if __name__ == "__main__":

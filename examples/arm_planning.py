@@ -139,15 +139,9 @@ def execute_path(arm, path, viewer):
         t += dt
 
 
-def move_base(base, target, viewer, model, data):
-    """Animate base movement."""
-    start = base.height
-    for i in range(30):
-        h = start + (i / 29) * (target - start)
-        base.set_height(h)
-        mujoco.mj_forward(model, data)
-        viewer.sync()
-        time.sleep(0.02)
+def move_base(base, target, viewer):
+    """Move base with hardware-realistic motion profile."""
+    base.move_to(target, viewer=viewer)
 
 
 def main():
@@ -202,7 +196,7 @@ def main():
 
                 if path:
                     print(f"  Left: height {height:.2f}m won in {time.perf_counter()-t0:.2f}s", flush=True)
-                    move_base(robot.left_base, height, viewer, robot.model, robot.data)
+                    move_base(robot.left_base, height, viewer)
                     execute_path(robot.left_arm, path, viewer)
                 else:
                     print(f"  Left: all heights failed", flush=True)

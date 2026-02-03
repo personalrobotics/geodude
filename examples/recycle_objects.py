@@ -120,14 +120,9 @@ def plan_bimanual_grasp(robot, grasp_tsr, timeout=15.0):
     return None, None, None
 
 
-def move_base(base, target, viewer, model, data):
-    """Animate base movement."""
-    start = base.height
-    for i in range(30):
-        base.set_height(start + (i / 29) * (target - start))
-        mujoco.mj_forward(model, data)
-        viewer.sync()
-        time.sleep(0.02)
+def move_base(base, target, viewer):
+    """Move base with hardware-realistic motion profile."""
+    base.move_to(target, viewer=viewer)
 
 
 def execute_path(arm, path, executor):
@@ -168,7 +163,7 @@ def run_cycle(robot, executors, viewer, use_physics, controller=None, cycle=1):
     bin_name = "recycle_bin_1" if arm_name == "left" else "recycle_bin_0"
 
     # Move base
-    move_base(base, height, viewer, model, data)
+    move_base(base, height, viewer)
 
     # 2. Execute grasp
     print(f"\n2. Grasping ({arm_name})...", flush=True)

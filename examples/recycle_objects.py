@@ -4,6 +4,7 @@
 Usage:
     uv run mjpython examples/recycle_objects.py
     uv run mjpython examples/recycle_objects.py --physics
+    uv run mjpython examples/recycle_objects.py --base-physics  # Use physics executor for base
 """
 
 import argparse
@@ -120,9 +121,9 @@ def plan_bimanual_grasp(robot, grasp_tsr, timeout=15.0):
     return None, None, None
 
 
-def move_base(base, target, viewer):
+def move_base(base, target, viewer, executor_type="kinematic"):
     """Move base with hardware-realistic motion profile."""
-    base.move_to(target, viewer=viewer)
+    base.move_to(target, viewer=viewer, executor_type=executor_type)
 
 
 def execute_path(arm, path, executor):
@@ -131,7 +132,7 @@ def execute_path(arm, path, executor):
     executor.execute(traj)
 
 
-def run_cycle(robot, executors, viewer, use_physics, controller=None, cycle=1):
+def run_cycle(robot, executors, viewer, use_physics, controller=None, cycle=1, base_executor="kinematic"):
     """Run one pick-and-place cycle. Returns True on success."""
     print(f"\n{'=' * 40}\nCycle {cycle}\n{'=' * 40}", flush=True)
 
@@ -163,7 +164,7 @@ def run_cycle(robot, executors, viewer, use_physics, controller=None, cycle=1):
     bin_name = "recycle_bin_1" if arm_name == "left" else "recycle_bin_0"
 
     # Move base
-    move_base(base, height, viewer)
+    move_base(base, height, viewer, base_executor)
 
     # 2. Execute grasp
     print(f"\n2. Grasping ({arm_name})...", flush=True)
@@ -234,8 +235,11 @@ def run_cycle(robot, executors, viewer, use_physics, controller=None, cycle=1):
 
 def main():
     parser = argparse.ArgumentParser(description="Bimanual Recycling Demo")
-    parser.add_argument("--physics", action="store_true", help="Use physics simulation")
+    parser.add_argument("--physics", action="store_true", help="Use physics simulation for arms")
+    parser.add_argument("--base-physics", action="store_true", help="Use physics executor for base")
     args = parser.parse_args()
+
+    base_executor = "physics" if args.base_physics else "kinematic"
 
     # Create robot with objects
     robot = Geodude(objects={"can": 1, "recycle_bin": 2})
@@ -250,10 +254,11 @@ def main():
     mujoco.mj_forward(model, data)
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
-        viewer.cam.azimuth = 135
-        viewer.cam.elevation = -25
-        viewer.cam.distance = 2.0
-        viewer.cam.lookat[:] = [0.0, -0.2, 0.8]
+        # Preferred camera view for paper-quality screenshots
+        viewer.cam.azimuth = -90
+        viewer.cam.elevation = -26.5
+        viewer.cam.distance = 2.96
+        viewer.cam.lookat[:] = [0.188, 0.001, 1.141]
 
         mujoco.mj_forward(model, data)
         viewer.sync()
@@ -286,7 +291,7 @@ def main():
         try:
             cycle = 1
             while viewer.is_running():
-                success = run_cycle(robot, executors, viewer, args.physics, controller, cycle)
+                success = run_cycle(robot, executors, viewer, args.physics, controller, cycle, base_executor)
 
                 if not viewer.is_running():
                     break

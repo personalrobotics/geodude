@@ -9,6 +9,7 @@ Demonstrates:
 Usage:
     uv run mjpython examples/arm_planning.py
     uv run mjpython examples/arm_planning.py --iterations 10
+    uv run mjpython examples/arm_planning.py --base-physics  # Use physics executor for base
 """
 
 import argparse
@@ -138,72 +139,92 @@ def execute_path(arm, path, viewer):
         time.sleep(dt)
         t += dt
 
+    # Ensure we end at exact final position
+    arm.set_joint_positions(path[-1])
+    viewer.sync()
 
-def move_base(base, target, viewer):
+
+def move_base(base, target, viewer, executor_type="kinematic"):
     """Move base with hardware-realistic motion profile."""
-    base.move_to(target, viewer=viewer)
+    base.move_to(target, viewer=viewer, executor_type=executor_type)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Geodude Arm Planning Demo")
-    parser.add_argument("--iterations", type=int, default=5)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Random seed (default: random)")
+    parser.add_argument("--base-physics", action="store_true",
+                        help="Use physics executor for base (default: kinematic)")
     args = parser.parse_args()
 
-    print("Geodude Arm Planning Demo", flush=True)
+    base_executor = "physics" if args.base_physics else "kinematic"
+
+    print(f"Geodude Arm Planning Demo (base: {base_executor})", flush=True)
     print("=" * 40, flush=True)
+    print("Running until viewer is closed...\n", flush=True)
 
     robot = Geodude()
     rng = np.random.default_rng(args.seed)
 
     with mujoco.viewer.launch_passive(robot.model, robot.data) as viewer:
-        viewer.cam.distance = 2.5
+        # Preferred camera view for paper-quality screenshots
         viewer.cam.azimuth = -90
-        viewer.cam.elevation = -25
+        viewer.cam.elevation = -26.5
+        viewer.cam.distance = 2.96
+        viewer.cam.lookat[:] = [0.188, 0.001, 1.141]
 
-        for i in range(args.iterations):
-            print(f"\nIteration {i+1}/{args.iterations}", flush=True)
+        iteration = 0
+        while viewer.is_running():
+            iteration += 1
+            print(f"\nIteration {iteration}", flush=True)
 
-            # Plan right arm to random goal
-            goal = generate_random_goal(robot.right_arm, rng)
-            if goal is None:
-                print("  Right: failed to find valid goal", flush=True)
-                continue
-
+            # Plan right arm to random goal (keep trying until successful)
             print(f"  Right: planning (4 forks)...", flush=True)
-            t0 = time.perf_counter()
-            fork_id, path = plan_parallel(robot.right_arm, goal)
-
-            if path:
-                print(f"  Right: fork {fork_id} won in {time.perf_counter()-t0:.2f}s, {len(path)} waypoints", flush=True)
-                execute_path(robot.right_arm, path, viewer)
-            else:
-                print(f"  Right: all forks failed", flush=True)
-
-            # Plan left arm with different base heights
-            if robot.left_base:
-                goal = generate_random_goal(robot.left_arm, rng)
+            right_success = False
+            for attempt in range(10):  # Max 10 attempts to find reachable goal
+                goal = generate_random_goal(robot.right_arm, rng)
                 if goal is None:
-                    print("  Left: failed to find valid goal", flush=True)
                     continue
 
-                # Include current height (always valid for start config) plus other options
-                current_height = robot.left_base.height
-                heights = sorted(set([current_height, 0.0, 0.15, 0.3, 0.45]))
-                print(f"  Left: planning at heights {heights}...", flush=True)
                 t0 = time.perf_counter()
-                height, path = plan_at_heights(robot.left_arm, robot.left_base, goal, heights)
+                fork_id, path = plan_parallel(robot.right_arm, goal)
 
                 if path:
-                    print(f"  Left: height {height:.2f}m won in {time.perf_counter()-t0:.2f}s", flush=True)
-                    move_base(robot.left_base, height, viewer)
-                    execute_path(robot.left_arm, path, viewer)
-                else:
-                    print(f"  Left: all heights failed", flush=True)
+                    print(f"  Right: fork {fork_id} won in {time.perf_counter()-t0:.2f}s, {len(path)} waypoints", flush=True)
+                    execute_path(robot.right_arm, path, viewer)
+                    right_success = True
+                    break
 
-        print("\nDemo complete. Close viewer to exit.", flush=True)
-        while viewer.is_running():
-            time.sleep(0.1)
+            if not right_success:
+                print(f"  Right: could not find reachable goal after 10 attempts", flush=True)
+
+            # Plan left arm with different base heights (keep trying until successful)
+            if robot.left_base:
+                print(f"  Left: planning at heights...", flush=True)
+                left_success = False
+                for attempt in range(10):  # Max 10 attempts to find reachable goal
+                    goal = generate_random_goal(robot.left_arm, rng)
+                    if goal is None:
+                        continue
+
+                    # Include current height (always valid for start config) plus other options
+                    current_height = robot.left_base.height
+                    heights = sorted(set([current_height, 0.0, 0.15, 0.3, 0.45]))
+                    t0 = time.perf_counter()
+                    height, path = plan_at_heights(robot.left_arm, robot.left_base, goal, heights)
+
+                    if path:
+                        print(f"  Left: height {height:.2f}m won in {time.perf_counter()-t0:.2f}s", flush=True)
+                        move_base(robot.left_base, height, viewer, base_executor)
+                        execute_path(robot.left_arm, path, viewer)
+                        left_success = True
+                        break
+
+                if not left_success:
+                    print(f"  Left: could not find reachable goal after 10 attempts", flush=True)
+
+            # Brief pause before next iteration
+            time.sleep(0.5)
 
 
 if __name__ == "__main__":

@@ -239,6 +239,10 @@ class VentionBase:
         executor = self._get_executor(viewer=viewer, executor_type=executor_type)
         success = executor.execute(trajectory)
 
+        # Ensure actuator holds final position (important for physics executor)
+        if success:
+            self.data.ctrl[self._actuator_id] = height
+
         return success
 
     def _is_path_collision_free(self, start: float, end: float) -> bool:

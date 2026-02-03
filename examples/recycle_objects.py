@@ -1,21 +1,12 @@
 #!/usr/bin/env python3
-"""Recycling Demo - Pick objects and place them in a bin.
-
-Demonstrates:
-- TSR-based grasp and place planning
-- Parallel planning at different Vention base heights
-- Interchangeable kinematic/physics execution
-- Object management via mj_environment
+"""Bimanual Recycling Demo - Both arms race to pick and place objects.
 
 Usage:
     uv run mjpython examples/recycle_objects.py
     uv run mjpython examples/recycle_objects.py --physics
-    uv run mjpython examples/recycle_objects.py --record  # Save GIF
 """
 
 import argparse
-import subprocess
-import tempfile
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
@@ -28,483 +19,299 @@ from geodude import Geodude
 from geodude.executor import KinematicExecutor, RobotPhysicsController
 from geodude.trajectory import Trajectory
 from geodude.tsr_utils import compensate_tsr_for_gripper
+from pycbirrt import CBiRRTConfig
 from tsr import TSR
 from tsr.core.tsr_primitive import load_template_file
 
-GEODUDE_TSR_DIR = Path(__file__).parent.parent / "tsr_templates"
+TSR_DIR = Path(__file__).parent.parent / "tsr_templates"
 
-# Fixed positions
-RECYCLE_BIN_POS = [0.75, -0.35, 0.50]  # On floor
+# Bin positions (symmetric)
+RIGHT_BIN_POS = [0.75, -0.35, 0.50]
+LEFT_BIN_POS = [-0.75, -0.35, 0.50]
+
+# Base heights to try in parallel
+BASE_HEIGHTS = [0.0, 0.2, 0.4]
 
 
 def sample_can_placement(model, data):
-    """Sample a random can placement from upright or flipped TSR (50/50).
-
-    Uses TSR bounds sampling to get valid placement pose, then transforms
-    from worktop frame to world frame.
-    """
+    """Sample random can placement on worktop (upright or flipped)."""
     import random
 
-    # Load both placement TSRs
     templates = [
-        load_template_file(str(GEODUDE_TSR_DIR / "places" / "can_on_table_upright.yaml")),
-        load_template_file(str(GEODUDE_TSR_DIR / "places" / "can_on_table_flipped.yaml")),
+        load_template_file(str(TSR_DIR / "places" / "can_on_table_upright.yaml")),
+        load_template_file(str(TSR_DIR / "places" / "can_on_table_flipped.yaml")),
     ]
     template = random.choice(templates)
-    is_flipped = "Flipped" in template.name
 
-    # Get worktop pose (TSR reference frame)
     worktop_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "worktop")
     worktop_pos = data.site_xpos[worktop_id].copy()
 
-    # Create TSR and sample from bounds
-    # Note: We use narrower x/y bounds than the template for reachability
-    Bw_reachable = template.Bw.copy()
-    Bw_reachable[0, :] = [-0.4, 0.4]  # Narrower x bounds
-    Bw_reachable[1, :] = [-0.25, 0.25]  # Narrower y bounds
+    # Narrower bounds for reachability
+    Bw = template.Bw.copy()
+    Bw[0, :] = [-0.4, 0.4]
+    Bw[1, :] = [-0.25, 0.25]
 
-    placement_tsr = TSR(Bw=Bw_reachable)
-    xyzrpy = placement_tsr.sample_xyzrpy()
-
-    # Transform position to world frame (worktop is axis-aligned, so just add)
+    tsr = TSR(Bw=Bw)
+    xyzrpy = tsr.sample_xyzrpy()
     pos = worktop_pos + xyzrpy[:3]
 
-    # Convert rotation to quaternion
     rot = TSR.rpy_to_rot(xyzrpy[3:6])
     quat = np.zeros(4)
     mujoco.mju_mat2Quat(quat, rot.flatten())
 
-    return pos, quat, is_flipped
+    return pos, quat
 
 
-def create_robot_with_objects():
-    """Create Geodude robot with can and recycle bin from prl_assets."""
-    robot = Geodude(objects={"can": 1, "recycle_bin": 1})
+def load_grasp_tsr(object_pos):
+    """Load side grasp TSR for can at given position."""
+    template = load_template_file(str(TSR_DIR / "grasps" / "can_side_grasp.yaml"))
 
-    # Sample can placement from TSR
-    can_pos, can_quat, is_flipped = sample_can_placement(robot.model, robot.data)
-    orientation = "flipped" if is_flipped else "upright"
-    print(f"Can placement: {orientation} at {can_pos.round(3)}")
+    T0_w = np.eye(4)
+    T0_w[:3, 3] = object_pos
 
-    # Activate objects
-    robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
-    robot.env.registry.activate("recycle_bin", pos=RECYCLE_BIN_POS)
-    mujoco.mj_forward(robot.model, robot.data)
-
-    return robot
+    tsr = TSR(T0_w=T0_w, Tw_e=template.Tw_e, Bw=template.Bw)
+    return compensate_tsr_for_gripper(tsr, template.subject)
 
 
-def load_grasp_tsr(object_pos: np.ndarray):
-    """Load can side grasp TSR.
+def load_place_tsr(model, data, bin_name):
+    """Load drop TSR for recycle bin."""
+    template = load_template_file(str(TSR_DIR / "places" / "recycle_bin_drop.yaml"))
 
-    Args:
-        object_pos: Can position in world frame (body center)
+    bin_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, bin_name)
+    T0_w = np.eye(4)
+    T0_w[:3, 3] = data.xpos[bin_id].copy()
 
-    Returns:
-        TSR for gripper poses that can grasp the can
-    """
-    template = load_template_file(str(GEODUDE_TSR_DIR / "grasps" / "can_side_grasp.yaml"))
-
-    # T0_w is the object frame in world
-    object_pose = np.eye(4)
-    object_pose[:3, 3] = object_pos
-
-    grasp_tsr = TSR(T0_w=object_pose, Tw_e=template.Tw_e, Bw=template.Bw)
-    grasp_tsr = compensate_tsr_for_gripper(grasp_tsr, template.subject)
-
-    return grasp_tsr
+    tsr = TSR(T0_w=T0_w, Tw_e=template.Tw_e, Bw=template.Bw)
+    return compensate_tsr_for_gripper(tsr, template.subject)
 
 
-def load_place_tsr(model, data):
-    """Load recycle bin drop TSR."""
-    template = load_template_file(str(GEODUDE_TSR_DIR / "places" / "recycle_bin_drop.yaml"))
+def plan_bimanual_grasp(robot, grasp_tsr, timeout=15.0):
+    """Plan grasp with both arms at multiple heights. First success wins."""
+    config = CBiRRTConfig(timeout=timeout, max_iterations=5000, step_size=0.1, goal_bias=0.1)
 
-    bin_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "recycle_bin_0")
-    bin_pose = np.eye(4)
-    bin_pose[:3, 3] = data.xpos[bin_id].copy()
-
-    place_tsr = TSR(T0_w=bin_pose, Tw_e=template.Tw_e, Bw=template.Bw)
-    place_tsr = compensate_tsr_for_gripper(place_tsr, template.subject)
-
-    return place_tsr
-
-
-def plan_with_base_heights(arm, base, tsr, base_heights, timeout=15.0):
-    """Plan to TSR trying different base heights in parallel. First success wins."""
-    from pycbirrt import CBiRRTConfig
-
-    q_start = arm.get_joint_positions().copy()
-    base_joint = base.config.joint_name
-
-    config = CBiRRTConfig(
-        timeout=timeout,
-        max_iterations=5000,
-        step_size=0.1,
-        goal_bias=0.1,
-        smoothing_iterations=100,
-    )
-
-    def plan_at_height(height):
+    def plan_arm_at_height(arm_name, height):
         try:
-            planner = arm.create_planner(config, base_joint_name=base_joint, base_height=height)
-            path = planner.plan(q_start, goal_tsrs=[tsr])
-            return (height, path)
-        except Exception as e:
-            print(f"   Height {height:.2f}m: {e}", flush=True)
-            return (height, None)
+            arm = robot.left_arm if arm_name == "left" else robot.right_arm
+            base = robot.left_base if arm_name == "left" else robot.right_base
 
-    with ThreadPoolExecutor(max_workers=len(base_heights)) as executor:
-        futures = {executor.submit(plan_at_height, h): h for h in base_heights}
+            planner = arm.create_planner(config, base_joint_name=base.config.joint_name, base_height=height)
+            path = planner.plan(arm.get_joint_positions(), goal_tsrs=[grasp_tsr])
+            return (arm_name, height, path)
+        except Exception as e:
+            print(f"   {arm_name} @ {height:.2f}m: {e}", flush=True)
+            return (arm_name, height, None)
+
+    # All combinations: 2 arms x 3 heights = 6 parallel planners
+    tasks = [(arm, h) for arm in ["left", "right"] for h in BASE_HEIGHTS]
+
+    with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+        futures = {executor.submit(plan_arm_at_height, arm, h): (arm, h) for arm, h in tasks}
 
         while futures:
             done, _ = wait(futures.keys(), timeout=0.1, return_when=FIRST_COMPLETED)
             for future in done:
-                height, path = future.result()
+                arm_name, height, path = future.result()
                 if path is not None:
                     for f in futures:
                         f.cancel()
-                    return height, path
+                    return arm_name, height, path
                 del futures[future]
 
-    return None, None
+    return None, None, None
 
 
 def move_base(base, target, viewer, model, data):
     """Animate base movement."""
     start = base.height
     for i in range(30):
-        h = start + (i / 29) * (target - start)
-        base.set_height(h)
+        base.set_height(start + (i / 29) * (target - start))
         mujoco.mj_forward(model, data)
         viewer.sync()
         time.sleep(0.02)
 
 
 def execute_path(arm, path, executor):
-    """Execute a planned path with time-optimal retiming."""
-    trajectory = Trajectory.from_path(
-        path,
-        arm.config.kinematic_limits.velocity,
-        arm.config.kinematic_limits.acceleration,
-    )
-    executor.execute(trajectory)
+    """Execute path with time-optimal retiming."""
+    traj = Trajectory.from_path(path, arm.config.kinematic_limits.velocity, arm.config.kinematic_limits.acceleration)
+    executor.execute(traj)
 
 
-def linear_move(arm, q_target, executor, steps=50):
-    """Linear interpolation to target (for approach/retract without collision check)."""
-    q_start = arm.get_joint_positions()
-    path = [q_start + (i / steps) * (q_target - q_start) for i in range(steps + 1)]
-    execute_path(arm, path, executor)
+def run_cycle(robot, executors, viewer, use_physics, controller=None, cycle=1):
+    """Run one pick-and-place cycle. Returns True on success."""
+    print(f"\n{'=' * 40}\nCycle {cycle}\n{'=' * 40}", flush=True)
 
+    model, data = robot.model, robot.data
 
-def run_demo_cycle(robot, executor, viewer, use_physics: bool, controller=None, cycle: int = 1):
-    """Run one pick and place cycle. Returns True on success."""
-    print(f"\n{'=' * 40}", flush=True)
-    print(f"Cycle {cycle}", flush=True)
-    print("=" * 40, flush=True)
-
-    model = robot.model
-    data = robot.data
-    arm = robot.right_arm
-    base = robot.right_base
-    gripper = arm.gripper
-
-    # Get object position (MuJoCo body frame is at object center)
+    # Get can position
     can_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "can_0")
-    object_pos = data.xpos[can_id].copy()
-    print(f"Can position: {object_pos.round(3)}", flush=True)
+    can_pos = data.xpos[can_id].copy()
+    print(f"Can at {can_pos.round(3)}", flush=True)
 
-    # 1. Plan to grasp with parallel base heights
-    print("\n1. Planning to grasp...", flush=True)
-    grasp_tsr = load_grasp_tsr(object_pos)
+    # 1. Plan grasp (both arms race)
+    print("\n1. Planning grasp...", flush=True)
+    grasp_tsr = load_grasp_tsr(can_pos)
 
-    current_height = base.height if base else 0.0
-    base_heights = sorted(set([current_height, 0.0, 0.2, 0.4]))
-    print(f"   Trying base heights: {base_heights}", flush=True)
+    t0 = time.perf_counter()
+    arm_name, height, path = plan_bimanual_grasp(robot, grasp_tsr)
 
-    if base:
-        t0 = time.perf_counter()
-        winning_height, path = plan_with_base_heights(arm, base, grasp_tsr, base_heights)
-        if path:
-            print(f"   Height {winning_height:.2f}m won in {time.perf_counter()-t0:.2f}s", flush=True)
-            move_base(base, winning_height, viewer, model, data)
-    else:
-        path = arm.plan_to_tsrs([grasp_tsr], timeout=15.0)
-
-    if not path:
-        print("   Planning failed!", flush=True)
+    if path is None:
+        print("   Failed!", flush=True)
         return False
 
-    print(f"   Path: {len(path)} waypoints", flush=True)
+    print(f"   {arm_name.upper()} @ {height:.1f}m in {time.perf_counter()-t0:.1f}s ({len(path)} wp)", flush=True)
 
-    # 2. Execute to grasp
-    print("\n2. Executing to grasp...", flush=True)
+    # Get winning arm's components
+    arm = robot.left_arm if arm_name == "left" else robot.right_arm
+    base = robot.left_base if arm_name == "left" else robot.right_base
+    gripper = arm.gripper
+    executor = executors[arm_name]
+    bin_name = "recycle_bin_1" if arm_name == "left" else "recycle_bin_0"
+
+    # Move base
+    move_base(base, height, viewer, model, data)
+
+    # 2. Execute grasp
+    print(f"\n2. Grasping ({arm_name})...", flush=True)
     execute_path(arm, path, executor)
-    time.sleep(0.3)
+    time.sleep(0.2)
 
     # 3. Close gripper
-    print("\n3. Closing gripper...", flush=True)
     gripper.set_candidate_objects(["can_0"])
     if use_physics:
-        # Use controller's gripper method to maintain arm positions during close
-        controller.close_gripper("right", steps=200)
+        controller.close_gripper(arm_name, steps=200)
     else:
         gripper.kinematic_close()
-    # Mark grasp for collision checking during planning (both modes)
-    robot.grasp_manager.mark_grasped("can_0", "right")
-    robot.grasp_manager.attach_object("can_0", "right_ur5e/gripper/right_follower")
+    robot.grasp_manager.mark_grasped("can_0", arm_name)
+    robot.grasp_manager.attach_object("can_0", f"{arm_name}_ur5e/gripper/right_follower")
     viewer.sync()
-    time.sleep(0.3)
 
-    # 4. Lift to clear table
-    print("\n4. Lifting...", flush=True)
+    # 4. Lift
+    print("\n3. Lifting...", flush=True)
     lift_pose = arm.get_ee_pose().copy()
     lift_pose[2, 3] += 0.05
-    solutions = arm.inverse_kinematics(lift_pose, validate=False)
-    if solutions:
-        linear_move(arm, solutions[0], executor, steps=20)
+    ik = arm.inverse_kinematics(lift_pose, validate=False)
+    if ik:
+        q_start = arm.get_joint_positions()
+        lift_path = [q_start + (i / 20) * (ik[0] - q_start) for i in range(21)]
+        execute_path(arm, lift_path, executor)
         if not use_physics:
             robot.grasp_manager.update_attached_poses()
     viewer.sync()
-    time.sleep(0.2)
 
-    # 5. Plan to place
-    print("\n5. Planning to place (recycle bin)...", flush=True)
-    place_tsr = load_place_tsr(model, data)
+    # 5. Plan to bin
+    print(f"\n4. Planning to {bin_name}...", flush=True)
+    place_tsr = load_place_tsr(model, data, bin_name)
     path = arm.plan_to_tsrs([place_tsr], timeout=15.0)
 
     if not path:
-        print("   Planning failed!", flush=True)
+        print("   Failed!", flush=True)
         return False
 
-    print(f"   Path: {len(path)} waypoints", flush=True)
+    print(f"   {len(path)} waypoints", flush=True)
     execute_path(arm, path, executor)
-    time.sleep(0.3)
+    time.sleep(0.2)
 
     # 6. Release
-    print("\n6. Opening gripper...", flush=True)
+    print("\n5. Releasing...", flush=True)
     if use_physics:
-        # Use controller's gripper method to maintain arm positions during open
-        controller.open_gripper("right", steps=100)
+        controller.open_gripper(arm_name, steps=100)
     else:
         gripper.kinematic_open()
-    # Mark release (both modes)
     robot.grasp_manager.mark_released("can_0")
     robot.grasp_manager.detach_object("can_0")
     viewer.sync()
-    time.sleep(0.3)
 
-    # Hide the can immediately after release (before retract)
-    final_pos = data.xpos[can_id].copy()
+    # Hide can
     robot.env.registry.hide("can_0")
     mujoco.mj_forward(model, data)
     viewer.sync()
 
-    # 7. Plan back to ready
-    print("\n7. Returning to ready...", flush=True)
-    right_ready = np.array(robot.named_poses["ready"]["right"])
-    path = arm.plan_to_configuration(right_ready, timeout=10.0)
+    # 7. Return to ready
+    print(f"\n6. Returning to ready...", flush=True)
+    ready_config = np.array(robot.named_poses["ready"][arm_name])
+    path = arm.plan_to_configuration(ready_config, timeout=10.0)
     if path:
         execute_path(arm, path, executor)
 
-    print(f"\nCan final position: {final_pos.round(3)}", flush=True)
-    print(f"Displacement: {np.linalg.norm(final_pos - object_pos):.3f}m", flush=True)
-
-    return True  # Cycle completed successfully
-
-
-class FrameRecorder:
-    """Records frames for GIF creation."""
-
-    def __init__(self, model, data, width=640, height=480):
-        self.renderer = mujoco.Renderer(model, width=width, height=height)
-        self.model = model
-        self.data = data
-        self.frames = []
-        self.frame_dir = tempfile.mkdtemp()
-
-        # Set up camera for front view centered on right arm
-        self.camera = mujoco.MjvCamera()
-        self.camera.azimuth = 270
-        self.camera.elevation = -15
-        self.camera.distance = 1.8
-        self.camera.lookat[:] = [0.5, -0.25, 0.85]
-
-    def capture(self):
-        """Capture current frame."""
-        self.renderer.update_scene(self.data, camera=self.camera)
-        frame = self.renderer.render()
-        self.frames.append(frame.copy())
-
-    def save_gif(self, output_path: str, fps: int = 15):
-        """Save captured frames as GIF using ffmpeg."""
-        import os
-
-        # Save frames as PNGs
-        for i, frame in enumerate(self.frames):
-            from PIL import Image
-
-            img = Image.fromarray(frame)
-            img.save(f"{self.frame_dir}/frame_{i:04d}.png")
-
-        # Use ffmpeg to create GIF with palette for quality
-        palette_path = f"{self.frame_dir}/palette.png"
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-framerate",
-                str(fps),
-                "-i",
-                f"{self.frame_dir}/frame_%04d.png",
-                "-vf",
-                "palettegen=stats_mode=diff",
-                palette_path,
-            ],
-            capture_output=True,
-        )
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-framerate",
-                str(fps),
-                "-i",
-                f"{self.frame_dir}/frame_%04d.png",
-                "-i",
-                palette_path,
-                "-lavfi",
-                "paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
-                output_path,
-            ],
-            capture_output=True,
-        )
-
-        # Cleanup
-        for f in os.listdir(self.frame_dir):
-            os.remove(f"{self.frame_dir}/{f}")
-        os.rmdir(self.frame_dir)
-
-        print(f"Saved GIF to {output_path} ({len(self.frames)} frames)")
-
-
-class DummyViewer:
-    """Dummy viewer for headless recording mode."""
-
-    def sync(self):
-        pass
-
-    def is_running(self):
-        return False
+    print(f"\nDone! {arm_name.upper()} arm recycled can.", flush=True)
+    return True
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Recycling Demo")
-    parser.add_argument("--physics", action="store_true", help="Use physics execution")
-    parser.add_argument("--record", action="store_true", help="Record and save as GIF (headless)")
-    parser.add_argument("--output", default="recycle_demo.gif", help="Output GIF path")
+    parser = argparse.ArgumentParser(description="Bimanual Recycling Demo")
+    parser.add_argument("--physics", action="store_true", help="Use physics simulation")
     args = parser.parse_args()
 
-    robot = create_robot_with_objects()
-    model = robot.model
-    data = robot.data
-    arm = robot.right_arm
+    # Create robot with objects
+    robot = Geodude(objects={"can": 1, "recycle_bin": 2})
+    model, data = robot.model, robot.data
 
-    # Setup recorder if requested (headless mode)
-    recorder = None
-    if args.record:
-        recorder = FrameRecorder(model, data, width=480, height=360)
-        print("Recording in headless mode...", flush=True)
+    # Place can and bins
+    can_pos, can_quat = sample_can_placement(model, data)
+    print(f"Can at {can_pos.round(3)}")
+    robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
+    robot.env.registry.activate("recycle_bin", pos=RIGHT_BIN_POS)
+    robot.env.registry.activate("recycle_bin", pos=LEFT_BIN_POS)
+    mujoco.mj_forward(model, data)
 
-        # Run headless
-        viewer = DummyViewer()
-        mujoco.mj_forward(model, data)
-
-        controller = None
-        executor = KinematicExecutor(
-            model=model,
-            data=data,
-            joint_qpos_indices=arm.joint_qpos_indices,
-            viewer=viewer,
-            grasp_manager=robot.grasp_manager,
-            recorder=recorder,
-        )
-
-        run_demo_cycle(robot, executor, viewer, use_physics=False, controller=None, cycle=1)
-        recorder.save_gif(args.output)
-        return
-
-    # Normal mode with viewer (requires mjpython on macOS)
     with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.cam.azimuth = 135
         viewer.cam.elevation = -25
         viewer.cam.distance = 2.0
-        viewer.cam.lookat[:] = [0.4, 0, 0.8]
+        viewer.cam.lookat[:] = [0.0, -0.2, 0.8]
 
+        mujoco.mj_forward(model, data)
+        viewer.sync()
+
+        robot.go_to("ready")
         mujoco.mj_forward(model, data)
         viewer.sync()
         time.sleep(0.5)
 
-        # Go to ready pose before starting (kinematic setup)
-        robot.go_to("ready")
-        mujoco.mj_forward(model, data)
-        viewer.sync()
-
-        # Create executor based on mode
+        # Create executors
         if args.physics:
-            # RobotPhysicsController manages ALL actuators - arms not executing
-            # trajectories automatically hold their positions
             controller = RobotPhysicsController(robot, viewer=viewer)
-            executor = controller.get_executor("right")
+            executors = {"left": controller.get_executor("left"), "right": controller.get_executor("right")}
         else:
             controller = None
-            executor = KinematicExecutor(
-                model=model,
-                data=data,
-                joint_qpos_indices=arm.joint_qpos_indices,
-                viewer=viewer,
-                grasp_manager=robot.grasp_manager,
-            )
+            executors = {
+                "left": KinematicExecutor(
+                    model, data, robot.left_arm.joint_qpos_indices,
+                    viewer=viewer, grasp_manager=robot.grasp_manager
+                ),
+                "right": KinematicExecutor(
+                    model, data, robot.right_arm.joint_qpos_indices,
+                    viewer=viewer, grasp_manager=robot.grasp_manager
+                ),
+            }
 
-        print("Recycling Demo (looping)", flush=True)
-        print(f"Mode: {'Physics' if args.physics else 'Kinematic'}", flush=True)
-        print("Close viewer or Ctrl+C to exit", flush=True)
+        print(f"Bimanual Recycling Demo ({'Physics' if args.physics else 'Kinematic'})")
+        print("Close viewer or Ctrl+C to exit\n")
 
         try:
             cycle = 1
             while viewer.is_running():
-                # Run one pick-and-place cycle
-                success = run_demo_cycle(robot, executor, viewer, args.physics, controller, cycle)
+                success = run_cycle(robot, executors, viewer, args.physics, controller, cycle)
 
                 if not viewer.is_running():
                     break
 
+                # Spawn new can
+                print("\nSpawning new can...", flush=True)
+                can_pos, can_quat = sample_can_placement(model, data)
+                print(f"Can at {can_pos.round(3)}")
+                robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
+                mujoco.mj_forward(model, data)
+                viewer.sync()
+                time.sleep(0.5)
+
                 if success:
-                    # Can is already hidden by run_demo_cycle, just spawn new one
-                    print("\nSpawning new can...", flush=True)
-                    can_pos, can_quat, is_flipped = sample_can_placement(model, data)
-                    orientation = "flipped" if is_flipped else "upright"
-                    print(f"New placement: {orientation} at {can_pos.round(3)}", flush=True)
-
-                    robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
-                    mujoco.mj_forward(model, data)
-                    viewer.sync()
-                    time.sleep(0.5)
-
                     cycle += 1
-                else:
-                    print("\nCycle failed, retrying with new placement...", flush=True)
-                    robot.env.registry.hide("can_0")
-                    can_pos, can_quat, is_flipped = sample_can_placement(model, data)
-                    robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
-                    mujoco.mj_forward(model, data)
-                    viewer.sync()
-                    time.sleep(0.5)
 
         except KeyboardInterrupt:
-            print("\nInterrupted", flush=True)
+            print("\nInterrupted")
 
-        print(f"\nCompleted {cycle - 1} cycles. Goodbye!", flush=True)
+        print(f"\nCompleted {cycle - 1} cycles.")
 
 
 if __name__ == "__main__":

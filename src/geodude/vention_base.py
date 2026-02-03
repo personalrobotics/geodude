@@ -8,6 +8,8 @@ import mujoco
 import numpy as np
 
 from geodude.config import VentionBaseConfig
+from geodude.executor import KinematicExecutor, PhysicsExecutor
+from geodude.trajectory import create_linear_trajectory
 
 if TYPE_CHECKING:
     from geodude.arm import Arm
@@ -80,6 +82,45 @@ class VentionBase:
                 self._arm_body_ids.add(i)
                 self._add_child_bodies(i)
 
+    def _get_executor(
+        self,
+        viewer=None,
+        executor_type: str = "physics",
+    ) -> KinematicExecutor | PhysicsExecutor:
+        """Get trajectory executor for base movement.
+
+        Args:
+            viewer: Optional MuJoCo viewer to sync during execution
+            executor_type: "kinematic" for perfect tracking (no physics) or
+                          "physics" for physics-based execution with feedforward
+
+        Returns:
+            Executor configured for this base's single DOF
+
+        Raises:
+            ValueError: If executor_type is not recognized
+        """
+        if executor_type == "kinematic":
+            return KinematicExecutor(
+                model=self.model,
+                data=self.data,
+                joint_qpos_indices=[self._qpos_idx],
+                viewer=viewer,
+            )
+        elif executor_type == "physics":
+            return PhysicsExecutor(
+                model=self.model,
+                data=self.data,
+                joint_qpos_indices=[self._qpos_idx],
+                actuator_ids=[self._actuator_id],
+                viewer=viewer,
+            )
+        else:
+            raise ValueError(
+                f"Unknown executor_type '{executor_type}'. "
+                f"Must be 'kinematic' or 'physics'."
+            )
+
     @property
     def name(self) -> str:
         """Base name ('left' or 'right')."""
@@ -122,14 +163,23 @@ class VentionBase:
         self,
         height: float,
         check_collisions: bool = True,
+        viewer=None,
+        executor_type: str = "kinematic",
     ) -> bool:
-        """Move to target height with optional collision checking.
+        """Move to target height with hardware-realistic motion profile.
 
-        Interpolates the path and checks for arm collisions at discrete steps.
+        Always uses trapezoidal velocity profile to match real Vention hardware
+        behavior. The profile respects velocity and acceleration limits based on
+        hardware specifications.
+
+        For instant positioning (initialization, testing), use set_height() instead.
 
         Args:
             height: Target height in meters
             check_collisions: If True, check for collisions along path
+            viewer: Optional MuJoCo viewer for animated execution
+            executor_type: "kinematic" for perfect tracking (default) or
+                          "physics" for physics-based execution with dynamics
 
         Returns:
             True if movement succeeded, False if blocked by collision
@@ -143,18 +193,57 @@ class VentionBase:
                 f"Height {height} outside valid range [{min_h}, {max_h}]"
             )
 
-        if not check_collisions:
-            self.set_height(height)
-            return True
-
-        # Check collision along path
         current_height = self.height
-        if not self._is_path_collision_free(current_height, height):
-            return False
 
-        # Path is clear, move to target
-        self.set_height(height)
-        return True
+        # Generate trajectory with trapezoidal velocity profile
+        trajectory = create_linear_trajectory(
+            start=current_height,
+            end=height,
+            vel_limit=self.config.kinematic_limits.velocity,
+            acc_limit=self.config.kinematic_limits.acceleration,
+        )
+
+        # Optional collision checking at trajectory waypoints
+        if check_collisions:
+            # Sample waypoints at collision_check_resolution intervals
+            # This maintains the same granularity as the old discrete checking
+            resolution = self.config.collision_check_resolution
+            distance = abs(height - current_height)
+
+            if distance > 1e-6:  # Skip if already at target
+                # Calculate step size to check approximately every resolution meters
+                step_size = max(
+                    1, int(resolution / (distance / trajectory.num_waypoints))
+                )
+
+                # Save current arm configuration
+                arm_q = self._arm.get_joint_positions().copy()
+                original_height = self.height
+
+                try:
+                    for i in range(0, trajectory.num_waypoints, step_size):
+                        h = trajectory.positions[i, 0]
+                        self.data.qpos[self._qpos_idx] = h
+                        self._arm.set_joint_positions(arm_q)
+                        mujoco.mj_forward(self.model, self.data)
+
+                        if self._has_arm_collision():
+                            return False
+                finally:
+                    # Restore original state
+                    self.data.qpos[self._qpos_idx] = original_height
+                    self._arm.set_joint_positions(arm_q)
+                    mujoco.mj_forward(self.model, self.data)
+
+        # Execute trajectory
+        executor = self._get_executor(viewer=viewer, executor_type=executor_type)
+        success = executor.execute(trajectory)
+
+        # Ensure actuator holds final position (important for physics executor)
+        if success:
+            self.data.ctrl[self._actuator_id] = height
+
+        return success
 
     def _is_path_collision_free(self, start: float, end: float) -> bool:
         """Check if linear path is collision-free.

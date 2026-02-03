@@ -206,3 +206,116 @@ class Trajectory:
             velocities=velocities,
             accelerations=accelerations,
         )
+
+
+def create_linear_trajectory(
+    start: float,
+    end: float,
+    vel_limit: float,
+    acc_limit: float,
+    control_dt: float = 0.008,
+) -> Trajectory:
+    """Generate trapezoidal velocity profile for 1D linear motion.
+
+    Creates a time-optimal trajectory with three phases:
+    1. Acceleration phase: ramp up from 0 to vel_limit
+    2. Cruise phase: maintain constant velocity (if distance allows)
+    3. Deceleration phase: ramp down to 0
+
+    For short distances where max velocity cannot be reached, the profile
+    becomes triangular (no cruise phase).
+
+    This is simpler than TOPP-RA since 1D motion doesn't require spline
+    interpolation or complex optimization. The trapezoidal profile matches
+    exactly what real hardware controllers (like Vention MachineMotion) use.
+
+    Args:
+        start: Starting position in meters
+        end: Target position in meters
+        vel_limit: Maximum velocity in m/s
+        acc_limit: Maximum acceleration in m/s²
+        control_dt: Control timestep in seconds (default: 125 Hz)
+
+    Returns:
+        Trajectory object with 1 DOF (dof=1)
+
+    Example:
+        >>> # Move from 0 to 0.5m with 0.1 m/s velocity and 0.2 m/s² acceleration
+        >>> traj = create_linear_trajectory(0.0, 0.5, 0.1, 0.2)
+        >>> traj.duration  # ~5.5 seconds
+        5.5
+        >>> traj.positions.shape  # (N, 1) where N ~= 5.5 / 0.008
+        (688, 1)
+    """
+    distance = abs(end - start)
+    direction = 1.0 if end > start else -1.0
+
+    # Handle zero distance case
+    if distance < 1e-8:
+        return Trajectory(
+            timestamps=np.array([0.0]),
+            positions=np.array([[start]]),
+            velocities=np.array([[0.0]]),
+            accelerations=np.array([[0.0]]),
+        )
+
+    # Compute time to reach max velocity and distance covered during acceleration
+    t_accel = vel_limit / acc_limit
+    d_accel = 0.5 * acc_limit * t_accel**2
+
+    # Check if we reach max velocity (trapezoidal) or not (triangular)
+    if 2 * d_accel <= distance:
+        # Trapezoidal profile: reach max velocity
+        d_cruise = distance - 2 * d_accel
+        t_cruise = d_cruise / vel_limit
+        t_total = 2 * t_accel + t_cruise
+    else:
+        # Triangular profile: peak velocity is less than vel_limit
+        # Solve: distance = 2 * (0.5 * a * t^2) => t = sqrt(distance / a)
+        t_accel = np.sqrt(distance / acc_limit)
+        vel_limit = acc_limit * t_accel  # Peak velocity reached
+        d_accel = 0.5 * distance
+        t_cruise = 0.0
+        t_total = 2 * t_accel
+
+    # Generate waypoints at control frequency
+    timestamps = np.arange(0.0, t_total, control_dt)
+    # Ensure final timestamp is included
+    if not np.isclose(timestamps[-1], t_total, atol=1e-8):
+        timestamps = np.append(timestamps, t_total)
+
+    positions = []
+    velocities = []
+    accelerations = []
+
+    for t in timestamps:
+        if t <= t_accel:
+            # Acceleration phase: p = start + 0.5*a*t², v = a*t, a = constant
+            p = start + direction * 0.5 * acc_limit * t**2
+            v = direction * acc_limit * t
+            a = direction * acc_limit
+        elif t <= t_accel + t_cruise:
+            # Cruise phase: p = start + d_accel + v*(t - t_accel), v = constant, a = 0
+            t_in_cruise = t - t_accel
+            p = start + direction * (d_accel + vel_limit * t_in_cruise)
+            v = direction * vel_limit
+            a = 0.0
+        else:
+            # Deceleration phase: mirror of acceleration
+            # Time remaining until stop
+            t_remaining = t_total - t
+            # Position is end minus distance still to cover during deceleration
+            p = end - direction * 0.5 * acc_limit * t_remaining**2
+            v = direction * acc_limit * t_remaining
+            a = -direction * acc_limit
+
+        positions.append([p])
+        velocities.append([v])
+        accelerations.append([a])
+
+    return Trajectory(
+        timestamps=timestamps,
+        positions=np.array(positions),
+        velocities=np.array(velocities),
+        accelerations=np.array(accelerations),
+    )

@@ -96,6 +96,40 @@ class ArmConfig:
 
 
 @dataclass
+class VentionKinematicLimits:
+    """Velocity and acceleration limits for Vention linear actuator.
+
+    Based on Vention MachineMotion hardware specs:
+    - Motor: NEMA 34 stepper servo with 7.2Nm torque
+    - Actuator: Enclosed lead screw (50mm/s default safe limit)
+    - Range: 0-0.5m (500mm)
+
+    These limits are used for trajectory generation to ensure simulation
+    matches real hardware timing. Hardware can operate at 50mm/s conservatively,
+    but shorter actuators can safely go faster (100mm/s).
+    """
+
+    velocity: float  # m/s (max safe velocity)
+    acceleration: float  # m/s² (max acceleration)
+
+    @classmethod
+    def default(cls) -> "VentionKinematicLimits":
+        """Default limits for responsive motion.
+
+        Returns:
+            Limits set to 2x conservative hardware defaults:
+            - 100 mm/s max velocity (0.1 m/s)
+            - 200 mm/s² acceleration (0.2 m/s²)
+
+        This provides full-range (0.5m) movement in ~5.5 seconds.
+        """
+        return cls(
+            velocity=0.1,  # 100 mm/s - responsive yet safe
+            acceleration=0.2,  # 200 mm/s² - smooth acceleration
+        )
+
+
+@dataclass
 class VentionBaseConfig:
     """Configuration for a Vention linear actuator."""
 
@@ -104,6 +138,9 @@ class VentionBaseConfig:
     actuator_name: str  # MuJoCo actuator name
     height_range: tuple[float, float] = (0.0, 0.5)  # meters (min, max)
     collision_check_resolution: float = 0.01  # meters between collision checks
+    kinematic_limits: VentionKinematicLimits = field(
+        default_factory=VentionKinematicLimits.default
+    )
 
 
 @dataclass

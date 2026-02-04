@@ -35,9 +35,7 @@ robot.go_to("ready")
 # Plan and execute a motion
 import numpy as np
 goal = np.array([-1.0, -1.5, 1.5, -1.5, -1.5, 0])
-path = robot.right_arm.plan_to_configuration(goal)
-if path:
-    robot.right_arm.execute(path)
+trajectory = robot.right_arm.plan_to(goal)  # Plans and executes by default
 
 # Gripper control
 robot.right_arm.close_gripper()
@@ -57,11 +55,9 @@ obj_pose = robot.get_object_pose("can")
 # Create grasp TSR (allows rotation around object axis)
 grasp_tsr = create_side_grasp_tsr(obj_pose, object_height=0.12)
 
-# Plan to any valid grasp
-path = robot.right_arm.plan_to_tsrs([grasp_tsr])
-if path:
-    robot.right_arm.execute(path)
-    robot.right_arm.close_gripper()
+# Plan to any valid grasp (plans and executes by default)
+robot.right_arm.plan_to_tsr(grasp_tsr)
+robot.right_arm.close_gripper()
 ```
 
 ## Unified Planning API
@@ -118,7 +114,7 @@ robot.grasp_manager.attach_object("can", "right_ur5e/gripper/right_follower")
 
 # Now planning treats the can as part of the robot
 # (won't report false collisions with the arm)
-path = robot.right_arm.plan_to_tsrs([place_tsr])
+robot.right_arm.plan_to_tsr(place_tsr)
 
 # Release
 robot.grasp_manager.mark_released("can")
@@ -148,17 +144,17 @@ Geodude
 ├── GraspManager
 │   └── Tracks grasped objects, updates collision groups
 └── Collision checkers
-    └── Grasp-aware, thread-safe for parallel planning
+    └── Grasp-aware collision checking
 ```
 
 ## Examples
 
 ```bash
-# Parallel planning with base heights
-uv run python examples/arm_planning.py
+# Planning with base height search
+uv run mjpython examples/arm_planning.py
 
 # Pick and place with physics
-uv run python examples/recycle_objects.py --physics
+uv run mjpython examples/recycle_objects.py --physics
 ```
 
 ## Testing

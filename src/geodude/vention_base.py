@@ -9,7 +9,7 @@ import numpy as np
 
 from geodude.config import VentionBaseConfig
 from geodude.executor import KinematicExecutor, PhysicsExecutor
-from geodude.trajectory import create_linear_trajectory
+from geodude.trajectory import Trajectory, create_linear_trajectory
 
 if TYPE_CHECKING:
     from geodude.arm import Arm
@@ -245,8 +245,81 @@ class VentionBase:
 
         return success
 
+    def plan_to(
+        self,
+        height: float,
+        *,
+        execute: bool = True,
+        check_collisions: bool = True,
+        viewer=None,
+        executor_type: str = "kinematic",
+    ) -> Trajectory | None:
+        """Plan base motion to target height.
+
+        Creates a trajectory using trapezoidal velocity profile matching
+        real Vention hardware behavior.
+
+        Args:
+            height: Target height in meters
+            execute: If True (default), execute trajectory after planning.
+                    If False, return trajectory without executing.
+            check_collisions: If True, verify path is collision-free before planning
+            viewer: Optional MuJoCo viewer for execution visualization
+            executor_type: "kinematic" (default) or "physics" for execution
+
+        Returns:
+            Trajectory if planning succeeded, None if collision detected
+
+        Raises:
+            ValueError: If height is outside valid range
+        """
+        min_h, max_h = self.config.height_range
+        if not min_h <= height <= max_h:
+            raise ValueError(
+                f"Height {height} outside valid range [{min_h}, {max_h}]"
+            )
+
+        current_height = self.height
+
+        # Check for collisions if requested
+        if check_collisions and not self.is_path_collision_free(current_height, height):
+            return None
+
+        # Create trajectory with entity info
+        trajectory = create_linear_trajectory(
+            start=current_height,
+            end=height,
+            vel_limit=self.config.kinematic_limits.velocity,
+            acc_limit=self.config.kinematic_limits.acceleration,
+            entity=self.config.name,
+            joint_names=self.config.joint_names,
+        )
+
+        if execute:
+            executor = self._get_executor(viewer=viewer, executor_type=executor_type)
+            success = executor.execute(trajectory)
+            if success:
+                self.data.ctrl[self._actuator_id] = height
+
+        return trajectory
+
+    def is_path_collision_free(self, start: float, end: float) -> bool:
+        """Check if linear path from start to end height is collision-free.
+
+        This method checks discrete waypoints along the path at the configured
+        resolution to detect collisions between the arm and environment.
+
+        Args:
+            start: Starting height in meters
+            end: Ending height in meters
+
+        Returns:
+            True if the entire path is collision-free
+        """
+        return self._is_path_collision_free(start, end)
+
     def _is_path_collision_free(self, start: float, end: float) -> bool:
-        """Check if linear path is collision-free.
+        """Internal collision checking implementation.
 
         Args:
             start: Starting height

@@ -10,6 +10,8 @@ from mj_environment import Environment
 from geodude.arm import Arm
 from geodude.config import GeodudConfig
 from geodude.grasp_manager import GraspManager
+from geodude.planning import PlanResult
+from geodude.trajectory import Trajectory
 from geodude.vention_base import VentionBase
 
 
@@ -219,6 +221,175 @@ class Geodude:
             raise ValueError(f"Keyframe '{name}' not found in model")
         mujoco.mj_resetDataKeyframe(self.model, self.data, key_id)
         mujoco.mj_forward(self.model, self.data)
+
+    def plan_to_pose(
+        self,
+        pose: np.ndarray | list[np.ndarray],
+        *,
+        arm: Arm | str | None = None,
+        execute: bool = True,
+        base_heights: list[float] | None = None,
+        timeout: float = 30.0,
+        seed: int | None = None,
+        viewer=None,
+        executor_type: str = "physics",
+    ) -> PlanResult | Trajectory | None:
+        """Plan to an end-effector pose with either arm.
+
+        If no arm is specified, tries both arms and returns the first success.
+
+        Args:
+            pose: Target 4x4 pose matrix, or list of poses (planner picks one)
+            arm: Which arm to use: Arm instance, "left", "right", or None (try both)
+            execute: If True (default), execute trajectory after planning.
+                    If False, return trajectory without executing.
+            base_heights: Optional list of base heights to search in parallel.
+                         If provided, returns PlanResult with base trajectory.
+            timeout: Planning timeout in seconds
+            seed: Random seed for reproducibility
+            viewer: Optional MuJoCo viewer for execution visualization
+            executor_type: "physics" or "kinematic" for execution
+
+        Returns:
+            - Trajectory or PlanResult if planning succeeded
+            - None if planning failed with all arms
+        """
+        arms = self._resolve_arms(arm)
+
+        for a in arms:
+            result = a.plan_to_pose(
+                pose,
+                execute=execute,
+                base_heights=base_heights,
+                timeout=timeout,
+                seed=seed,
+                viewer=viewer,
+                executor_type=executor_type,
+            )
+            if result is not None:
+                return result
+
+        return None
+
+    def plan_to_tsr(
+        self,
+        tsr,
+        *,
+        arm: Arm | str | None = None,
+        execute: bool = True,
+        base_heights: list[float] | None = None,
+        timeout: float = 30.0,
+        seed: int | None = None,
+        viewer=None,
+        executor_type: str = "physics",
+    ) -> PlanResult | Trajectory | None:
+        """Plan to a TSR with either arm.
+
+        If no arm is specified, tries both arms and returns the first success.
+
+        Args:
+            tsr: Target TSR, or list of TSRs (planner picks one)
+            arm: Which arm to use: Arm instance, "left", "right", or None (try both)
+            execute: If True (default), execute trajectory after planning.
+                    If False, return trajectory without executing.
+            base_heights: Optional list of base heights to search in parallel.
+                         If provided, returns PlanResult with base trajectory.
+            timeout: Planning timeout in seconds
+            seed: Random seed for reproducibility
+            viewer: Optional MuJoCo viewer for execution visualization
+            executor_type: "physics" or "kinematic" for execution
+
+        Returns:
+            - Trajectory or PlanResult if planning succeeded
+            - None if planning failed with all arms
+        """
+        arms = self._resolve_arms(arm)
+
+        for a in arms:
+            result = a.plan_to_tsr(
+                tsr,
+                execute=execute,
+                base_heights=base_heights,
+                timeout=timeout,
+                seed=seed,
+                viewer=viewer,
+                executor_type=executor_type,
+            )
+            if result is not None:
+                return result
+
+        return None
+
+    def plan_to(
+        self,
+        goal: np.ndarray | list,
+        *,
+        arm: Arm | str | None = None,
+        execute: bool = True,
+        base_heights: list[float] | None = None,
+        timeout: float = 30.0,
+        seed: int | None = None,
+        viewer=None,
+        executor_type: str = "physics",
+    ) -> PlanResult | Trajectory | None:
+        """Plan to a goal (configuration, pose, or TSR) with either arm.
+
+        Unified planning method that dispatches based on goal type.
+
+        Args:
+            goal: Target configuration, pose, TSR, or list of goals
+            arm: Which arm to use: Arm instance, "left", "right", or None (try both)
+            execute: If True (default), execute trajectory after planning.
+                    If False, return trajectory without executing.
+            base_heights: Optional list of base heights to search in parallel.
+            timeout: Planning timeout in seconds
+            seed: Random seed for reproducibility
+            viewer: Optional MuJoCo viewer for execution visualization
+            executor_type: "physics" or "kinematic" for execution
+
+        Returns:
+            - Trajectory or PlanResult if planning succeeded
+            - None if planning failed
+        """
+        arms = self._resolve_arms(arm)
+
+        for a in arms:
+            result = a.plan_to(
+                goal,
+                execute=execute,
+                base_heights=base_heights,
+                timeout=timeout,
+                seed=seed,
+                viewer=viewer,
+                executor_type=executor_type,
+            )
+            if result is not None:
+                return result
+
+        return None
+
+    def _resolve_arms(self, arm: Arm | str | None) -> list[Arm]:
+        """Resolve arm specification to list of Arm instances.
+
+        Args:
+            arm: Arm instance, "left", "right", or None (both arms)
+
+        Returns:
+            List of Arm instances to try
+        """
+        if arm is None:
+            return [self._right_arm, self._left_arm]  # Try right first (has gripper)
+        elif isinstance(arm, str):
+            if arm == "left" or arm == "left_arm":
+                return [self._left_arm]
+            elif arm == "right" or arm == "right_arm":
+                return [self._right_arm]
+            else:
+                raise ValueError(f"Unknown arm name: {arm}")
+        elif isinstance(arm, Arm):
+            return [arm]
+        else:
+            raise ValueError(f"Invalid arm specification: {arm}")
 
     def _load_keyframe_poses(self) -> dict[str, dict[str, list[float]]]:
         """Extract named poses from MuJoCo keyframes.

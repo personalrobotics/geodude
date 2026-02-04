@@ -29,6 +29,8 @@ import numpy as np
 
 if TYPE_CHECKING:
     from geodude.arm import Arm
+    from geodude.planning import PlanResult
+    from geodude.vention_base import VentionBase
 
 
 def plan_first_success(
@@ -165,3 +167,61 @@ def plan_best_of_all(
         return None
 
     return min(paths, key=metric)
+
+
+def plan_with_base_heights(
+    arm: "Arm",
+    goal_tsrs: list,
+    base_heights: list[float],
+    *,
+    execute: bool = True,
+    timeout: float = 30.0,
+    seed: int | None = None,
+    viewer=None,
+    executor_type: str = "physics",
+) -> "PlanResult | None":
+    """Plan arm motion at different base heights.
+
+    Searches through multiple base heights to find one where the arm can
+    reach the goal TSRs. Heights are pre-filtered by collision checking
+    before attempting arm planning.
+
+    This is a convenience wrapper around arm.plan_to_tsr() with base_heights.
+
+    Args:
+        arm: Arm to plan for
+        goal_tsrs: List of goal TSRs (union - any one)
+        base_heights: List of base heights to search
+        execute: If True (default), execute trajectories after planning
+        timeout: Per-planner timeout in seconds
+        seed: Random seed for reproducibility
+        viewer: Optional MuJoCo viewer for execution
+        executor_type: "physics" or "kinematic" for execution
+
+    Returns:
+        PlanResult with arm and base trajectories, or None if all fail
+
+    Example:
+        from geodude.parallel import plan_with_base_heights
+
+        result = plan_with_base_heights(
+            robot.right_arm,
+            [grasp_tsr],
+            base_heights=[0.0, 0.1, 0.2, 0.3, 0.4],
+            execute=False,
+        )
+        if result:
+            print(f"Found solution at height {result.base_height}")
+            # Execute manually
+            for traj in result.trajectories:
+                print(f"Execute {traj.entity}: {traj.duration:.2f}s")
+    """
+    return arm.plan_to_tsr(
+        goal_tsrs,
+        execute=execute,
+        base_heights=base_heights,
+        timeout=timeout,
+        seed=seed,
+        viewer=viewer,
+        executor_type=executor_type,
+    )

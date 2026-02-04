@@ -25,15 +25,30 @@ def __getattr__(name):
         from geodude import tsr_utils
         return getattr(tsr_utils, name)
     # Parallel planning utilities
-    if name in ("plan_first_success", "plan_best_of_all"):
+    if name in ("plan_first_success", "plan_best_of_all", "plan_with_base_heights"):
         from geodude import parallel
         return getattr(parallel, name)
+    # Planning result types
+    if name == "PlanResult":
+        from geodude.planning import PlanResult
+        return PlanResult
+    # Trajectory
+    if name == "Trajectory":
+        from geodude.trajectory import Trajectory
+        return Trajectory
+    # Entity config
+    if name == "EntityConfig":
+        from geodude.config import EntityConfig
+        return EntityConfig
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "Geodude",
     "VentionBase",
     "VentionBaseConfig",
+    "EntityConfig",
+    "Trajectory",
+    "PlanResult",
     # TSR utilities
     "create_top_grasp_tsr",
     "create_side_grasp_tsr",
@@ -44,4 +59,5 @@ __all__ = [
     # Parallel planning utilities
     "plan_first_success",
     "plan_best_of_all",
+    "plan_with_base_heights",
 ]

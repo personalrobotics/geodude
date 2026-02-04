@@ -1,5 +1,6 @@
 """Main Geodude robot interface."""
 
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
@@ -236,11 +237,11 @@ class Geodude:
     ) -> PlanResult | Trajectory | None:
         """Plan to an end-effector pose with either arm.
 
-        If no arm is specified, tries both arms and returns the first success.
+        If no arm is specified, races both arms in parallel and returns first success.
 
         Args:
             pose: Target 4x4 pose matrix, or list of poses (planner picks one)
-            arm: Which arm to use: Arm instance, "left", "right", or None (try both)
+            arm: Which arm to use: Arm instance, "left", "right", or None (race both)
             execute: If True (default), execute trajectory after planning.
                     If False, return trajectory without executing.
             base_heights: Optional list of base heights to search in parallel.
@@ -256,8 +257,9 @@ class Geodude:
         """
         arms = self._resolve_arms(arm)
 
-        for a in arms:
-            result = a.plan_to_pose(
+        # Single arm: plan directly
+        if len(arms) == 1:
+            return arms[0].plan_to_pose(
                 pose,
                 execute=execute,
                 base_heights=base_heights,
@@ -266,8 +268,46 @@ class Geodude:
                 viewer=viewer,
                 executor_type=executor_type,
             )
-            if result is not None:
-                return result
+
+        # Multiple arms: race in parallel, first success wins
+        def plan_arm(a: Arm) -> PlanResult | Trajectory | None:
+            return a.plan_to_pose(
+                pose,
+                execute=False,  # Don't execute in thread
+                base_heights=base_heights,
+                timeout=timeout,
+                seed=seed,
+                viewer=None,
+                executor_type=executor_type,
+            )
+
+        with ThreadPoolExecutor(max_workers=len(arms)) as executor:
+            futures = {executor.submit(plan_arm, a): a for a in arms}
+
+            while futures:
+                done, _ = wait(futures.keys(), timeout=0.1, return_when=FIRST_COMPLETED)
+                for future in done:
+                    result = future.result()
+                    if result is not None:
+                        # Cancel remaining
+                        for f in futures:
+                            f.cancel()
+
+                        # Execute if requested
+                        if execute:
+                            if isinstance(result, PlanResult):
+                                arm_obj = result.arm
+                                base = self.left_base if "left" in arm_obj.config.name else self.right_base
+                                if result.base_trajectory is not None and base is not None:
+                                    base.move_to(result.base_height, viewer=viewer, executor_type=executor_type)
+                                arm_obj.execute(result.arm_trajectory, viewer=viewer, executor_type=executor_type)
+                            else:
+                                # Plain Trajectory - need to find which arm
+                                winning_arm = futures[future]
+                                winning_arm.execute(result, viewer=viewer, executor_type=executor_type)
+
+                        return result
+                    del futures[future]
 
         return None
 
@@ -285,11 +325,11 @@ class Geodude:
     ) -> PlanResult | Trajectory | None:
         """Plan to a TSR with either arm.
 
-        If no arm is specified, tries both arms and returns the first success.
+        If no arm is specified, races both arms in parallel and returns first success.
 
         Args:
             tsr: Target TSR, or list of TSRs (planner picks one)
-            arm: Which arm to use: Arm instance, "left", "right", or None (try both)
+            arm: Which arm to use: Arm instance, "left", "right", or None (race both)
             execute: If True (default), execute trajectory after planning.
                     If False, return trajectory without executing.
             base_heights: Optional list of base heights to search in parallel.
@@ -305,8 +345,9 @@ class Geodude:
         """
         arms = self._resolve_arms(arm)
 
-        for a in arms:
-            result = a.plan_to_tsr(
+        # Single arm: plan directly
+        if len(arms) == 1:
+            return arms[0].plan_to_tsr(
                 tsr,
                 execute=execute,
                 base_heights=base_heights,
@@ -315,8 +356,46 @@ class Geodude:
                 viewer=viewer,
                 executor_type=executor_type,
             )
-            if result is not None:
-                return result
+
+        # Multiple arms: race in parallel, first success wins
+        def plan_arm(a: Arm) -> PlanResult | Trajectory | None:
+            return a.plan_to_tsr(
+                tsr,
+                execute=False,  # Don't execute in thread
+                base_heights=base_heights,
+                timeout=timeout,
+                seed=seed,
+                viewer=None,
+                executor_type=executor_type,
+            )
+
+        with ThreadPoolExecutor(max_workers=len(arms)) as executor:
+            futures = {executor.submit(plan_arm, a): a for a in arms}
+
+            while futures:
+                done, _ = wait(futures.keys(), timeout=0.1, return_when=FIRST_COMPLETED)
+                for future in done:
+                    result = future.result()
+                    if result is not None:
+                        # Cancel remaining
+                        for f in futures:
+                            f.cancel()
+
+                        # Execute if requested
+                        if execute:
+                            if isinstance(result, PlanResult):
+                                arm_obj = result.arm
+                                base = self.left_base if "left" in arm_obj.config.name else self.right_base
+                                if result.base_trajectory is not None and base is not None:
+                                    base.move_to(result.base_height, viewer=viewer, executor_type=executor_type)
+                                arm_obj.execute(result.arm_trajectory, viewer=viewer, executor_type=executor_type)
+                            else:
+                                # Plain Trajectory - need to find which arm
+                                winning_arm = futures[future]
+                                winning_arm.execute(result, viewer=viewer, executor_type=executor_type)
+
+                        return result
+                    del futures[future]
 
         return None
 
@@ -335,10 +414,11 @@ class Geodude:
         """Plan to a goal (configuration, pose, or TSR) with either arm.
 
         Unified planning method that dispatches based on goal type.
+        If no arm is specified, races both arms in parallel and returns first success.
 
         Args:
             goal: Target configuration, pose, TSR, or list of goals
-            arm: Which arm to use: Arm instance, "left", "right", or None (try both)
+            arm: Which arm to use: Arm instance, "left", "right", or None (race both)
             execute: If True (default), execute trajectory after planning.
                     If False, return trajectory without executing.
             base_heights: Optional list of base heights to search in parallel.
@@ -353,8 +433,9 @@ class Geodude:
         """
         arms = self._resolve_arms(arm)
 
-        for a in arms:
-            result = a.plan_to(
+        # Single arm: plan directly
+        if len(arms) == 1:
+            return arms[0].plan_to(
                 goal,
                 execute=execute,
                 base_heights=base_heights,
@@ -363,8 +444,46 @@ class Geodude:
                 viewer=viewer,
                 executor_type=executor_type,
             )
-            if result is not None:
-                return result
+
+        # Multiple arms: race in parallel, first success wins
+        def plan_arm(a: Arm) -> PlanResult | Trajectory | None:
+            return a.plan_to(
+                goal,
+                execute=False,  # Don't execute in thread
+                base_heights=base_heights,
+                timeout=timeout,
+                seed=seed,
+                viewer=None,
+                executor_type=executor_type,
+            )
+
+        with ThreadPoolExecutor(max_workers=len(arms)) as executor:
+            futures = {executor.submit(plan_arm, a): a for a in arms}
+
+            while futures:
+                done, _ = wait(futures.keys(), timeout=0.1, return_when=FIRST_COMPLETED)
+                for future in done:
+                    result = future.result()
+                    if result is not None:
+                        # Cancel remaining
+                        for f in futures:
+                            f.cancel()
+
+                        # Execute if requested
+                        if execute:
+                            if isinstance(result, PlanResult):
+                                arm_obj = result.arm
+                                base = self.left_base if "left" in arm_obj.config.name else self.right_base
+                                if result.base_trajectory is not None and base is not None:
+                                    base.move_to(result.base_height, viewer=viewer, executor_type=executor_type)
+                                arm_obj.execute(result.arm_trajectory, viewer=viewer, executor_type=executor_type)
+                            else:
+                                # Plain Trajectory - need to find which arm
+                                winning_arm = futures[future]
+                                winning_arm.execute(result, viewer=viewer, executor_type=executor_type)
+
+                        return result
+                    del futures[future]
 
         return None
 

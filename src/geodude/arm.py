@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import TYPE_CHECKING
 
 import mujoco
@@ -1480,9 +1481,10 @@ class Arm:
         viewer,
         executor_type: str,
     ) -> PlanResult | None:
-        """Plan arm motion at different base heights.
+        """Plan arm motion at different base heights in parallel.
 
-        Pre-filters heights by collision checking, then plans in parallel.
+        Pre-filters heights by collision checking, then races planners at
+        all valid heights. First successful plan wins.
 
         Args:
             poses: List of target poses (or None if using TSRs)
@@ -1518,86 +1520,103 @@ class Arm:
         if not reachable_heights:
             return None
 
-        # Plan at each reachable height
-        # TODO: Parallelize this with ThreadPoolExecutor
-        for height in reachable_heights:
-            # Create planner at this base height with timeout
-            config = CBiRRTConfig(
-                timeout=timeout,
-                max_iterations=5000,
-                step_size=0.1,
-                goal_bias=0.1,
-                smoothing_iterations=100,
-            )
-            planner = self.create_planner(
-                config=config,
-                base_joint_name=base.config.joint_name,
-                base_height=height,
-            )
+        # Get current arm configuration (shared across all planners)
+        q_start = self.get_joint_positions()
 
-            # Get current arm configuration
-            q_start = self.get_joint_positions()
+        # For pose goals, pre-compute IK candidates (same for all heights)
+        q_candidates = None
+        if poses is not None:
+            q_candidates = []
+            for p in poses:
+                solutions = self.inverse_kinematics(p, validate=True)
+                q_candidates.extend(solutions)
+            if not q_candidates:
+                return None
 
+        def plan_at_height(height: float) -> tuple[float, list | None]:
+            """Plan at a single base height. Returns (height, path) or (height, None)."""
             try:
+                config = CBiRRTConfig(
+                    timeout=timeout,
+                    max_iterations=5000,
+                    step_size=0.1,
+                    goal_bias=0.1,
+                    smoothing_iterations=100,
+                )
+                planner = self.create_planner(
+                    config=config,
+                    base_joint_name=base.config.joint_name,
+                    base_height=height,
+                )
+
                 if tsrs is not None:
                     path = planner.plan(q_start, goal_tsrs=tsrs, seed=seed)
-                elif poses is not None:
-                    # Solve IK for poses at this height
-                    # Note: We need to solve IK with base at target height
-                    # For now, try planning to configurations from IK at current height
-                    q_candidates = []
-                    for p in poses:
-                        solutions = self.inverse_kinematics(p, validate=True)
-                        q_candidates.extend(solutions)
-                    if not q_candidates:
-                        continue
-                    # Try each candidate
-                    path = None
+                    return (height, path)
+                elif q_candidates is not None:
+                    # Try each IK candidate
                     for q_goal in q_candidates:
                         try:
                             path = planner.plan(q_start, goal=q_goal, seed=seed)
                             if path is not None:
-                                break
+                                return (height, path)
                         except Exception:
                             continue
+                    return (height, None)
                 else:
-                    continue
-
-                if path is not None:
-                    # Success! Create trajectories
-                    arm_trajectory = Trajectory.from_path(
-                        path,
-                        vel_limits=self.config.kinematic_limits.velocity,
-                        acc_limits=self.config.kinematic_limits.acceleration,
-                        entity=self.config.name,
-                        joint_names=self.config.joint_names,
-                    )
-
-                    base_trajectory = create_linear_trajectory(
-                        start=current_height,
-                        end=height,
-                        vel_limit=base.config.kinematic_limits.velocity,
-                        acc_limit=base.config.kinematic_limits.acceleration,
-                        entity=base.config.name,
-                        joint_names=base.config.joint_names,
-                    )
-
-                    result = PlanResult(
-                        arm=self,
-                        arm_trajectory=arm_trajectory,
-                        base_trajectory=base_trajectory,
-                        base_height=height,
-                    )
-
-                    if execute:
-                        # Execute base first, then arm
-                        base.move_to(height, viewer=viewer, executor_type=executor_type)
-                        self.execute(arm_trajectory, viewer=viewer, executor_type=executor_type)
-
-                    return result
-
+                    return (height, None)
             except Exception:
-                continue
+                return (height, None)
+
+        # Race all heights in parallel, first success wins
+        with ThreadPoolExecutor(max_workers=len(reachable_heights)) as executor:
+            futures = {
+                executor.submit(plan_at_height, h): h
+                for h in reachable_heights
+            }
+
+            while futures:
+                done, _ = wait(futures.keys(), timeout=0.1, return_when=FIRST_COMPLETED)
+                for future in done:
+                    height, path = future.result()
+                    if path is not None:
+                        # Cancel remaining futures
+                        for f in futures:
+                            f.cancel()
+
+                        # Build result
+                        arm_trajectory = Trajectory.from_path(
+                            path,
+                            vel_limits=self.config.kinematic_limits.velocity,
+                            acc_limits=self.config.kinematic_limits.acceleration,
+                            entity=self.config.name,
+                            joint_names=self.config.joint_names,
+                        )
+
+                        base_trajectory = create_linear_trajectory(
+                            start=current_height,
+                            end=height,
+                            vel_limit=base.config.kinematic_limits.velocity,
+                            acc_limit=base.config.kinematic_limits.acceleration,
+                            entity=base.config.name,
+                            joint_names=base.config.joint_names,
+                        )
+
+                        result = PlanResult(
+                            arm=self,
+                            arm_trajectory=arm_trajectory,
+                            base_trajectory=base_trajectory,
+                            base_height=height,
+                        )
+
+                        if execute:
+                            # Execute base first, then arm
+                            base.move_to(height, viewer=viewer, executor_type=executor_type)
+                            self.execute(arm_trajectory, viewer=viewer, executor_type=executor_type)
+
+                        return result
+
+                    # Remove completed future
+                    del futures[future]
 
         return None
 

@@ -60,13 +60,14 @@ def plan_first_success(
 
     start = arm.get_joint_positions()
 
-    # Create config with timeout
+    # Create config with timeout, using arm's planning defaults
+    defaults = arm.config.planning_defaults
     config = CBiRRTConfig(
         timeout=timeout,
-        max_iterations=5000,
-        step_size=0.1,
-        goal_bias=0.1,
-        smoothing_iterations=100,
+        max_iterations=defaults.max_iterations,
+        step_size=defaults.step_size,
+        goal_bias=defaults.goal_bias,
+        smoothing_iterations=defaults.smoothing_iterations,
     )
 
     def plan_goal(goal):
@@ -133,13 +134,14 @@ def plan_best_of_all(
 
     start = arm.get_joint_positions()
 
-    # Create config with timeout
+    # Create config with timeout, using arm's planning defaults
+    defaults = arm.config.planning_defaults
     config = CBiRRTConfig(
         timeout=timeout,
-        max_iterations=5000,
-        step_size=0.1,
-        goal_bias=0.1,
-        smoothing_iterations=100,
+        max_iterations=defaults.max_iterations,
+        step_size=defaults.step_size,
+        goal_bias=defaults.goal_bias,
+        smoothing_iterations=defaults.smoothing_iterations,
     )
 
     def plan_goal(goal):

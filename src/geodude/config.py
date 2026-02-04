@@ -83,6 +83,50 @@ class KinematicLimits:
 
 
 @dataclass
+class PlanningDefaults:
+    """Default parameters for motion planning.
+
+    These values are used by CBiRRT and the unified planning API.
+    Adjust for your specific use case:
+    - Increase timeout for complex scenes
+    - Reduce max_iterations for faster failure detection
+    - Adjust step_size based on obstacle density
+    """
+
+    # Planning timeout (seconds)
+    timeout: float = 30.0
+
+    # CBiRRT parameters
+    max_iterations: int = 5000
+    step_size: float = 0.1  # RRT step size in radians
+    goal_bias: float = 0.1  # Probability of sampling goal vs random
+    smoothing_iterations: int = 100  # Path smoothing passes
+
+    @classmethod
+    def default(cls) -> "PlanningDefaults":
+        """Default planning parameters."""
+        return cls()
+
+    @classmethod
+    def fast(cls) -> "PlanningDefaults":
+        """Fast planning with shorter timeout and fewer iterations."""
+        return cls(
+            timeout=10.0,
+            max_iterations=2000,
+            smoothing_iterations=50,
+        )
+
+    @classmethod
+    def thorough(cls) -> "PlanningDefaults":
+        """Thorough planning with longer timeout for difficult problems."""
+        return cls(
+            timeout=60.0,
+            max_iterations=10000,
+            smoothing_iterations=200,
+        )
+
+
+@dataclass
 class EntityConfig:
     """Base configuration for a controllable entity.
 
@@ -109,6 +153,7 @@ class ArmConfig(EntityConfig):
     gripper_bodies: list[str] = field(default_factory=list)  # Bodies for collision filtering
     kinematic_limits: KinematicLimits = field(default_factory=KinematicLimits.ur5e_default)
     tracking_thresholds: TrackingThresholds = field(default_factory=TrackingThresholds.default)
+    planning_defaults: PlanningDefaults = field(default_factory=PlanningDefaults.default)
 
     def __post_init__(self):
         """Set entity_type to arm."""

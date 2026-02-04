@@ -40,6 +40,10 @@ def __getattr__(name):
     if name == "EntityConfig":
         from geodude.config import EntityConfig
         return EntityConfig
+    # Planning defaults
+    if name == "PlanningDefaults":
+        from geodude.config import PlanningDefaults
+        return PlanningDefaults
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
@@ -47,6 +51,7 @@ __all__ = [
     "VentionBase",
     "VentionBaseConfig",
     "EntityConfig",
+    "PlanningDefaults",
     "Trajectory",
     "PlanResult",
     # TSR utilities

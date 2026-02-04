@@ -563,11 +563,12 @@ class Arm:
             ik_solver = ArmIKSolver(self)
             collision_checker = self._get_collision_checker()
 
+            defaults = self.config.planning_defaults
             planner_config = config or CBiRRTConfig(
-                max_iterations=5000,
-                step_size=0.1,
-                goal_bias=0.1,
-                smoothing_iterations=100,  # Default smoothing
+                max_iterations=defaults.max_iterations,
+                step_size=defaults.step_size,
+                goal_bias=defaults.goal_bias,
+                smoothing_iterations=defaults.smoothing_iterations,
             )
 
             planner = CBiRRT(
@@ -671,11 +672,12 @@ class Arm:
         )
 
         # 7. Create and return planner
+        defaults = self.config.planning_defaults
         planner_config = config or CBiRRTConfig(
-            max_iterations=5000,
-            step_size=0.1,
-            goal_bias=0.1,
-            smoothing_iterations=100,
+            max_iterations=defaults.max_iterations,
+            step_size=defaults.step_size,
+            goal_bias=defaults.goal_bias,
+            smoothing_iterations=defaults.smoothing_iterations,
         )
 
         return CBiRRT(
@@ -1046,11 +1048,13 @@ class Arm:
 
         q_start = self.get_joint_positions()
 
+        defaults = self.config.planning_defaults
         config = CBiRRTConfig(
             timeout=timeout,
-            step_size=0.1,
-            goal_bias=0.1,
-            smoothing_iterations=100,  # Default smoothing
+            max_iterations=defaults.max_iterations,
+            step_size=defaults.step_size,
+            goal_bias=defaults.goal_bias,
+            smoothing_iterations=defaults.smoothing_iterations,
         )
         planner = self._get_planner(config)
 
@@ -1098,12 +1102,13 @@ class Arm:
 
         q_start = self.get_joint_positions()
 
+        defaults = self.config.planning_defaults
         config = CBiRRTConfig(
-            max_iterations=5000,
-            step_size=0.1,
-            goal_bias=0.1,
             timeout=timeout,
-            smoothing_iterations=100,  # Default smoothing
+            max_iterations=defaults.max_iterations,
+            step_size=defaults.step_size,
+            goal_bias=defaults.goal_bias,
+            smoothing_iterations=defaults.smoothing_iterations,
         )
         planner = self._get_planner(config)
 
@@ -1533,15 +1538,17 @@ class Arm:
             if not q_candidates:
                 return None
 
+        defaults = self.config.planning_defaults
+
         def plan_at_height(height: float) -> tuple[float, list | None]:
             """Plan at a single base height. Returns (height, path) or (height, None)."""
             try:
                 config = CBiRRTConfig(
                     timeout=timeout,
-                    max_iterations=5000,
-                    step_size=0.1,
-                    goal_bias=0.1,
-                    smoothing_iterations=100,
+                    max_iterations=defaults.max_iterations,
+                    step_size=defaults.step_size,
+                    goal_bias=defaults.goal_bias,
+                    smoothing_iterations=defaults.smoothing_iterations,
                 )
                 planner = self.create_planner(
                     config=config,

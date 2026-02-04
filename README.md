@@ -12,7 +12,7 @@ Geodude controls a bimanual UR5e robot system—two arms on height-adjustable Ve
 
 - **Motion planning**: Find collision-free paths using CBiRRT with TSR goals
 - **Grasp-aware collision**: Objects you're holding don't collide with your arm
-- **Parallel planning**: Plan both arms simultaneously, or try multiple goals at once
+- **Unified planning API**: Simple `plan_to()` with automatic arm selection and height search
 - **Time-optimal trajectories**: TOPP-RA retiming respects joint velocity/acceleration limits
 
 ## Installation
@@ -64,50 +64,47 @@ if path:
     robot.right_arm.close_gripper()
 ```
 
-## Parallel Planning
+## Unified Planning API
 
-Plan multiple goals simultaneously—first success wins:
-
-```python
-from geodude import plan_first_success
-
-# Try multiple grasp approaches in parallel
-path = plan_first_success(robot.right_arm, [tsr1, tsr2, tsr3], timeout=10.0)
-```
-
-Plan both arms at once:
+The `plan_to_tsr()` method handles arm selection and base height search automatically:
 
 ```python
-from concurrent.futures import ThreadPoolExecutor
-
-with ThreadPoolExecutor(max_workers=2) as executor:
-    left = executor.submit(
-        lambda: robot.left_arm.create_planner().plan(start, goal=left_goal)
-    )
-    right = executor.submit(
-        lambda: robot.right_arm.create_planner().plan(start, goal=right_goal)
-    )
-    left_path, right_path = left.result(), right.result()
-```
-
-## Height-Adaptive Planning
-
-The Vention bases allow height adjustment. Plan at multiple heights to find reachable goals:
-
-```python
-from geodude.parallel import plan_with_base_heights
-
-# Try planning at different base heights
-heights = [0.0, 0.2, 0.4]
-winning_height, path = plan_with_base_heights(
-    robot.right_arm,
-    robot.right_base,
+# Plan with both arms at multiple base heights
+# Default: randomly picks first arm, interleaves at each height level
+result = robot.plan_to_tsr(
     grasp_tsr,
-    heights
+    base_heights=[0.2, 0.0, 0.4],  # Middle height first (most versatile)
+    execute=False,
 )
-if path:
-    robot.right_base.set_height(winning_height)
-    robot.right_arm.execute(path)
+
+if result:
+    print(f"Success: {result.arm.config.name} @ {result.base_height}m")
+    # Execute manually or use execute=True
+```
+
+For explicit control over the search order:
+
+```python
+# Explicit (arm, height) sequence
+result = robot.plan_to_tsr(
+    grasp_tsr,
+    sequence=[
+        ("right", 0.2),
+        ("left", 0.2),
+        ("right", 0.0),
+        ("left", 0.0),
+    ],
+)
+```
+
+Single-arm planning with height search:
+
+```python
+# Plan with one arm at multiple heights
+result = robot.right_arm.plan_to_tsr(
+    grasp_tsr,
+    base_heights=[0.2, 0.0, 0.4],
+)
 ```
 
 ## Grasp Management

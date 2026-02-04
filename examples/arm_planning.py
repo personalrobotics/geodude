@@ -4,6 +4,7 @@
 Demonstrates:
 - Unified plan_to() API with execute parameter
 - Planning at different Vention base heights with base_heights parameter
+- Heights are tried in order (put most likely first for fastest results)
 - PlanResult for compound base+arm trajectories
 
 Usage:
@@ -105,7 +106,7 @@ def main():
                     heights = sorted(set([current_height, 0.0, 0.15, 0.3, 0.45]))
 
                     t0 = time.perf_counter()
-                    # NEW API: base_heights triggers parallel height search
+                    # NEW API: base_heights triggers height search (in order)
                     # Returns PlanResult with both base and arm trajectories
                     result = robot.left_arm.plan_to(
                         goal,

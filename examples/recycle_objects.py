@@ -2,8 +2,9 @@
 """Bimanual Recycling Demo - Both arms race to pick and place objects.
 
 Demonstrates the unified planning API:
-- robot.plan_to_tsr() tries both arms automatically
-- base_heights parameter for parallel height search
+- robot.plan_to_tsr() tries both arms with interleaved heights
+- Randomly picks which arm goes first, alternates at each height level
+- base_heights parameter specifies heights (put most likely first)
 - PlanResult tells you which arm won
 
 Usage:
@@ -32,8 +33,8 @@ TSR_DIR = Path(__file__).parent.parent / "tsr_templates"
 RIGHT_BIN_POS = [0.75, -0.35, 0.50]
 LEFT_BIN_POS = [-0.75, -0.35, 0.50]
 
-# Base heights to try in parallel
-BASE_HEIGHTS = [0.0, 0.2, 0.4]
+# Base heights to try - middle height first (most versatile)
+BASE_HEIGHTS = [0.2, 0.0, 0.4]
 
 
 def sample_can_placement(model, data):
@@ -89,20 +90,24 @@ def load_place_tsr(model, data, bin_name):
 
 
 def plan_bimanual_grasp(robot, grasp_tsr, timeout=15.0):
-    """Plan grasp with both arms at multiple heights using unified API.
+    """Plan grasp with both arms at multiple heights.
 
-    NEW API: robot.plan_to_tsr() automatically tries both arms.
-    The base_heights parameter searches multiple heights in parallel.
-    Returns PlanResult which tells you which arm won.
+    Uses the unified robot.plan_to_tsr API which:
+    - Randomly picks which arm to try first
+    - Interleaves arms at each height: (arm1, h1), (arm2, h1), (arm1, h2), ...
+    - Returns PlanResult telling you which arm won
+
+    The order of base_heights matters - put most likely heights first.
     """
-    # One line replaces 30+ lines of ThreadPoolExecutor code!
-    result = robot.plan_to_tsr(
+    # Default behavior: randomly pick first arm, interleave at each height
+    # With BASE_HEIGHTS = [0.2, 0.0, 0.4], sequence might be:
+    #   (left, 0.2), (right, 0.2), (left, 0.0), (right, 0.0), ...
+    return robot.plan_to_tsr(
         grasp_tsr,
-        base_heights=BASE_HEIGHTS,
-        execute=False,  # Don't execute yet, we need to set up gripper first
+        base_heights=BASE_HEIGHTS,  # [0.2, 0.0, 0.4] - middle first
+        execute=False,  # Don't execute yet - we need to coordinate base/arm
         timeout=timeout,
     )
-    return result  # PlanResult or None
 
 
 def run_cycle(robot, executors, viewer, use_physics, controller=None, cycle=1, base_executor="kinematic"):
@@ -175,7 +180,7 @@ def run_cycle(robot, executors, viewer, use_physics, controller=None, cycle=1, b
     print(f"\n4. Planning to {bin_name}...", flush=True)
     place_tsr = load_place_tsr(model, data, bin_name)
     # NEW API: plan_to_tsr with execute=False
-    place_traj = arm.plan_to_tsr(place_tsr, execute=False, timeout=15.0)
+    place_traj = arm.plan_to_tsr(place_tsr, execute=False, timeout=30.0)
 
     if place_traj is None:
         print("   Failed!", flush=True)

@@ -4,13 +4,20 @@ import mujoco
 import numpy as np
 import pytest
 
-from geodude_assets import get_model_path
-
-GEODUDE_XML = get_model_path()
+# geodude_assets is optional - only needed for full integration tests
+try:
+    from geodude_assets import get_model_path
+    GEODUDE_XML = get_model_path()
+    GEODUDE_ASSETS_AVAILABLE = True
+except ImportError:
+    GEODUDE_XML = None
+    GEODUDE_ASSETS_AVAILABLE = False
 
 
 def _load_geodude_with_objects():
     """Load geodude model with test objects added for grasp testing."""
+    if not GEODUDE_ASSETS_AVAILABLE:
+        pytest.skip("geodude_assets not available")
     with open(GEODUDE_XML) as f:
         xml_content = f.read()
 

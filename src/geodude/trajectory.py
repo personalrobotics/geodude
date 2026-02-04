@@ -17,12 +17,17 @@ class Trajectory:
 
     The trajectory is dense (waypoints at control frequency) to avoid
     needing spline evaluation in the control loop.
+
+    Entity information (entity name and joint_names) enables hardware
+    deployment by identifying which joints to command.
     """
 
     timestamps: np.ndarray  # (N,) seconds from start
     positions: np.ndarray  # (N, dof) joint positions in radians
     velocities: np.ndarray  # (N, dof) joint velocities in rad/s
     accelerations: np.ndarray  # (N, dof) joint accelerations in rad/s²
+    entity: str | None = None  # Entity name: "left_arm", "right_base", etc.
+    joint_names: list[str] | None = None  # MuJoCo joint names for validation
 
     def __post_init__(self):
         """Validate trajectory dimensions."""
@@ -48,6 +53,14 @@ class Trajectory:
                 f"DOF mismatch: positions {self.positions.shape[1]} "
                 f"vs velocities {self.velocities.shape[1]}"
             )
+
+        # Validate joint_names length matches DOF if provided
+        if self.joint_names is not None:
+            if len(self.joint_names) != self.positions.shape[1]:
+                raise ValueError(
+                    f"joint_names length {len(self.joint_names)} doesn't match "
+                    f"DOF {self.positions.shape[1]}"
+                )
 
     @property
     def duration(self) -> float:
@@ -102,6 +115,8 @@ class Trajectory:
         vel_limits: np.ndarray,
         acc_limits: np.ndarray,
         control_dt: float = 0.008,  # 125 Hz
+        entity: str | None = None,
+        joint_names: list[str] | None = None,
     ) -> "Trajectory":
         """Create time-optimal trajectory from geometric path using TOPP-RA.
 
@@ -110,6 +125,8 @@ class Trajectory:
             vel_limits: Joint velocity limits in rad/s (shape: (dof,))
             acc_limits: Joint acceleration limits in rad/s² (shape: (dof,))
             control_dt: Control timestep in seconds (default: 125 Hz)
+            entity: Entity name for hardware deployment (e.g., "left_arm")
+            joint_names: MuJoCo joint names for validation
 
         Returns:
             Trajectory with time-optimal parameterization respecting limits
@@ -153,6 +170,8 @@ class Trajectory:
                 positions=path_array,
                 velocities=np.zeros_like(path_array),
                 accelerations=np.zeros_like(path_array),
+                entity=entity,
+                joint_names=joint_names,
             )
 
         # Create path parameterized from 0 to 1 (TOPP-RA convention)
@@ -205,6 +224,8 @@ class Trajectory:
             positions=positions,
             velocities=velocities,
             accelerations=accelerations,
+            entity=entity,
+            joint_names=joint_names,
         )
 
 
@@ -214,6 +235,8 @@ def create_linear_trajectory(
     vel_limit: float,
     acc_limit: float,
     control_dt: float = 0.008,
+    entity: str | None = None,
+    joint_names: list[str] | None = None,
 ) -> Trajectory:
     """Generate trapezoidal velocity profile for 1D linear motion.
 
@@ -235,6 +258,8 @@ def create_linear_trajectory(
         vel_limit: Maximum velocity in m/s
         acc_limit: Maximum acceleration in m/s²
         control_dt: Control timestep in seconds (default: 125 Hz)
+        entity: Entity name for hardware deployment (e.g., "left_base")
+        joint_names: MuJoCo joint names for validation
 
     Returns:
         Trajectory object with 1 DOF (dof=1)
@@ -257,6 +282,8 @@ def create_linear_trajectory(
             positions=np.array([[start]]),
             velocities=np.array([[0.0]]),
             accelerations=np.array([[0.0]]),
+            entity=entity,
+            joint_names=joint_names,
         )
 
     # Compute time to reach max velocity and distance covered during acceleration
@@ -318,4 +345,6 @@ def create_linear_trajectory(
         positions=np.array(positions),
         velocities=np.array(velocities),
         accelerations=np.array(accelerations),
+        entity=entity,
+        joint_names=joint_names,
     )

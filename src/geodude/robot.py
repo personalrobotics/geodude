@@ -1,5 +1,6 @@
 """Main Geodude robot interface."""
 
+import random
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,8 @@ from mj_environment import Environment
 from geodude.arm import Arm
 from geodude.config import GeodudConfig
 from geodude.grasp_manager import GraspManager
+from geodude.planning import PlanResult
+from geodude.trajectory import Trajectory
 from geodude.vention_base import VentionBase
 
 
@@ -219,6 +222,431 @@ class Geodude:
             raise ValueError(f"Keyframe '{name}' not found in model")
         mujoco.mj_resetDataKeyframe(self.model, self.data, key_id)
         mujoco.mj_forward(self.model, self.data)
+
+    def plan_to_pose(
+        self,
+        pose: np.ndarray | list[np.ndarray],
+        *,
+        sequence: list[tuple[Arm | str, float]] | None = None,
+        arm: Arm | str | None = None,
+        execute: bool = True,
+        base_heights: list[float] | None = None,
+        strategy: str = "first",
+        timeout: float = 30.0,
+        seed: int | None = None,
+        viewer=None,
+        executor_type: str = "physics",
+    ) -> PlanResult | Trajectory | None:
+        """Plan to an end-effector pose with either arm.
+
+        If no arm is specified, tries both arms with interleaved heights.
+
+        Args:
+            pose: Target 4x4 pose matrix, or list of poses (planner picks one)
+            sequence: Optional explicit list of (arm, height) tuples to try in order.
+                     Each tuple is (Arm | "left" | "right", height_float).
+                     If provided, base_heights and arm are ignored.
+            arm: Which arm to use: Arm instance, "left", "right", or None (try both)
+            execute: If True (default), execute trajectory after planning.
+                    If False, return trajectory without executing.
+            base_heights: Optional list of base heights to search.
+                         Default sequence interleaves arms at each height.
+            strategy: Planning strategy:
+                     - "first": Return first successful plan (fastest)
+                     - "best": Try all options, return shortest path
+            timeout: Planning timeout in seconds
+            seed: Random seed for reproducibility
+            viewer: Optional MuJoCo viewer for execution visualization
+            executor_type: "physics" or "kinematic" for execution
+
+        Returns:
+            - Trajectory or PlanResult if planning succeeded
+            - None if planning failed with all arms
+        """
+        return self._plan_with_sequence(
+            goal=pose,
+            goal_type="pose",
+            sequence=sequence,
+            arm=arm,
+            execute=execute,
+            base_heights=base_heights,
+            strategy=strategy,
+            timeout=timeout,
+            seed=seed,
+            viewer=viewer,
+            executor_type=executor_type,
+        )
+
+    def plan_to_tsr(
+        self,
+        tsr,
+        *,
+        sequence: list[tuple[Arm | str, float]] | None = None,
+        arm: Arm | str | None = None,
+        execute: bool = True,
+        base_heights: list[float] | None = None,
+        strategy: str = "first",
+        timeout: float = 30.0,
+        seed: int | None = None,
+        viewer=None,
+        executor_type: str = "physics",
+    ) -> PlanResult | Trajectory | None:
+        """Plan to a TSR with either arm.
+
+        If no arm is specified, tries both arms with interleaved heights.
+
+        Args:
+            tsr: Target TSR, or list of TSRs (planner picks one)
+            sequence: Optional explicit list of (arm, height) tuples to try in order.
+                     Each tuple is (Arm | "left" | "right", height_float).
+                     If provided, base_heights and arm are ignored.
+            arm: Which arm to use: Arm instance, "left", "right", or None (try both)
+            execute: If True (default), execute trajectory after planning.
+                    If False, return trajectory without executing.
+            base_heights: Optional list of base heights to search.
+                         Default sequence interleaves arms at each height.
+            strategy: Planning strategy:
+                     - "first": Return first successful plan (fastest)
+                     - "best": Try all options, return shortest path
+            timeout: Planning timeout in seconds
+            seed: Random seed for reproducibility
+            viewer: Optional MuJoCo viewer for execution visualization
+            executor_type: "physics" or "kinematic" for execution
+
+        Returns:
+            - Trajectory or PlanResult if planning succeeded
+            - None if planning failed with all arms
+
+        Example:
+            # Default: interleaved arms at each height, random first arm
+            robot.plan_to_tsr(tsr, base_heights=[0.2, 0.0, 0.4])
+
+            # Explicit sequence for fine control
+            robot.plan_to_tsr(tsr, sequence=[
+                ("right", 0.2),
+                ("left", 0.2),
+                ("right", 0.0),
+            ])
+        """
+        return self._plan_with_sequence(
+            goal=tsr,
+            goal_type="tsr",
+            sequence=sequence,
+            arm=arm,
+            execute=execute,
+            base_heights=base_heights,
+            strategy=strategy,
+            timeout=timeout,
+            seed=seed,
+            viewer=viewer,
+            executor_type=executor_type,
+        )
+
+    def plan_to(
+        self,
+        goal: np.ndarray | list,
+        *,
+        sequence: list[tuple[Arm | str, float]] | None = None,
+        arm: Arm | str | None = None,
+        execute: bool = True,
+        base_heights: list[float] | None = None,
+        strategy: str = "first",
+        timeout: float = 30.0,
+        seed: int | None = None,
+        viewer=None,
+        executor_type: str = "physics",
+    ) -> PlanResult | Trajectory | None:
+        """Plan to a goal (configuration, pose, or TSR) with either arm.
+
+        Unified planning method that dispatches based on goal type.
+        If no arm is specified, tries both arms with interleaved heights.
+
+        Args:
+            goal: Target configuration, pose, TSR, or list of goals
+            sequence: Optional explicit list of (arm, height) tuples to try in order.
+                     Each tuple is (Arm | "left" | "right", height_float).
+                     If provided, base_heights and arm are ignored.
+            arm: Which arm to use: Arm instance, "left", "right", or None (try both)
+            execute: If True (default), execute trajectory after planning.
+                    If False, return trajectory without executing.
+            base_heights: Optional list of base heights to search.
+                         Default sequence interleaves arms at each height.
+            strategy: Planning strategy:
+                     - "first": Return first successful plan (fastest)
+                     - "best": Try all options, return shortest path
+            timeout: Planning timeout in seconds
+            seed: Random seed for reproducibility
+            viewer: Optional MuJoCo viewer for execution visualization
+            executor_type: "physics" or "kinematic" for execution
+
+        Returns:
+            - Trajectory or PlanResult if planning succeeded
+            - None if planning failed
+        """
+        return self._plan_with_sequence(
+            goal=goal,
+            goal_type="goal",
+            sequence=sequence,
+            arm=arm,
+            execute=execute,
+            base_heights=base_heights,
+            strategy=strategy,
+            timeout=timeout,
+            seed=seed,
+            viewer=viewer,
+            executor_type=executor_type,
+        )
+
+    def _resolve_arms(self, arm: Arm | str | None) -> list[Arm]:
+        """Resolve arm specification to list of Arm instances.
+
+        Args:
+            arm: Arm instance, "left", "right", or None (both arms)
+
+        Returns:
+            List of Arm instances to try
+        """
+        if arm is None:
+            return [self._right_arm, self._left_arm]  # Try right first (has gripper)
+        elif isinstance(arm, str):
+            if arm == "left" or arm == "left_arm":
+                return [self._left_arm]
+            elif arm == "right" or arm == "right_arm":
+                return [self._right_arm]
+            else:
+                raise ValueError(f"Unknown arm name: {arm}")
+        elif isinstance(arm, Arm):
+            return [arm]
+        else:
+            raise ValueError(f"Invalid arm specification: {arm}")
+
+    def _resolve_arm(self, arm: Arm | str) -> Arm:
+        """Resolve a single arm specification to an Arm instance."""
+        if isinstance(arm, Arm):
+            return arm
+        elif arm == "left" or arm == "left_arm":
+            return self._left_arm
+        elif arm == "right" or arm == "right_arm":
+            return self._right_arm
+        else:
+            raise ValueError(f"Unknown arm name: {arm}")
+
+    def _get_base_for_arm(self, arm: Arm) -> VentionBase | None:
+        """Get the base associated with an arm."""
+        if "left" in arm.config.name:
+            return self.left_base
+        else:
+            return self.right_base
+
+    def _build_default_sequence(
+        self,
+        arms: list[Arm],
+        base_heights: list[float] | None,
+    ) -> list[tuple[Arm, float]]:
+        """Build default interleaved sequence of (arm, height) pairs.
+
+        Default behavior:
+        - Randomly pick which arm goes first
+        - At each height level, try both arms before moving to next height
+        - If no base_heights, use current height only
+
+        Args:
+            arms: List of arms to include
+            base_heights: Heights to try (None = current height only)
+
+        Returns:
+            List of (arm, height) tuples in order to try
+        """
+        # Randomly shuffle arm order
+        arms = list(arms)  # Copy to avoid mutation
+        random.shuffle(arms)
+
+        # Determine heights to use
+        if base_heights is None or len(base_heights) == 0:
+            # Use current height for each arm (or 0.0 if no base)
+            heights = [0.0]  # Will be ignored if arm has no base
+        else:
+            heights = base_heights
+
+        # Build interleaved sequence: for each height, try all arms
+        sequence = []
+        for height in heights:
+            for arm in arms:
+                sequence.append((arm, height))
+
+        return sequence
+
+    def _plan_with_sequence(
+        self,
+        goal,
+        goal_type: str,
+        sequence: list[tuple[Arm | str, float]] | None,
+        arm: Arm | str | None,
+        execute: bool,
+        base_heights: list[float] | None,
+        strategy: str,
+        timeout: float,
+        seed: int | None,
+        viewer,
+        executor_type: str,
+    ) -> PlanResult | Trajectory | None:
+        """Core planning implementation with sequence support.
+
+        Args:
+            goal: The planning goal (TSR, pose, or configuration)
+            goal_type: "tsr" or "goal" to dispatch to correct arm method
+            sequence: Explicit (arm, height) sequence, or None to build default
+            arm: Arm specification (used if sequence is None)
+            execute: Whether to execute result
+            base_heights: Heights to search (used if sequence is None)
+            strategy: "first" or "best"
+            timeout: Per-attempt timeout
+            seed: Random seed
+            viewer: Viewer for execution
+            executor_type: Executor type for execution
+
+        Returns:
+            PlanResult, Trajectory, or None
+        """
+        if strategy not in ("first", "best"):
+            raise ValueError(f"strategy must be 'first' or 'best', got {strategy!r}")
+
+        # Build or resolve the sequence
+        if sequence is not None:
+            # Explicit sequence provided - resolve arm strings to Arm instances
+            resolved_sequence = [(self._resolve_arm(a), h) for a, h in sequence]
+        else:
+            # Build default sequence from arms and heights
+            arms = self._resolve_arms(arm)
+
+            # Special case: single arm without base_heights - delegate directly
+            if len(arms) == 1 and base_heights is None:
+                a = arms[0]
+                if goal_type == "tsr":
+                    return a.plan_to_tsr(
+                        goal,
+                        execute=execute,
+                        base_heights=None,
+                        strategy=strategy,
+                        timeout=timeout,
+                        seed=seed,
+                        viewer=viewer,
+                        executor_type=executor_type,
+                    )
+                elif goal_type == "pose":
+                    return a.plan_to_pose(
+                        goal,
+                        execute=execute,
+                        base_heights=None,
+                        strategy=strategy,
+                        timeout=timeout,
+                        seed=seed,
+                        viewer=viewer,
+                        executor_type=executor_type,
+                    )
+                else:  # goal_type == "goal"
+                    return a.plan_to(
+                        goal,
+                        execute=execute,
+                        base_heights=None,
+                        strategy=strategy,
+                        timeout=timeout,
+                        seed=seed,
+                        viewer=viewer,
+                        executor_type=executor_type,
+                    )
+
+            resolved_sequence = self._build_default_sequence(arms, base_heights)
+
+        # Execute the sequence
+        def plan_at(arm: Arm, height: float) -> PlanResult | Trajectory | None:
+            """Plan with a specific arm at a specific height."""
+            # Use base_heights=[height] to get a PlanResult with height info
+            if goal_type == "tsr":
+                return arm.plan_to_tsr(
+                    goal,
+                    execute=False,
+                    base_heights=[height],
+                    strategy="first",  # Single height, so first == only
+                    timeout=timeout,
+                    seed=seed,
+                    viewer=None,
+                    executor_type=executor_type,
+                )
+            elif goal_type == "pose":
+                return arm.plan_to_pose(
+                    goal,
+                    execute=False,
+                    base_heights=[height],
+                    strategy="first",
+                    timeout=timeout,
+                    seed=seed,
+                    viewer=None,
+                    executor_type=executor_type,
+                )
+            else:  # goal_type == "goal"
+                return arm.plan_to(
+                    goal,
+                    execute=False,
+                    base_heights=[height],
+                    strategy="first",
+                    timeout=timeout,
+                    seed=seed,
+                    viewer=None,
+                    executor_type=executor_type,
+                )
+
+        def execute_result(result: PlanResult | Trajectory, arm: Arm) -> None:
+            """Execute a planning result."""
+            if isinstance(result, PlanResult):
+                base = self._get_base_for_arm(result.arm)
+                if result.base_trajectory is not None and base is not None:
+                    base.move_to(result.base_height, viewer=viewer, executor_type=executor_type)
+                result.arm.execute(result.arm_trajectory, viewer=viewer, executor_type=executor_type)
+            else:
+                arm.execute(result, viewer=viewer, executor_type=executor_type)
+
+        if strategy == "first":
+            # Try sequence in order, return first success
+            for arm, height in resolved_sequence:
+                try:
+                    result = plan_at(arm, height)
+                    if result is not None:
+                        if execute:
+                            execute_result(result, arm)
+                        return result
+                except Exception:
+                    continue
+            return None
+
+        else:  # strategy == "best"
+            # Try all, collect successes, pick shortest
+            successful: list[tuple[Arm, PlanResult | Trajectory]] = []
+
+            for arm, height in resolved_sequence:
+                try:
+                    result = plan_at(arm, height)
+                    if result is not None:
+                        successful.append((arm, result))
+                except Exception:
+                    continue
+
+            if not successful:
+                return None
+
+            # Pick shortest trajectory
+            def trajectory_duration(item: tuple[Arm, PlanResult | Trajectory]) -> float:
+                _, result = item
+                if isinstance(result, PlanResult):
+                    return result.arm_trajectory.duration
+                return result.duration
+
+            best_arm, best_result = min(successful, key=trajectory_duration)
+
+            if execute:
+                execute_result(best_result, best_arm)
+
+            return best_result
 
     def _load_keyframe_poses(self) -> dict[str, dict[str, list[float]]]:
         """Extract named poses from MuJoCo keyframes.

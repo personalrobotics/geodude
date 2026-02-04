@@ -83,16 +83,81 @@ class KinematicLimits:
 
 
 @dataclass
-class ArmConfig:
+class PlanningDefaults:
+    """Default parameters for motion planning.
+
+    These values are used by CBiRRT and the unified planning API.
+    Adjust for your specific use case:
+    - Increase timeout for complex scenes
+    - Reduce max_iterations for faster failure detection
+    - Adjust step_size based on obstacle density
+    """
+
+    # Planning timeout (seconds)
+    timeout: float = 30.0
+
+    # CBiRRT parameters
+    max_iterations: int = 5000
+    step_size: float = 0.1  # RRT step size in radians
+    goal_bias: float = 0.1  # Probability of sampling goal vs random
+    smoothing_iterations: int = 100  # Path smoothing passes
+
+    @classmethod
+    def default(cls) -> "PlanningDefaults":
+        """Default planning parameters."""
+        return cls()
+
+    @classmethod
+    def fast(cls) -> "PlanningDefaults":
+        """Fast planning with shorter timeout and fewer iterations."""
+        return cls(
+            timeout=10.0,
+            max_iterations=2000,
+            smoothing_iterations=50,
+        )
+
+    @classmethod
+    def thorough(cls) -> "PlanningDefaults":
+        """Thorough planning with longer timeout for difficult problems."""
+        return cls(
+            timeout=60.0,
+            max_iterations=10000,
+            smoothing_iterations=200,
+        )
+
+
+@dataclass
+class EntityConfig:
+    """Base configuration for a controllable entity.
+
+    An entity is anything that can be controlled independently:
+    - Arms (6-DOF UR5e manipulators)
+    - Bases (1-DOF Vention linear actuators)
+    - Grippers (1-DOF Robotiq grippers)
+
+    This base class provides the common interface for hardware deployment,
+    where each entity's trajectory needs to know which joints to command.
+    """
+
+    name: str  # Unique identifier: "left_arm", "right_base", etc.
+    entity_type: str  # Category: "arm", "base", "gripper"
+    joint_names: list[str]  # MuJoCo joint names this entity controls
+
+
+@dataclass
+class ArmConfig(EntityConfig):
     """Configuration for a single arm."""
 
-    name: str
-    joint_names: list[str]
-    ee_site: str
-    gripper_actuator: str
-    gripper_bodies: list[str]  # Bodies that are part of gripper (for collision filtering)
+    ee_site: str = ""
+    gripper_actuator: str = ""
+    gripper_bodies: list[str] = field(default_factory=list)  # Bodies for collision filtering
     kinematic_limits: KinematicLimits = field(default_factory=KinematicLimits.ur5e_default)
     tracking_thresholds: TrackingThresholds = field(default_factory=TrackingThresholds.default)
+    planning_defaults: PlanningDefaults = field(default_factory=PlanningDefaults.default)
+
+    def __post_init__(self):
+        """Set entity_type to arm."""
+        object.__setattr__(self, "entity_type", "arm")
 
 
 @dataclass
@@ -130,17 +195,24 @@ class VentionKinematicLimits:
 
 
 @dataclass
-class VentionBaseConfig:
+class VentionBaseConfig(EntityConfig):
     """Configuration for a Vention linear actuator."""
 
-    name: str  # "left" or "right"
-    joint_name: str  # MuJoCo joint name
-    actuator_name: str  # MuJoCo actuator name
+    actuator_name: str = ""  # MuJoCo actuator name
     height_range: tuple[float, float] = (0.0, 0.5)  # meters (min, max)
     collision_check_resolution: float = 0.01  # meters between collision checks
     kinematic_limits: VentionKinematicLimits = field(
         default_factory=VentionKinematicLimits.default
     )
+
+    def __post_init__(self):
+        """Set entity_type to base."""
+        object.__setattr__(self, "entity_type", "base")
+
+    @property
+    def joint_name(self) -> str:
+        """MuJoCo joint name (alias for single-joint entity)."""
+        return self.joint_names[0] if self.joint_names else ""
 
 
 @dataclass
@@ -173,7 +245,8 @@ class GeodudConfig:
         return cls(
             model_path=get_model_path(),
             left_arm=ArmConfig(
-                name="left",
+                name="left_arm",
+                entity_type="arm",
                 joint_names=[
                     "left_ur5e/shoulder_pan_joint",
                     "left_ur5e/shoulder_lift_joint",
@@ -187,7 +260,8 @@ class GeodudConfig:
                 gripper_bodies=[],
             ),
             right_arm=ArmConfig(
-                name="right",
+                name="right_arm",
+                entity_type="arm",
                 joint_names=[
                     "right_ur5e/shoulder_pan_joint",
                     "right_ur5e/shoulder_lift_joint",
@@ -206,13 +280,15 @@ class GeodudConfig:
                 ],
             ),
             left_base=VentionBaseConfig(
-                name="left",
-                joint_name="left_arm_linear_vention",
+                name="left_base",
+                entity_type="base",
+                joint_names=["left_arm_linear_vention"],
                 actuator_name="left_linear_actuator",
             ),
             right_base=VentionBaseConfig(
-                name="right",
-                joint_name="right_arm_linear_vention",
+                name="right_base",
+                entity_type="base",
+                joint_names=["right_arm_linear_vention"],
                 actuator_name="right_linear_actuator",
             ),
             # Named poses are loaded from MuJoCo keyframes in the model XML.
@@ -232,8 +308,9 @@ class GeodudConfig:
         with open(path) as f:
             data = yaml.safe_load(f)
 
-        def parse_arm_config(arm_data: dict) -> ArmConfig:
+        def parse_arm_config(arm_data: dict, default_name: str) -> ArmConfig:
             """Parse arm config with optional kinematic limits and tracking thresholds."""
+            arm_data = arm_data.copy()  # Don't mutate original
             kinematic_limits = KinematicLimits.ur5e_default()
             if "kinematic_limits" in arm_data:
                 limits_data = arm_data.pop("kinematic_limits")
@@ -247,24 +324,38 @@ class GeodudConfig:
                 tracking_thresholds = TrackingThresholds(
                     max_error=np.deg2rad(thresh_data.get("max_error_deg", 10.0)),
                 )
+            # Ensure entity fields are present
+            arm_data.setdefault("name", default_name)
+            arm_data.setdefault("entity_type", "arm")
             return ArmConfig(
                 **arm_data,
                 kinematic_limits=kinematic_limits,
                 tracking_thresholds=tracking_thresholds,
             )
 
+        def parse_base_config(base_data: dict, default_name: str) -> VentionBaseConfig:
+            """Parse base config, converting joint_name to joint_names if needed."""
+            base_data = base_data.copy()  # Don't mutate original
+            # Handle legacy joint_name field
+            if "joint_name" in base_data and "joint_names" not in base_data:
+                base_data["joint_names"] = [base_data.pop("joint_name")]
+            # Ensure entity fields are present
+            base_data.setdefault("name", default_name)
+            base_data.setdefault("entity_type", "base")
+            return VentionBaseConfig(**base_data)
+
         left_base = None
         if "left_base" in data:
-            left_base = VentionBaseConfig(**data["left_base"])
+            left_base = parse_base_config(data["left_base"], "left_base")
 
         right_base = None
         if "right_base" in data:
-            right_base = VentionBaseConfig(**data["right_base"])
+            right_base = parse_base_config(data["right_base"], "right_base")
 
         return cls(
             model_path=Path(data["model_path"]),
-            left_arm=parse_arm_config(data["left_arm"]),
-            right_arm=parse_arm_config(data["right_arm"]),
+            left_arm=parse_arm_config(data["left_arm"], "left_arm"),
+            right_arm=parse_arm_config(data["right_arm"], "right_arm"),
             left_base=left_base,
             right_base=right_base,
             named_poses=data.get("named_poses", {}),

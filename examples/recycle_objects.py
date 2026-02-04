@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 """Bimanual Recycling Demo - Both arms race to pick and place objects.
 
+Demonstrates the unified planning API:
+- robot.plan_to_tsr() tries both arms with interleaved heights
+- Randomly picks which arm goes first, alternates at each height level
+- base_heights parameter specifies heights (put most likely first)
+- PlanResult tells you which arm won
+
 Usage:
     uv run mjpython examples/recycle_objects.py
     uv run mjpython examples/recycle_objects.py --physics
-    uv run mjpython examples/recycle_objects.py --base-physics  # Use physics executor for base
+    uv run mjpython examples/recycle_objects.py --base-physics
 """
 
 import argparse
 import time
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 import mujoco
@@ -18,9 +23,7 @@ import numpy as np
 
 from geodude import Geodude
 from geodude.executor import KinematicExecutor, RobotPhysicsController
-from geodude.trajectory import Trajectory
 from geodude.tsr_utils import compensate_tsr_for_gripper
-from pycbirrt import CBiRRTConfig
 from tsr import TSR
 from tsr.core.tsr_primitive import load_template_file
 
@@ -30,8 +33,8 @@ TSR_DIR = Path(__file__).parent.parent / "tsr_templates"
 RIGHT_BIN_POS = [0.75, -0.35, 0.50]
 LEFT_BIN_POS = [-0.75, -0.35, 0.50]
 
-# Base heights to try in parallel
-BASE_HEIGHTS = [0.0, 0.2, 0.4]
+# Base heights to try - middle height first (most versatile)
+BASE_HEIGHTS = [0.2, 0.0, 0.4]
 
 
 def sample_can_placement(model, data):
@@ -87,49 +90,24 @@ def load_place_tsr(model, data, bin_name):
 
 
 def plan_bimanual_grasp(robot, grasp_tsr, timeout=15.0):
-    """Plan grasp with both arms at multiple heights. First success wins."""
-    config = CBiRRTConfig(timeout=timeout, max_iterations=5000, step_size=0.1, goal_bias=0.1)
+    """Plan grasp with both arms at multiple heights.
 
-    def plan_arm_at_height(arm_name, height):
-        try:
-            arm = robot.left_arm if arm_name == "left" else robot.right_arm
-            base = robot.left_base if arm_name == "left" else robot.right_base
+    Uses the unified robot.plan_to_tsr API which:
+    - Randomly picks which arm to try first
+    - Interleaves arms at each height: (arm1, h1), (arm2, h1), (arm1, h2), ...
+    - Returns PlanResult telling you which arm won
 
-            planner = arm.create_planner(config, base_joint_name=base.config.joint_name, base_height=height)
-            path = planner.plan(arm.get_joint_positions(), goal_tsrs=[grasp_tsr])
-            return (arm_name, height, path)
-        except Exception as e:
-            print(f"   {arm_name} @ {height:.2f}m: {e}", flush=True)
-            return (arm_name, height, None)
-
-    # All combinations: 2 arms x 3 heights = 6 parallel planners
-    tasks = [(arm, h) for arm in ["left", "right"] for h in BASE_HEIGHTS]
-
-    with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
-        futures = {executor.submit(plan_arm_at_height, arm, h): (arm, h) for arm, h in tasks}
-
-        while futures:
-            done, _ = wait(futures.keys(), timeout=0.1, return_when=FIRST_COMPLETED)
-            for future in done:
-                arm_name, height, path = future.result()
-                if path is not None:
-                    for f in futures:
-                        f.cancel()
-                    return arm_name, height, path
-                del futures[future]
-
-    return None, None, None
-
-
-def move_base(base, target, viewer, executor_type="kinematic"):
-    """Move base with hardware-realistic motion profile."""
-    base.move_to(target, viewer=viewer, executor_type=executor_type)
-
-
-def execute_path(arm, path, executor):
-    """Execute path with time-optimal retiming."""
-    traj = Trajectory.from_path(path, arm.config.kinematic_limits.velocity, arm.config.kinematic_limits.acceleration)
-    executor.execute(traj)
+    The order of base_heights matters - put most likely heights first.
+    """
+    # Default behavior: randomly pick first arm, interleave at each height
+    # With BASE_HEIGHTS = [0.2, 0.0, 0.4], sequence might be:
+    #   (left, 0.2), (right, 0.2), (left, 0.0), (right, 0.0), ...
+    return robot.plan_to_tsr(
+        grasp_tsr,
+        base_heights=BASE_HEIGHTS,  # [0.2, 0.0, 0.4] - middle first
+        execute=False,  # Don't execute yet - we need to coordinate base/arm
+        timeout=timeout,
+    )
 
 
 def run_cycle(robot, executors, viewer, use_physics, controller=None, cycle=1, base_executor="kinematic"):
@@ -143,32 +121,37 @@ def run_cycle(robot, executors, viewer, use_physics, controller=None, cycle=1, b
     can_pos = data.xpos[can_id].copy()
     print(f"Can at {can_pos.round(3)}", flush=True)
 
-    # 1. Plan grasp (both arms race)
-    print("\n1. Planning grasp...", flush=True)
+    # 1. Plan grasp (both arms race) - NEW UNIFIED API
+    print("\n1. Planning grasp (robot.plan_to_tsr with base_heights)...", flush=True)
     grasp_tsr = load_grasp_tsr(can_pos)
 
     t0 = time.perf_counter()
-    arm_name, height, path = plan_bimanual_grasp(robot, grasp_tsr)
+    result = plan_bimanual_grasp(robot, grasp_tsr)
 
-    if path is None:
+    if result is None:
         print("   Failed!", flush=True)
         return False
 
-    print(f"   {arm_name.upper()} @ {height:.1f}m in {time.perf_counter()-t0:.1f}s ({len(path)} wp)", flush=True)
+    # PlanResult tells us which arm won
+    arm = result.arm
+    arm_name = "left" if "left" in arm.config.name else "right"
+    height = result.base_height
+    print(f"   {arm_name.upper()} @ {height:.1f}m in {time.perf_counter()-t0:.1f}s", flush=True)
+    print(f"   Trajectories: {[t.entity for t in result.trajectories]}", flush=True)
 
     # Get winning arm's components
-    arm = robot.left_arm if arm_name == "left" else robot.right_arm
     base = robot.left_base if arm_name == "left" else robot.right_base
     gripper = arm.gripper
     executor = executors[arm_name]
     bin_name = "recycle_bin_1" if arm_name == "left" else "recycle_bin_0"
 
-    # Move base
-    move_base(base, height, viewer, base_executor)
-
-    # 2. Execute grasp
-    print(f"\n2. Grasping ({arm_name})...", flush=True)
-    execute_path(arm, path, executor)
+    # 2. Execute grasp trajectories (base first, then arm)
+    print(f"\n2. Executing grasp ({arm_name})...", flush=True)
+    # Execute base trajectory if present
+    if result.base_trajectory is not None:
+        base.move_to(height, viewer=viewer, executor_type=base_executor)
+    # Execute arm trajectory
+    executor.execute(result.arm_trajectory)
     time.sleep(0.2)
 
     # 3. Close gripper
@@ -181,30 +164,30 @@ def run_cycle(robot, executors, viewer, use_physics, controller=None, cycle=1, b
     robot.grasp_manager.attach_object("can_0", f"{arm_name}_ur5e/gripper/right_follower")
     viewer.sync()
 
-    # 4. Lift
+    # 4. Lift - using new plan_to_pose API
     print("\n3. Lifting...", flush=True)
     lift_pose = arm.get_ee_pose().copy()
     lift_pose[2, 3] += 0.05
-    ik = arm.inverse_kinematics(lift_pose, validate=False)
-    if ik:
-        q_start = arm.get_joint_positions()
-        lift_path = [q_start + (i / 20) * (ik[0] - q_start) for i in range(21)]
-        execute_path(arm, lift_path, executor)
+    # NEW API: plan_to_pose with execute=False, then use our executor
+    lift_traj = arm.plan_to_pose(lift_pose, execute=False, timeout=5.0)
+    if lift_traj is not None:
+        executor.execute(lift_traj)
         if not use_physics:
             robot.grasp_manager.update_attached_poses()
     viewer.sync()
 
-    # 5. Plan to bin
+    # 5. Plan to bin - using new plan_to_tsr API
     print(f"\n4. Planning to {bin_name}...", flush=True)
     place_tsr = load_place_tsr(model, data, bin_name)
-    path = arm.plan_to_tsrs([place_tsr], timeout=15.0)
+    # NEW API: plan_to_tsr with execute=False
+    place_traj = arm.plan_to_tsr(place_tsr, execute=False, timeout=30.0)
 
-    if not path:
+    if place_traj is None:
         print("   Failed!", flush=True)
         return False
 
-    print(f"   {len(path)} waypoints", flush=True)
-    execute_path(arm, path, executor)
+    print(f"   Duration: {place_traj.duration:.2f}s", flush=True)
+    executor.execute(place_traj)
     time.sleep(0.2)
 
     # 6. Release
@@ -222,12 +205,13 @@ def run_cycle(robot, executors, viewer, use_physics, controller=None, cycle=1, b
     mujoco.mj_forward(model, data)
     viewer.sync()
 
-    # 7. Return to ready
+    # 7. Return to ready - using new plan_to API
     print(f"\n6. Returning to ready...", flush=True)
     ready_config = np.array(robot.named_poses["ready"][arm_name])
-    path = arm.plan_to_configuration(ready_config, timeout=10.0)
-    if path:
-        execute_path(arm, path, executor)
+    # NEW API: plan_to with execute=False
+    ready_traj = arm.plan_to(ready_config, execute=False, timeout=10.0)
+    if ready_traj is not None:
+        executor.execute(ready_traj)
 
     print(f"\nDone! {arm_name.upper()} arm recycled can.", flush=True)
     return True

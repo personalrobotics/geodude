@@ -1574,11 +1574,15 @@ class Arm:
                 f"base_heights requires a Vention base, but no base found for arm {self.config.name}"
             )
 
-        # Read current arm configuration and filter reachable heights atomically
+        # Read current arm configuration and filter reachable heights
         q_start = self.get_joint_positions().copy()
-        current_height, reachable_heights = base.filter_reachable_heights(
-            base_heights, q_start
-        )
+        current_height = base.height
+
+        # Filter heights by collision checking (sequential, no threading needed)
+        reachable_heights = [
+            h for h in base_heights
+            if base.is_path_collision_free(current_height, h)
+        ]
 
         if not reachable_heights:
             return None

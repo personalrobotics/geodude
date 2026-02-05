@@ -160,41 +160,48 @@ def pickup(
         logger.warning(f"No grasp affordances found for object type: {obj_type}")
         return False
 
-    # Resolve arms to try
-    arms = robot._resolve_arms(arm)
+    # Resolve arms to try (randomize order for variety)
+    import random
 
-    # Build list of (arm, affordance) pairs filtered by hand compatibility
-    compatible_pairs: list[tuple["Arm", object]] = []
+    arms = robot._resolve_arms(arm)
+    random.shuffle(arms)
+
+    # Group compatible affordances by arm
+    from geodude.affordances import hand_types_compatible
+
+    arm_affordances: dict["Arm", list] = {}
     for a in arms:
         hand_type = a.config.hand_type
-        for aff in affordances:
-            from geodude.affordances import hand_types_compatible
+        compatible = [
+            aff for aff in affordances
+            if hand_types_compatible(aff.hand_type, hand_type)
+        ]
+        if compatible:
+            arm_affordances[a] = compatible
 
-            if hand_types_compatible(aff.hand_type, hand_type):
-                compatible_pairs.append((a, aff))
-
-    if not compatible_pairs:
+    if not arm_affordances:
         logger.warning(
             f"No affordances compatible with available hands for {obj_type}"
         )
         return False
 
-    # Try each (arm, affordance) pair
-    for a, aff in compatible_pairs:
-        logger.debug(f"Trying {aff.name} with {a.side} arm")
+    # Try each arm with all its compatible TSRs at once
+    for a, affs in arm_affordances.items():
+        aff_names = [aff.name for aff in affs]
+        logger.debug(f"Trying {a.side} arm with TSRs: {aff_names}")
 
-        # Create TSR at object pose
-        grasp_tsr = aff.create_tsr(obj_pose)
+        # Create all TSRs at object pose - CBiRRT will find path to any of them
+        grasp_tsrs = [aff.create_tsr(obj_pose) for aff in affs]
 
-        # Plan approach
+        # Plan approach (planner picks best TSR)
         result = a.plan_to_tsr(
-            grasp_tsr,
+            grasp_tsrs,
             base_heights=base_heights,
             timeout=timeout,
         )
 
         if result is None:
-            logger.debug(f"Planning failed for {aff.name} with {a.side}")
+            logger.debug(f"Planning failed for {a.side} arm")
             continue
 
         # Execute approach
@@ -259,9 +266,9 @@ def place(
             "No active execution context. Use 'with robot.sim() as ctx:'"
         )
 
-    # Default base heights
-    if base_heights is None:
-        base_heights = [0.2, 0.0, 0.4]
+    # Note: Unlike pickup(), we don't default base_heights for place.
+    # Moving the base while holding an object is more complex and the
+    # arm usually has enough reach from the grasp position.
 
     # Find which arm is holding something
     if arm is None:
@@ -307,35 +314,31 @@ def place(
         )
         return False
 
-    # Try each affordance
-    for aff in affordances:
-        logger.debug(f"Trying place affordance: {aff.name}")
+    # Create all place TSRs - CBiRRT will find path to any of them
+    aff_names = [aff.name for aff in affordances]
+    logger.debug(f"Trying place with TSRs: {aff_names}")
 
-        # Create TSR at destination pose
-        place_tsr = aff.create_tsr(dest_pose)
+    place_tsrs = [aff.create_tsr(dest_pose) for aff in affordances]
 
-        # Plan place motion
-        result = a.plan_to_tsr(
-            place_tsr,
-            base_heights=base_heights,
-            timeout=timeout,
-        )
+    # Plan place motion (planner picks best TSR)
+    result = a.plan_to_tsr(
+        place_tsrs,
+        base_heights=base_heights,
+        timeout=timeout,
+    )
 
-        if result is None:
-            logger.debug(f"Planning failed for {aff.name}")
-            continue
+    if result is None:
+        logger.warning(f"All place attempts failed for {destination}")
+        return False
 
-        # Execute place motion
-        ctx.execute(result)
+    # Execute place motion
+    ctx.execute(result)
 
-        # Release
-        ctx.arm(a.side).release(held_object)
+    # Release
+    ctx.arm(a.side).release(held_object)
 
-        logger.info(f"Successfully placed {held_object} at {destination}")
-        return True
-
-    logger.warning(f"All place attempts failed for {destination}")
-    return False
+    logger.info(f"Successfully placed {held_object} at {destination}")
+    return True
 
 
 def get_pickable_objects(

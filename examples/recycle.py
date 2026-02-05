@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Recycling Demo using Manipulation Primitives.
+"""Recycling Demo - Pick up objects and place them in bins.
 
-Demonstrates the high-level primitives API:
+Demonstrates the high-level manipulation primitives API:
 - robot.pickup() with automatic affordance discovery
 - robot.place() with automatic destination planning
+- robot.get_pickable_objects() to find what can be picked up
 - Same code works in simulation and hardware
 
-Compare with recycle_objects.py to see the simplification.
+For the lower-level manual approach, see recycle_manual.py.
 
 Usage:
-    uv run mjpython examples/recycle_primitives.py
+    uv run mjpython examples/recycle.py
 """
 
 from pathlib import Path
@@ -98,20 +99,21 @@ def main():
             # THE MAGIC: pickup + place with automatic affordance discovery
             # ============================================================
 
-            # 1. Pick up the can (auto-discovers grasp TSRs)
-            print("\n1. Picking up can...", flush=True)
-            if not robot.pickup("can_0"):
+            # 1. Pick up any pickable object (auto-discovers grasp TSRs)
+            target = pickable[0]
+            print(f"\n1. Picking up {target}...", flush=True)
+            if not robot.pickup(target):
                 print("   Pickup failed!", flush=True)
                 break
 
             print("   Pickup succeeded!", flush=True)
 
             # 2. Place in recycle bin (auto-discovers place TSRs)
-            # Choose bin based on which arm picked up
-            # (left arm uses right bin, right arm uses left bin - cross-body)
+            # Choose bin based on which arm picked up (same side for easier reach)
             from geodude.primitives import _find_arm_holding_object
             holding_arm = _find_arm_holding_object(robot)
-            bin_name = "recycle_bin_1" if holding_arm.side == "right" else "recycle_bin_0"
+            # recycle_bin_0 is at x=0.75 (right), recycle_bin_1 is at x=-0.75 (left)
+            bin_name = "recycle_bin_0" if holding_arm.side == "right" else "recycle_bin_1"
 
             print(f"\n2. Placing in {bin_name}...", flush=True)
             if not robot.place(bin_name):
@@ -120,8 +122,8 @@ def main():
 
             print("   Place succeeded!", flush=True)
 
-            # 3. Hide can and return to ready
-            robot.env.registry.hide("can_0")
+            # 3. Hide object and return to ready
+            robot.env.registry.hide(target)
 
             print("\n3. Returning to ready...", flush=True)
             ready_config = np.array(robot.named_poses["ready"][holding_arm.side])

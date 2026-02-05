@@ -15,10 +15,10 @@ subject: robotiq_2f140
 reference: can
 
 position:
-  type: cylinder
+  type: shell  # Thick-walled cylinder for radial tolerance
   axis: z
-  radius: 0.033
-  height: [0.02, 0.10]
+  radius: [0.0, 0.072]  # Cylindrical shell: can go all the way to center, outer limit doubled
+  height: [-0.03, 0.03]  # Grasp zone: ±3cm around object center
   angle: [0, 360]
 
 orientation:

@@ -314,19 +314,19 @@ class Arm:
         if self.ee_site_id == -1:
             raise ValueError(f"Site '{config.ee_site}' not found in model")
 
+        # Get the arm side for gripper and transforms
+        # The UR5e base body is named "{side}_ur5e/base" where side is "left" or "right"
+        side = "left" if "left" in config.name else "right"
+
         # Initialize gripper
         self.gripper = Gripper(
             self.model,
             self.data,
-            config.name,
+            side,  # Use side ("left"/"right"), not config.name ("left_arm"/"right_arm")
             config.gripper_actuator,
             config.gripper_bodies,
             grasp_manager,
         )
-
-        # Get the arm base body for coordinate transforms
-        # The UR5e base body is named "{side}_ur5e/base" where side is "left" or "right"
-        side = "left" if "left" in config.name else "right"
         base_body_name = f"{side}_ur5e/base"
         self._base_body_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_BODY, base_body_name

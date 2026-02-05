@@ -15,20 +15,22 @@ class TestVentionBaseConfig:
     def test_default_values(self):
         """VentionBaseConfig has correct defaults."""
         config = VentionBaseConfig(
-            name="left",
-            joint_name="left_arm_linear_vention",
+            name="left_base",
+            entity_type="base",
+            joint_names=["left_arm_linear_vention"],
             actuator_name="left_linear_actuator",
         )
 
-        assert config.name == "left"
+        assert config.name == "left_base"
         assert config.height_range == (0.0, 0.5)
         assert config.collision_check_resolution == 0.01
 
     def test_custom_height_range(self):
         """VentionBaseConfig accepts custom height range."""
         config = VentionBaseConfig(
-            name="test",
-            joint_name="test_joint",
+            name="test_base",
+            entity_type="base",
+            joint_names=["test_joint"],
             actuator_name="test_actuator",
             height_range=(0.1, 0.4),
         )
@@ -50,15 +52,16 @@ class TestVentionBaseInit:
         """Bases have correct names."""
         robot = Geodude()
 
-        assert robot.left_base.name == "left"
-        assert robot.right_base.name == "right"
+        assert robot.left_base.name == "left_base"
+        assert robot.right_base.name == "right_base"
 
     def test_invalid_joint_raises(self):
         """Invalid joint name raises ValueError."""
         robot = Geodude()
         config = VentionBaseConfig(
-            name="test",
-            joint_name="nonexistent_joint",
+            name="test_base",
+            entity_type="base",
+            joint_names=["nonexistent_joint"],
             actuator_name="left_linear_actuator",
         )
 
@@ -69,8 +72,9 @@ class TestVentionBaseInit:
         """Invalid actuator name raises ValueError."""
         robot = Geodude()
         config = VentionBaseConfig(
-            name="test",
-            joint_name="left_arm_linear_vention",
+            name="test_base",
+            entity_type="base",
+            joint_names=["left_arm_linear_vention"],
             actuator_name="nonexistent_actuator",
         )
 
@@ -280,7 +284,8 @@ class TestVentionBaseWithObstacles:
         # Create the necessary objects
         grasp_manager = GraspManager(model, data)
         arm_config = ArmConfig(
-            name="right",
+            name="right_arm",
+            entity_type="arm",
             joint_names=arm_joint_names,
             ee_site="right_ur5e/gripper_attachment_site",
             gripper_actuator="right_ur5e/gripper/fingers_actuator",
@@ -304,8 +309,9 @@ class TestVentionBaseWithObstacles:
 
         # Create VentionBase
         base_config = VentionBaseConfig(
-            name="right",
-            joint_name="right_arm_linear_vention",
+            name="right_base",
+            entity_type="base",
+            joint_names=["right_arm_linear_vention"],
             actuator_name="right_linear_actuator",
         )
         base = VentionBase(model, data, base_config, arm)

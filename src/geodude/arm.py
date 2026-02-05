@@ -360,8 +360,10 @@ class Arm:
         self._ft_tare_torque = np.zeros(3)
 
         # Cache F/T sensor IDs for efficient lookup
-        force_sensor_name = f"{config.name}_ur5e/ft_sensor_force"
-        torque_sensor_name = f"{config.name}_ur5e/ft_sensor_torque"
+        # Use side ("left"/"right") not full name ("left_arm"/"right_arm")
+        side = "left" if "left" in config.name else "right"
+        force_sensor_name = f"{side}_ur5e/ft_sensor_force"
+        torque_sensor_name = f"{side}_ur5e/ft_sensor_torque"
         self._ft_force_sensor_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_SENSOR, force_sensor_name
         )
@@ -1182,13 +1184,10 @@ class Arm:
         self,
         goal: np.ndarray | list,
         *,
-        execute: bool = True,
         base_heights: list[float] | None = None,
         strategy: str = "first",
         timeout: float = 30.0,
         seed: int | None = None,
-        viewer=None,
-        executor_type: str = "physics",
     ) -> Trajectory | PlanResult | None:
         """Plan to a goal (configuration, pose, or TSR).
 
@@ -1201,8 +1200,6 @@ class Arm:
 
         Args:
             goal: Target configuration, pose, TSR, or list of goals
-            execute: If True (default), execute trajectory after planning.
-                    If False, return trajectory without executing.
             base_heights: Optional list of base heights to search (tried in order).
                          If provided, returns PlanResult with both trajectories.
             strategy: Planning strategy:
@@ -1210,12 +1207,9 @@ class Arm:
                      - "best": Try all heights, return shortest path
             timeout: Planning timeout in seconds
             seed: Random seed for reproducibility
-            viewer: Optional MuJoCo viewer for execution visualization
-            executor_type: "physics" or "kinematic" for execution
 
         Returns:
-            - If execute=True: Trajectory (executed) or None if planning failed
-            - If execute=False: Trajectory or PlanResult (with base_heights)
+            - Trajectory or PlanResult (with base_heights) if planning succeeded
             - None if planning failed
         """
         # Detect goal type and dispatch
@@ -1223,13 +1217,10 @@ class Arm:
             # TSR object (has sample method)
             return self.plan_to_tsr(
                 goal,
-                execute=execute,
                 base_heights=base_heights,
                 strategy=strategy,
                 timeout=timeout,
                 seed=seed,
-                viewer=viewer,
-                executor_type=executor_type,
             )
         elif isinstance(goal, list):
             # List of goals - check first element type
@@ -1240,38 +1231,29 @@ class Arm:
                 # List of TSRs
                 return self.plan_to_tsr(
                     goal,
-                    execute=execute,
                     base_heights=base_heights,
                     strategy=strategy,
                     timeout=timeout,
                     seed=seed,
-                    viewer=viewer,
-                    executor_type=executor_type,
                 )
             elif isinstance(first, np.ndarray):
                 if first.shape == (4, 4):
                     # List of poses
                     return self.plan_to_pose(
                         goal,
-                        execute=execute,
                         base_heights=base_heights,
                         strategy=strategy,
                         timeout=timeout,
                         seed=seed,
-                        viewer=viewer,
-                        executor_type=executor_type,
                     )
                 else:
                     # List of configurations
                     return self.plan_to_configurations(
                         goal,
-                        execute=execute,
                         base_heights=base_heights,
                         strategy=strategy,
                         timeout=timeout,
                         seed=seed,
-                        viewer=viewer,
-                        executor_type=executor_type,
                     )
             else:
                 raise ValueError(f"Unknown goal type in list: {type(first)}")
@@ -1280,25 +1262,19 @@ class Arm:
                 # Single pose
                 return self.plan_to_pose(
                     goal,
-                    execute=execute,
                     base_heights=base_heights,
                     strategy=strategy,
                     timeout=timeout,
                     seed=seed,
-                    viewer=viewer,
-                    executor_type=executor_type,
                 )
             elif goal.ndim == 1 and len(goal) == self.dof:
                 # Single configuration
                 return self.plan_to_configurations(
                     [goal],
-                    execute=execute,
                     base_heights=base_heights,
                     strategy=strategy,
                     timeout=timeout,
                     seed=seed,
-                    viewer=viewer,
-                    executor_type=executor_type,
                 )
             else:
                 raise ValueError(
@@ -1312,13 +1288,10 @@ class Arm:
         self,
         q_goals: list[np.ndarray],
         *,
-        execute: bool = True,
         base_heights: list[float] | None = None,
         strategy: str = "first",
         timeout: float = 30.0,
         seed: int | None = None,
-        viewer=None,
-        executor_type: str = "physics",
     ) -> Trajectory | PlanResult | None:
         """Plan to one of multiple goal configurations.
 
@@ -1327,8 +1300,6 @@ class Arm:
 
         Args:
             q_goals: List of goal joint configurations
-            execute: If True (default), execute trajectory after planning.
-                    If False, return trajectory without executing.
             base_heights: Optional list of base heights to search (tried in order).
                          If provided, returns PlanResult with base trajectory.
             strategy: Planning strategy:
@@ -1336,8 +1307,6 @@ class Arm:
                      - "best": Try all heights, return shortest path
             timeout: Planning timeout in seconds
             seed: Random seed for reproducibility
-            viewer: Optional MuJoCo viewer for execution visualization
-            executor_type: "physics" or "kinematic" for execution
 
         Returns:
             - Trajectory if planning succeeded (no base_heights)
@@ -1355,11 +1324,8 @@ class Arm:
                 configurations=q_goals,
                 base_heights=base_heights,
                 strategy=strategy,
-                execute=execute,
                 timeout=timeout,
                 seed=seed,
-                viewer=viewer,
-                executor_type=executor_type,
             )
 
         # Try each goal configuration
@@ -1374,10 +1340,6 @@ class Arm:
                     entity=self.config.name,
                     joint_names=self.config.joint_names,
                 )
-
-                if execute:
-                    self.execute(trajectory, viewer=viewer, executor_type=executor_type)
-
                 return trajectory
 
         return None
@@ -1386,13 +1348,10 @@ class Arm:
         self,
         pose: np.ndarray | list[np.ndarray],
         *,
-        execute: bool = True,
         base_heights: list[float] | None = None,
         strategy: str = "first",
         timeout: float = 30.0,
         seed: int | None = None,
-        viewer=None,
-        executor_type: str = "physics",
     ) -> Trajectory | PlanResult | None:
         """Plan to an end-effector pose (or one of multiple poses).
 
@@ -1401,8 +1360,6 @@ class Arm:
 
         Args:
             pose: Target 4x4 pose matrix, or list of poses (planner picks one)
-            execute: If True (default), execute trajectory after planning.
-                    If False, return trajectory without executing.
             base_heights: Optional list of base heights to search (tried in order).
                          If provided, returns PlanResult with base trajectory.
             strategy: Planning strategy:
@@ -1410,8 +1367,6 @@ class Arm:
                      - "best": Try all heights, return shortest path
             timeout: Planning timeout in seconds
             seed: Random seed for reproducibility
-            viewer: Optional MuJoCo viewer for execution visualization
-            executor_type: "physics" or "kinematic" for execution
 
         Returns:
             - Trajectory if planning succeeded (no base_heights)
@@ -1429,11 +1384,8 @@ class Arm:
                 configurations=None,
                 base_heights=base_heights,
                 strategy=strategy,
-                execute=execute,
                 timeout=timeout,
                 seed=seed,
-                viewer=viewer,
-                executor_type=executor_type,
             )
 
         # Solve IK for all poses to get candidate configurations
@@ -1448,24 +1400,18 @@ class Arm:
         # Plan to any of the candidate configurations
         return self.plan_to_configurations(
             q_candidates,
-            execute=execute,
             timeout=timeout,
             seed=seed,
-            viewer=viewer,
-            executor_type=executor_type,
         )
 
     def plan_to_tsr(
         self,
         tsr,
         *,
-        execute: bool = True,
         base_heights: list[float] | None = None,
         strategy: str = "first",
         timeout: float = 30.0,
         seed: int | None = None,
-        viewer=None,
-        executor_type: str = "physics",
     ) -> Trajectory | PlanResult | None:
         """Plan to a TSR (or one of multiple TSRs).
 
@@ -1473,8 +1419,6 @@ class Arm:
 
         Args:
             tsr: Target TSR, or list of TSRs (planner picks one)
-            execute: If True (default), execute trajectory after planning.
-                    If False, return trajectory without executing.
             base_heights: Optional list of base heights to search (tried in order).
                          If provided, returns PlanResult with base trajectory.
             strategy: Planning strategy:
@@ -1482,8 +1426,6 @@ class Arm:
                      - "best": Try all heights, return shortest path
             timeout: Planning timeout in seconds
             seed: Random seed for reproducibility
-            viewer: Optional MuJoCo viewer for execution visualization
-            executor_type: "physics" or "kinematic" for execution
 
         Returns:
             - Trajectory if planning succeeded (no base_heights)
@@ -1501,11 +1443,8 @@ class Arm:
                 configurations=None,
                 base_heights=base_heights,
                 strategy=strategy,
-                execute=execute,
                 timeout=timeout,
                 seed=seed,
-                viewer=viewer,
-                executor_type=executor_type,
             )
 
         # Plan using existing method
@@ -1523,9 +1462,6 @@ class Arm:
             joint_names=self.config.joint_names,
         )
 
-        if execute:
-            self.execute(trajectory, viewer=viewer, executor_type=executor_type)
-
         return trajectory
 
     def _plan_with_base_heights(
@@ -1535,11 +1471,8 @@ class Arm:
         configurations: list[np.ndarray] | None,
         base_heights: list[float],
         strategy: str,
-        execute: bool,
         timeout: float,
         seed: int | None,
-        viewer,
-        executor_type: str,
     ) -> PlanResult | None:
         """Plan arm motion at different base heights.
 
@@ -1552,11 +1485,8 @@ class Arm:
             configurations: List of goal configurations (or None if using poses/TSRs)
             base_heights: List of base heights to try (in order)
             strategy: "first" returns first success, "best" tries all and picks shortest
-            execute: Whether to execute after planning
             timeout: Per-planner timeout
             seed: Random seed for reproducibility
-            viewer: Viewer for execution
-            executor_type: Executor type for execution
 
         Returns:
             PlanResult with arm and base trajectories, or None if failed
@@ -1668,13 +1598,7 @@ class Arm:
             for height in reachable_heights:
                 path = plan_at_height(height)
                 if path is not None:
-                    result = build_result(height, path)
-
-                    if execute:
-                        base.move_to(height, viewer=viewer, executor_type=executor_type)
-                        self.execute(result.arm_trajectory, viewer=viewer, executor_type=executor_type)
-
-                    return result
+                    return build_result(height, path)
 
             return None
 
@@ -1699,13 +1623,7 @@ class Arm:
                 return total
 
             best_height, best_path = min(successful_results, key=lambda x: path_length(x[1]))
-            result = build_result(best_height, best_path)
-
-            if execute:
-                base.move_to(best_height, viewer=viewer, executor_type=executor_type)
-                self.execute(result.arm_trajectory, viewer=viewer, executor_type=executor_type)
-
-            return result
+            return build_result(best_height, best_path)
 
     def close_gripper(self, steps: int = 100) -> str | None:
         """Close the gripper and detect grasp.
@@ -1717,6 +1635,77 @@ class Arm:
 
     def open_gripper(self, steps: int = 100) -> None:
         """Open the gripper and release any held object."""
+        self.gripper.open(steps)
+
+    def grasp(self, object_name: str, steps: int = 100) -> str | None:
+        """Close gripper and mark object as grasped.
+
+        High-level grasp operation that:
+        1. Sets the object as a candidate for grasp detection
+        2. Closes the gripper
+        3. Detects if the object was grasped
+        4. Updates the grasp manager to mark the object as held
+
+        Args:
+            object_name: Name of the object to grasp
+            steps: Number of simulation steps for gripper closing
+
+        Returns:
+            Name of grasped object if successful, None otherwise
+
+        Example:
+            robot.right_arm.grasp("can_0")
+        """
+        if self.gripper is None:
+            return None
+
+        # Set candidate objects for detection
+        self.gripper.set_candidate_objects([object_name])
+
+        # Close gripper and detect grasp
+        grasped = self.gripper.close(steps)
+
+        if grasped:
+            # Update grasp manager
+            self.grasp_manager.mark_grasped(grasped, self.side)
+            # Attach to gripper body for kinematic tracking
+            attach_body = f"{self.side}_ur5e/gripper/right_follower"
+            self.grasp_manager.attach_object(grasped, attach_body)
+
+        return grasped
+
+    def release(self, object_name: str | None = None, steps: int = 100) -> None:
+        """Open gripper and release held object(s).
+
+        High-level release operation that:
+        1. Updates the grasp manager to mark object(s) as released
+        2. Detaches object(s) from kinematic tracking
+        3. Opens the gripper
+
+        Args:
+            object_name: Specific object to release, or None to release all
+                        objects held by this arm.
+            steps: Number of simulation steps for gripper opening
+
+        Example:
+            robot.right_arm.release("can_0")  # Release specific object
+            robot.right_arm.release()  # Release all held objects
+        """
+        if self.gripper is None:
+            return
+
+        # Determine which objects to release
+        if object_name is not None:
+            objects_to_release = [object_name]
+        else:
+            objects_to_release = list(self.grasp_manager.get_grasped_by(self.side))
+
+        # Release in grasp manager
+        for obj in objects_to_release:
+            self.grasp_manager.mark_released(obj)
+            self.grasp_manager.detach_object(obj)
+
+        # Open gripper
         self.gripper.open(steps)
 
     def pick(

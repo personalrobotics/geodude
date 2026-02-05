@@ -249,10 +249,7 @@ class VentionBase:
         self,
         height: float,
         *,
-        execute: bool = True,
         check_collisions: bool = True,
-        viewer=None,
-        executor_type: str = "kinematic",
     ) -> Trajectory | None:
         """Plan base motion to target height.
 
@@ -261,11 +258,7 @@ class VentionBase:
 
         Args:
             height: Target height in meters
-            execute: If True (default), execute trajectory after planning.
-                    If False, return trajectory without executing.
             check_collisions: If True, verify path is collision-free before planning
-            viewer: Optional MuJoCo viewer for execution visualization
-            executor_type: "kinematic" (default) or "physics" for execution
 
         Returns:
             Trajectory if planning succeeded, None if collision detected
@@ -294,12 +287,6 @@ class VentionBase:
             entity=self.config.name,
             joint_names=self.config.joint_names,
         )
-
-        if execute:
-            executor = self._get_executor(viewer=viewer, executor_type=executor_type)
-            success = executor.execute(trajectory)
-            if success:
-                self.data.ctrl[self._actuator_id] = height
 
         return trajectory
 

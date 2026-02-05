@@ -48,7 +48,8 @@ class TestArm:
     def arm_config(self):
         """Create arm configuration for the real geodude robot."""
         return ArmConfig(
-            name="right",
+            name="right_arm",
+            entity_type="arm",
             joint_names=[
                 "right_ur5e/shoulder_pan_joint",
                 "right_ur5e/shoulder_lift_joint",
@@ -77,7 +78,7 @@ class TestArm:
 
     def test_init(self, arm):
         """Arm initializes correctly."""
-        assert arm.name == "right"
+        assert arm.name == "right_arm"
         assert arm.dof == 6
         assert len(arm.joint_ids) == 6
         assert len(arm.joint_qpos_indices) == 6
@@ -90,6 +91,7 @@ class TestArm:
 
         bad_config = ArmConfig(
             name="bad_arm",
+            entity_type="arm",
             joint_names=["nonexistent_joint"],
             ee_site="right_ur5e/gripper_attachment_site",
             gripper_actuator="",
@@ -244,7 +246,8 @@ class TestArmEAIK:
     def arm_config(self):
         """Create arm configuration for the real geodude robot."""
         return ArmConfig(
-            name="right",
+            name="right_arm",
+            entity_type="arm",
             joint_names=[
                 "right_ur5e/shoulder_pan_joint",
                 "right_ur5e/shoulder_lift_joint",
@@ -425,7 +428,8 @@ class TestArmPlanner:
     def arm_config(self):
         """Create arm configuration for the real geodude robot."""
         return ArmConfig(
-            name="right",
+            name="right_arm",
+            entity_type="arm",
             joint_names=[
                 "right_ur5e/shoulder_pan_joint",
                 "right_ur5e/shoulder_lift_joint",
@@ -663,7 +667,8 @@ class TestForceTorqueSensor:
     def arm_config(self):
         """Create arm configuration for the right arm."""
         return ArmConfig(
-            name="right",
+            name="right_arm",
+            entity_type="arm",
             joint_names=[
                 "right_ur5e/shoulder_pan_joint",
                 "right_ur5e/shoulder_lift_joint",

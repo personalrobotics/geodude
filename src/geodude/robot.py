@@ -1,8 +1,10 @@
 """Main Geodude robot interface."""
 
+from __future__ import annotations
+
 import random
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import mujoco
 import numpy as np
@@ -14,6 +16,9 @@ from geodude.grasp_manager import GraspManager
 from geodude.planning import PlanResult
 from geodude.trajectory import Trajectory
 from geodude.vention_base import VentionBase
+
+if TYPE_CHECKING:
+    from geodude.execution import SimContext
 
 
 class Geodude:
@@ -229,13 +234,10 @@ class Geodude:
         *,
         sequence: list[tuple[Arm | str, float]] | None = None,
         arm: Arm | str | None = None,
-        execute: bool = True,
         base_heights: list[float] | None = None,
         strategy: str = "first",
         timeout: float = 30.0,
         seed: int | None = None,
-        viewer=None,
-        executor_type: str = "physics",
     ) -> PlanResult | Trajectory | None:
         """Plan to an end-effector pose with either arm.
 
@@ -247,8 +249,6 @@ class Geodude:
                      Each tuple is (Arm | "left" | "right", height_float).
                      If provided, base_heights and arm are ignored.
             arm: Which arm to use: Arm instance, "left", "right", or None (try both)
-            execute: If True (default), execute trajectory after planning.
-                    If False, return trajectory without executing.
             base_heights: Optional list of base heights to search.
                          Default sequence interleaves arms at each height.
             strategy: Planning strategy:
@@ -256,8 +256,6 @@ class Geodude:
                      - "best": Try all options, return shortest path
             timeout: Planning timeout in seconds
             seed: Random seed for reproducibility
-            viewer: Optional MuJoCo viewer for execution visualization
-            executor_type: "physics" or "kinematic" for execution
 
         Returns:
             - Trajectory or PlanResult if planning succeeded
@@ -268,13 +266,10 @@ class Geodude:
             goal_type="pose",
             sequence=sequence,
             arm=arm,
-            execute=execute,
             base_heights=base_heights,
             strategy=strategy,
             timeout=timeout,
             seed=seed,
-            viewer=viewer,
-            executor_type=executor_type,
         )
 
     def plan_to_tsr(
@@ -283,13 +278,10 @@ class Geodude:
         *,
         sequence: list[tuple[Arm | str, float]] | None = None,
         arm: Arm | str | None = None,
-        execute: bool = True,
         base_heights: list[float] | None = None,
         strategy: str = "first",
         timeout: float = 30.0,
         seed: int | None = None,
-        viewer=None,
-        executor_type: str = "physics",
     ) -> PlanResult | Trajectory | None:
         """Plan to a TSR with either arm.
 
@@ -301,8 +293,6 @@ class Geodude:
                      Each tuple is (Arm | "left" | "right", height_float).
                      If provided, base_heights and arm are ignored.
             arm: Which arm to use: Arm instance, "left", "right", or None (try both)
-            execute: If True (default), execute trajectory after planning.
-                    If False, return trajectory without executing.
             base_heights: Optional list of base heights to search.
                          Default sequence interleaves arms at each height.
             strategy: Planning strategy:
@@ -310,8 +300,6 @@ class Geodude:
                      - "best": Try all options, return shortest path
             timeout: Planning timeout in seconds
             seed: Random seed for reproducibility
-            viewer: Optional MuJoCo viewer for execution visualization
-            executor_type: "physics" or "kinematic" for execution
 
         Returns:
             - Trajectory or PlanResult if planning succeeded
@@ -333,13 +321,10 @@ class Geodude:
             goal_type="tsr",
             sequence=sequence,
             arm=arm,
-            execute=execute,
             base_heights=base_heights,
             strategy=strategy,
             timeout=timeout,
             seed=seed,
-            viewer=viewer,
-            executor_type=executor_type,
         )
 
     def plan_to(
@@ -348,13 +333,10 @@ class Geodude:
         *,
         sequence: list[tuple[Arm | str, float]] | None = None,
         arm: Arm | str | None = None,
-        execute: bool = True,
         base_heights: list[float] | None = None,
         strategy: str = "first",
         timeout: float = 30.0,
         seed: int | None = None,
-        viewer=None,
-        executor_type: str = "physics",
     ) -> PlanResult | Trajectory | None:
         """Plan to a goal (configuration, pose, or TSR) with either arm.
 
@@ -367,8 +349,6 @@ class Geodude:
                      Each tuple is (Arm | "left" | "right", height_float).
                      If provided, base_heights and arm are ignored.
             arm: Which arm to use: Arm instance, "left", "right", or None (try both)
-            execute: If True (default), execute trajectory after planning.
-                    If False, return trajectory without executing.
             base_heights: Optional list of base heights to search.
                          Default sequence interleaves arms at each height.
             strategy: Planning strategy:
@@ -376,8 +356,6 @@ class Geodude:
                      - "best": Try all options, return shortest path
             timeout: Planning timeout in seconds
             seed: Random seed for reproducibility
-            viewer: Optional MuJoCo viewer for execution visualization
-            executor_type: "physics" or "kinematic" for execution
 
         Returns:
             - Trajectory or PlanResult if planning succeeded
@@ -388,13 +366,10 @@ class Geodude:
             goal_type="goal",
             sequence=sequence,
             arm=arm,
-            execute=execute,
             base_heights=base_heights,
             strategy=strategy,
             timeout=timeout,
             seed=seed,
-            viewer=viewer,
-            executor_type=executor_type,
         )
 
     def _resolve_arms(self, arm: Arm | str | None) -> list[Arm]:
@@ -482,13 +457,10 @@ class Geodude:
         goal_type: str,
         sequence: list[tuple[Arm | str, float]] | None,
         arm: Arm | str | None,
-        execute: bool,
         base_heights: list[float] | None,
         strategy: str,
         timeout: float,
         seed: int | None,
-        viewer,
-        executor_type: str,
     ) -> PlanResult | Trajectory | None:
         """Core planning implementation with sequence support.
 
@@ -497,13 +469,10 @@ class Geodude:
             goal_type: "tsr" or "goal" to dispatch to correct arm method
             sequence: Explicit (arm, height) sequence, or None to build default
             arm: Arm specification (used if sequence is None)
-            execute: Whether to execute result
             base_heights: Heights to search (used if sequence is None)
             strategy: "first" or "best"
             timeout: Per-attempt timeout
             seed: Random seed
-            viewer: Viewer for execution
-            executor_type: Executor type for execution
 
         Returns:
             PlanResult, Trajectory, or None
@@ -525,86 +494,58 @@ class Geodude:
                 if goal_type == "tsr":
                     return a.plan_to_tsr(
                         goal,
-                        execute=execute,
                         base_heights=None,
                         strategy=strategy,
                         timeout=timeout,
                         seed=seed,
-                        viewer=viewer,
-                        executor_type=executor_type,
                     )
                 elif goal_type == "pose":
                     return a.plan_to_pose(
                         goal,
-                        execute=execute,
                         base_heights=None,
                         strategy=strategy,
                         timeout=timeout,
                         seed=seed,
-                        viewer=viewer,
-                        executor_type=executor_type,
                     )
                 else:  # goal_type == "goal"
                     return a.plan_to(
                         goal,
-                        execute=execute,
                         base_heights=None,
                         strategy=strategy,
                         timeout=timeout,
                         seed=seed,
-                        viewer=viewer,
-                        executor_type=executor_type,
                     )
 
             resolved_sequence = self._build_default_sequence(arms, base_heights)
 
-        # Execute the sequence
+        # Plan at each position in sequence
         def plan_at(arm: Arm, height: float) -> PlanResult | Trajectory | None:
             """Plan with a specific arm at a specific height."""
             # Use base_heights=[height] to get a PlanResult with height info
             if goal_type == "tsr":
                 return arm.plan_to_tsr(
                     goal,
-                    execute=False,
                     base_heights=[height],
                     strategy="first",  # Single height, so first == only
                     timeout=timeout,
                     seed=seed,
-                    viewer=None,
-                    executor_type=executor_type,
                 )
             elif goal_type == "pose":
                 return arm.plan_to_pose(
                     goal,
-                    execute=False,
                     base_heights=[height],
                     strategy="first",
                     timeout=timeout,
                     seed=seed,
-                    viewer=None,
-                    executor_type=executor_type,
                 )
             else:  # goal_type == "goal"
                 return arm.plan_to(
                     goal,
-                    execute=False,
                     base_heights=[height],
                     strategy="first",
                     timeout=timeout,
                     seed=seed,
-                    viewer=None,
-                    executor_type=executor_type,
                 )
-
-        def execute_result(result: PlanResult | Trajectory, arm: Arm) -> None:
-            """Execute a planning result."""
-            if isinstance(result, PlanResult):
-                base = self._get_base_for_arm(result.arm)
-                if result.base_trajectory is not None and base is not None:
-                    base.move_to(result.base_height, viewer=viewer, executor_type=executor_type)
-                result.arm.execute(result.arm_trajectory, viewer=viewer, executor_type=executor_type)
-            else:
-                arm.execute(result, viewer=viewer, executor_type=executor_type)
 
         if strategy == "first":
             # Try sequence in order, return first success
@@ -612,8 +553,6 @@ class Geodude:
                 try:
                     result = plan_at(arm, height)
                     if result is not None:
-                        if execute:
-                            execute_result(result, arm)
                         return result
                 except Exception:
                     continue
@@ -641,11 +580,7 @@ class Geodude:
                     return result.arm_trajectory.duration
                 return result.duration
 
-            best_arm, best_result = min(successful, key=trajectory_duration)
-
-            if execute:
-                execute_result(best_result, best_arm)
-
+            _, best_result = min(successful, key=trajectory_duration)
             return best_result
 
     def _load_keyframe_poses(self) -> dict[str, dict[str, list[float]]]:
@@ -742,6 +677,41 @@ class Geodude:
         quat = np.zeros(4)
         mujoco.mju_mat2Quat(quat, mat.flatten())
         return quat
+
+    def sim(self, physics: bool = True, viewer=None) -> "SimContext":
+        """Create simulation execution context.
+
+        Returns a context manager that provides a unified interface for
+        executing trajectories in MuJoCo simulation.
+
+        Args:
+            physics: If True (default), use physics simulation with realistic
+                    dynamics. If False, use kinematic execution (perfect
+                    tracking, no dynamics).
+            viewer: Optional MuJoCo viewer. If None, a viewer is created
+                   when entering the context.
+
+        Returns:
+            SimContext that can be used as a context manager.
+
+        Example:
+            robot = Geodude(objects={"can": 1})
+
+            with robot.sim(physics=True) as ctx:
+                # Plan and execute
+                result = robot.plan_to_tsr(grasp_tsr, base_heights=[0.2, 0.0])
+                ctx.execute(result)
+
+                # Grasp operations
+                ctx.arm("right").grasp("can_0")
+
+                # Main loop
+                while ctx.is_running():
+                    ctx.sync()
+        """
+        from geodude.execution import SimContext
+
+        return SimContext(self, viewer=viewer, physics=physics)
 
     def _create_temp_scene_config(self, objects: dict[str, int]) -> str:
         """Create temporary scene_config.yaml from objects dict.

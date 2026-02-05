@@ -33,12 +33,12 @@ class TestGeodude:
     def test_left_arm_property(self):
         """left_arm property returns Arm."""
         robot = Geodude()
-        assert robot.left_arm.name == "left"
+        assert robot.left_arm.name == "left_arm"
 
     def test_right_arm_property(self):
         """right_arm property returns Arm."""
         robot = Geodude()
-        assert robot.right_arm.name == "right"
+        assert robot.right_arm.name == "right_arm"
 
     def test_left_arm_has_6_joints(self):
         """Left arm has 6 joints (UR5e)."""

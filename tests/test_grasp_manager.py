@@ -41,6 +41,8 @@ class TestGraspManager:
         gm.mark_grasped("box1", "right")
 
         # Should now have grasped collision group
+        # contype is GRASPED (won't be hit by gripper pads)
+        # conaffinity is GRASPED only (so arm links don't detect collision during planning)
         assert model.geom_contype[geom_id] == COLLISION_GROUP_GRASPED
         assert model.geom_conaffinity[geom_id] == COLLISION_GROUP_GRASPED
 

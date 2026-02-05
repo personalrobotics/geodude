@@ -243,10 +243,11 @@ class GraspManager:
 
         # Update to grasped collision group
         # contype=GRASPED means only gripper pads (conaffinity=3) will see this as a collision partner
-        # conaffinity includes NORMAL so grasped objects still collide with environment
+        # conaffinity=GRASPED only, so arm links (contype=1) won't detect collision with grasped object
+        # This allows planning while holding the object
         for geom_id in geom_ids:
             self.model.geom_contype[geom_id] = COLLISION_GROUP_GRASPED
-            self.model.geom_conaffinity[geom_id] = COLLISION_GROUP_GRASPED | COLLISION_GROUP_NORMAL
+            self.model.geom_conaffinity[geom_id] = COLLISION_GROUP_GRASPED
 
     def _restore_collision_group(self, object_name: str) -> None:
         """Restore original collision groups for an object."""

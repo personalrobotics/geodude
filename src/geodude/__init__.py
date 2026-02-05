@@ -44,6 +44,10 @@ def __getattr__(name):
     if name == "PlanningDefaults":
         from geodude.config import PlanningDefaults
         return PlanningDefaults
+    # Execution context
+    if name == "SimContext":
+        from geodude.execution import SimContext
+        return SimContext
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
@@ -54,6 +58,7 @@ __all__ = [
     "PlanningDefaults",
     "Trajectory",
     "PlanResult",
+    "SimContext",
     # TSR utilities
     "create_top_grasp_tsr",
     "create_side_grasp_tsr",

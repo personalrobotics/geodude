@@ -13,6 +13,7 @@ Geodude controls a bimanual UR5e robot system—two arms on height-adjustable Ve
 - **Motion planning**: Find collision-free paths using CBiRRT with TSR goals
 - **Grasp-aware collision**: Objects you're holding don't collide with your arm
 - **Unified planning API**: Simple `plan_to()` with automatic arm selection and height search
+- **Execution context**: Same code works for simulation and hardware deployment
 - **Time-optimal trajectories**: TOPP-RA retiming respects joint velocity/acceleration limits
 
 ## Installation
@@ -29,18 +30,46 @@ from geodude import Geodude
 # Initialize robot (loads MuJoCo model)
 robot = Geodude()
 
-# Move to a named pose
-robot.go_to("ready")
+# Run in simulation context
+with robot.sim() as ctx:
+    robot.go_to("ready")
+    ctx.sync()
 
-# Plan and execute a motion
-import numpy as np
-goal = np.array([-1.0, -1.5, 1.5, -1.5, -1.5, 0])
-trajectory = robot.right_arm.plan_to(goal)  # Plans and executes by default
+    # Plan a motion (returns Trajectory)
+    import numpy as np
+    goal = np.array([-1.0, -1.5, 1.5, -1.5, -1.5, 0])
+    trajectory = robot.right_arm.plan_to(goal)
 
-# Gripper control
-robot.right_arm.close_gripper()
-robot.right_arm.open_gripper()
+    # Execute via context
+    ctx.execute(trajectory)
+
+    # Gripper control via context
+    ctx.arm("right").grasp("object_name")
+    ctx.arm("right").release("object_name")
 ```
+
+## Execution Context
+
+The execution context provides a unified interface for simulation and hardware:
+
+```python
+# Simulation (kinematic - instant, perfect tracking)
+with robot.sim(physics=False) as ctx:
+    trajectory = robot.right_arm.plan_to(goal)
+    ctx.execute(trajectory)
+    ctx.sync()  # Sync viewer
+
+# Simulation (physics - realistic dynamics)
+with robot.sim(physics=True) as ctx:
+    trajectory = robot.right_arm.plan_to(goal)
+    ctx.execute(trajectory)
+```
+
+The context handles:
+- **Trajectory execution**: `ctx.execute(trajectory)` or `ctx.execute(plan_result)`
+- **Gripper operations**: `ctx.arm("right").grasp("can")`, `ctx.arm("left").release("box")`
+- **Viewer sync**: `ctx.sync()` updates the MuJoCo viewer
+- **Run loop**: `while ctx.is_running():` continues until viewer is closed
 
 ## TSR-Based Planning
 
@@ -55,9 +84,11 @@ obj_pose = robot.get_object_pose("can")
 # Create grasp TSR (allows rotation around object axis)
 grasp_tsr = create_side_grasp_tsr(obj_pose, object_height=0.12)
 
-# Plan to any valid grasp (plans and executes by default)
-robot.right_arm.plan_to_tsr(grasp_tsr)
-robot.right_arm.close_gripper()
+# Plan to any valid grasp (returns Trajectory)
+with robot.sim() as ctx:
+    trajectory = robot.right_arm.plan_to_tsr(grasp_tsr)
+    ctx.execute(trajectory)
+    ctx.arm("right").grasp("can")
 ```
 
 ## Unified Planning API
@@ -65,17 +96,17 @@ robot.right_arm.close_gripper()
 The `plan_to_tsr()` method handles arm selection and base height search automatically:
 
 ```python
-# Plan with both arms at multiple base heights
-# Default: randomly picks first arm, interleaves at each height level
-result = robot.plan_to_tsr(
-    grasp_tsr,
-    base_heights=[0.2, 0.0, 0.4],  # Middle height first (most versatile)
-    execute=False,
-)
+with robot.sim() as ctx:
+    # Plan with both arms at multiple base heights
+    # Default: randomly picks first arm, interleaves at each height level
+    result = robot.plan_to_tsr(
+        grasp_tsr,
+        base_heights=[0.2, 0.0, 0.4],  # Middle height first (most versatile)
+    )
 
-if result:
-    print(f"Success: {result.arm.config.name} @ {result.base_height}m")
-    # Execute manually or use execute=True
+    if result:
+        print(f"Success: {result.arm.side} @ {result.base_height}m")
+        ctx.execute(result)  # Executes base + arm trajectories
 ```
 
 For explicit control over the search order:
@@ -101,6 +132,7 @@ result = robot.right_arm.plan_to_tsr(
     grasp_tsr,
     base_heights=[0.2, 0.0, 0.4],
 )
+# Returns PlanResult with arm_trajectory and base_trajectory
 ```
 
 ## Grasp Management
@@ -108,27 +140,29 @@ result = robot.right_arm.plan_to_tsr(
 When you grasp an object, collision checking updates automatically:
 
 ```python
+with robot.sim() as ctx:
+    # Grasp via context (recommended)
+    ctx.arm("right").grasp("can")
+
+    # Now planning treats the can as part of the robot
+    # (won't report false collisions with the arm)
+    place_traj = robot.right_arm.plan_to_tsr(place_tsr)
+    ctx.execute(place_traj)
+
+    # Release via context
+    ctx.arm("right").release("can")
+```
+
+For manual control:
+
+```python
 # Mark object as grasped
 robot.grasp_manager.mark_grasped("can", "right")
 robot.grasp_manager.attach_object("can", "right_ur5e/gripper/right_follower")
 
-# Now planning treats the can as part of the robot
-# (won't report false collisions with the arm)
-robot.right_arm.plan_to_tsr(place_tsr)
-
 # Release
 robot.grasp_manager.mark_released("can")
 robot.grasp_manager.detach_object("can")
-```
-
-## Execution Modes
-
-```python
-# Physics simulation (default) - realistic dynamics
-robot.right_arm.execute(path)
-
-# Kinematic - instant, perfect tracking for validation
-robot.right_arm.execute(path, executor_type="kinematic")
 ```
 
 ## Architecture
@@ -137,12 +171,14 @@ robot.right_arm.execute(path, executor_type="kinematic")
 Geodude
 ├── left_arm / right_arm (Arm)
 │   ├── Planning (CBiRRT + EAIK)
-│   ├── Execution (TOPP-RA + MuJoCo)
+│   ├── plan_to(), plan_to_tsr(), plan_to_pose()
 │   └── Gripper control
 ├── left_base / right_base (VentionBase)
-│   └── Height adjustment
+│   └── Height adjustment with collision checking
 ├── GraspManager
 │   └── Tracks grasped objects, updates collision groups
+├── SimContext (via robot.sim())
+│   └── Unified execution for simulation
 └── Collision checkers
     └── Grasp-aware collision checking
 ```
@@ -153,8 +189,8 @@ Geodude
 # Planning with base height search
 uv run mjpython examples/arm_planning.py
 
-# Pick and place with physics
-uv run mjpython examples/recycle_objects.py --physics
+# Pick and place recycling demo
+uv run mjpython examples/recycle_objects.py
 ```
 
 ## Testing

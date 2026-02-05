@@ -1,44 +1,38 @@
 #!/usr/bin/env python3
-"""Bimanual Recycling Demo - Both arms race to pick and place objects.
+"""Recycling Demo using Execution Context API.
 
-Demonstrates the unified planning API:
-- robot.plan_to_tsr() tries both arms with interleaved heights
-- Randomly picks which arm goes first, alternates at each height level
-- base_heights parameter specifies heights (put most likely first)
-- PlanResult tells you which arm won
+Demonstrates the unified planning and execution API:
+- robot.sim() context manager for simulation
+- ctx.execute() for trajectory execution
+- ctx.arm().grasp() / ctx.arm().release() for manipulation
+- robot.plan_to_tsr() with base_heights for bimanual planning
 
 Usage:
     uv run mjpython examples/recycle_objects.py
-    uv run mjpython examples/recycle_objects.py --physics
-    uv run mjpython examples/recycle_objects.py --base-physics
 """
 
-import argparse
-import time
 from pathlib import Path
 
-import mujoco
-import mujoco.viewer
 import numpy as np
 
 from geodude import Geodude
-from geodude.executor import KinematicExecutor, RobotPhysicsController
 from geodude.tsr_utils import compensate_tsr_for_gripper
 from tsr import TSR
 from tsr.core.tsr_primitive import load_template_file
 
 TSR_DIR = Path(__file__).parent.parent / "tsr_templates"
 
-# Bin positions (symmetric)
+# Bin positions
 RIGHT_BIN_POS = [0.75, -0.35, 0.50]
 LEFT_BIN_POS = [-0.75, -0.35, 0.50]
 
-# Base heights to try - middle height first (most versatile)
+# Base heights to try
 BASE_HEIGHTS = [0.2, 0.0, 0.4]
 
 
-def sample_can_placement(model, data):
-    """Sample random can placement on worktop (upright or flipped)."""
+def sample_can_placement(robot):
+    """Sample random can placement on worktop."""
+    import mujoco
     import random
 
     templates = [
@@ -47,13 +41,12 @@ def sample_can_placement(model, data):
     ]
     template = random.choice(templates)
 
-    worktop_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "worktop")
-    worktop_pos = data.site_xpos[worktop_id].copy()
+    worktop_id = mujoco.mj_name2id(robot.model, mujoco.mjtObj.mjOBJ_SITE, "worktop")
+    worktop_pos = robot.data.site_xpos[worktop_id].copy()
 
-    # Narrower bounds for reachability
     Bw = template.Bw.copy()
-    Bw[0, :] = [-0.4, 0.4]
-    Bw[1, :] = [-0.25, 0.25]
+    Bw[0, :] = [-0.3, 0.3]
+    Bw[1, :] = [-0.15, 0.15]
 
     tsr = TSR(Bw=Bw)
     xyzrpy = tsr.sample_xyzrpy()
@@ -67,7 +60,7 @@ def sample_can_placement(model, data):
 
 
 def load_grasp_tsr(object_pos):
-    """Load side grasp TSR for can at given position."""
+    """Load side grasp TSR for can."""
     template = load_template_file(str(TSR_DIR / "grasps" / "can_side_grasp.yaml"))
 
     T0_w = np.eye(4)
@@ -77,225 +70,131 @@ def load_grasp_tsr(object_pos):
     return compensate_tsr_for_gripper(tsr, template.subject)
 
 
-def load_place_tsr(model, data, bin_name):
+def load_place_tsr(robot, bin_name):
     """Load drop TSR for recycle bin."""
+    import mujoco
+
     template = load_template_file(str(TSR_DIR / "places" / "recycle_bin_drop.yaml"))
 
-    bin_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, bin_name)
+    bin_id = mujoco.mj_name2id(robot.model, mujoco.mjtObj.mjOBJ_BODY, bin_name)
     T0_w = np.eye(4)
-    T0_w[:3, 3] = data.xpos[bin_id].copy()
+    T0_w[:3, 3] = robot.data.xpos[bin_id].copy()
 
     tsr = TSR(T0_w=T0_w, Tw_e=template.Tw_e, Bw=template.Bw)
     return compensate_tsr_for_gripper(tsr, template.subject)
 
 
-def plan_bimanual_grasp(robot, grasp_tsr, timeout=15.0):
-    """Plan grasp with both arms at multiple heights.
-
-    Uses the unified robot.plan_to_tsr API which:
-    - Randomly picks which arm to try first
-    - Interleaves arms at each height: (arm1, h1), (arm2, h1), (arm1, h2), ...
-    - Returns PlanResult telling you which arm won
-
-    The order of base_heights matters - put most likely heights first.
-    """
-    # Default behavior: randomly pick first arm, interleave at each height
-    # With BASE_HEIGHTS = [0.2, 0.0, 0.4], sequence might be:
-    #   (left, 0.2), (right, 0.2), (left, 0.0), (right, 0.0), ...
-    return robot.plan_to_tsr(
-        grasp_tsr,
-        base_heights=BASE_HEIGHTS,  # [0.2, 0.0, 0.4] - middle first
-        execute=False,  # Don't execute yet - we need to coordinate base/arm
-        timeout=timeout,
-    )
-
-
-def run_cycle(robot, executors, viewer, use_physics, controller=None, cycle=1, base_executor="kinematic"):
-    """Run one pick-and-place cycle. Returns True on success."""
-    print(f"\n{'=' * 40}\nCycle {cycle}\n{'=' * 40}", flush=True)
-
-    model, data = robot.model, robot.data
-
-    # Get can position
-    can_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "can_0")
-    can_pos = data.xpos[can_id].copy()
-    print(f"Can at {can_pos.round(3)}", flush=True)
-
-    # 1. Plan grasp (both arms race) - NEW UNIFIED API
-    print("\n1. Planning grasp (robot.plan_to_tsr with base_heights)...", flush=True)
-    grasp_tsr = load_grasp_tsr(can_pos)
-
-    t0 = time.perf_counter()
-    result = plan_bimanual_grasp(robot, grasp_tsr)
-
-    if result is None:
-        print("   Failed!", flush=True)
-        return False
-
-    # PlanResult tells us which arm won
-    arm = result.arm
-    arm_name = "left" if "left" in arm.config.name else "right"
-    height = result.base_height
-    print(f"   {arm_name.upper()} @ {height:.1f}m in {time.perf_counter()-t0:.1f}s", flush=True)
-    print(f"   Trajectories: {[t.entity for t in result.trajectories]}", flush=True)
-
-    # Get winning arm's components
-    base = robot.left_base if arm_name == "left" else robot.right_base
-    gripper = arm.gripper
-    executor = executors[arm_name]
-    bin_name = "recycle_bin_1" if arm_name == "left" else "recycle_bin_0"
-
-    # 2. Execute grasp trajectories (base first, then arm)
-    print(f"\n2. Executing grasp ({arm_name})...", flush=True)
-    # Execute base trajectory if present
-    if result.base_trajectory is not None:
-        base.move_to(height, viewer=viewer, executor_type=base_executor)
-    # Execute arm trajectory
-    executor.execute(result.arm_trajectory)
-    time.sleep(0.2)
-
-    # 3. Close gripper
-    gripper.set_candidate_objects(["can_0"])
-    if use_physics:
-        controller.close_gripper(arm_name, steps=200)
-    else:
-        gripper.kinematic_close()
-    robot.grasp_manager.mark_grasped("can_0", arm_name)
-    robot.grasp_manager.attach_object("can_0", f"{arm_name}_ur5e/gripper/right_follower")
-    viewer.sync()
-
-    # 4. Lift - using new plan_to_pose API
-    print("\n3. Lifting...", flush=True)
-    lift_pose = arm.get_ee_pose().copy()
-    lift_pose[2, 3] += 0.05
-    # NEW API: plan_to_pose with execute=False, then use our executor
-    lift_traj = arm.plan_to_pose(lift_pose, execute=False, timeout=5.0)
-    if lift_traj is not None:
-        executor.execute(lift_traj)
-        if not use_physics:
-            robot.grasp_manager.update_attached_poses()
-    viewer.sync()
-
-    # 5. Plan to bin - using new plan_to_tsr API
-    print(f"\n4. Planning to {bin_name}...", flush=True)
-    place_tsr = load_place_tsr(model, data, bin_name)
-    # NEW API: plan_to_tsr with execute=False
-    place_traj = arm.plan_to_tsr(place_tsr, execute=False, timeout=30.0)
-
-    if place_traj is None:
-        print("   Failed!", flush=True)
-        return False
-
-    print(f"   Duration: {place_traj.duration:.2f}s", flush=True)
-    executor.execute(place_traj)
-    time.sleep(0.2)
-
-    # 6. Release
-    print("\n5. Releasing...", flush=True)
-    if use_physics:
-        controller.open_gripper(arm_name, steps=100)
-    else:
-        gripper.kinematic_open()
-    robot.grasp_manager.mark_released("can_0")
-    robot.grasp_manager.detach_object("can_0")
-    viewer.sync()
-
-    # Hide can
-    robot.env.registry.hide("can_0")
-    mujoco.mj_forward(model, data)
-    viewer.sync()
-
-    # 7. Return to ready - using new plan_to API
-    print(f"\n6. Returning to ready...", flush=True)
-    ready_config = np.array(robot.named_poses["ready"][arm_name])
-    # NEW API: plan_to with execute=False
-    ready_traj = arm.plan_to(ready_config, execute=False, timeout=10.0)
-    if ready_traj is not None:
-        executor.execute(ready_traj)
-
-    print(f"\nDone! {arm_name.upper()} arm recycled can.", flush=True)
-    return True
-
-
 def main():
-    parser = argparse.ArgumentParser(description="Bimanual Recycling Demo")
-    parser.add_argument("--physics", action="store_true", help="Use physics simulation for arms")
-    parser.add_argument("--base-physics", action="store_true", help="Use physics executor for base")
-    args = parser.parse_args()
+    import mujoco
 
-    base_executor = "physics" if args.base_physics else "kinematic"
+    print("Simplified Recycling Demo (Execution Context API)", flush=True)
+    print("=" * 50, flush=True)
 
     # Create robot with objects
     robot = Geodude(objects={"can": 1, "recycle_bin": 2})
-    model, data = robot.model, robot.data
 
     # Place can and bins
-    can_pos, can_quat = sample_can_placement(model, data)
-    print(f"Can at {can_pos.round(3)}")
+    can_pos, can_quat = sample_can_placement(robot)
+    print(f"Can at {can_pos.round(3)}", flush=True)
     robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
     robot.env.registry.activate("recycle_bin", pos=RIGHT_BIN_POS)
     robot.env.registry.activate("recycle_bin", pos=LEFT_BIN_POS)
-    mujoco.mj_forward(model, data)
+    mujoco.mj_forward(robot.model, robot.data)
 
-    with mujoco.viewer.launch_passive(model, data) as viewer:
-        # Preferred camera view for paper-quality screenshots
-        viewer.cam.azimuth = -90
-        viewer.cam.elevation = -26.5
-        viewer.cam.distance = 2.96
-        viewer.cam.lookat[:] = [0.188, 0.001, 1.141]
-
-        mujoco.mj_forward(model, data)
-        viewer.sync()
-
+    # Use the new execution context API (kinematic mode for reliable testing)
+    with robot.sim(physics=False) as ctx:
         robot.go_to("ready")
-        mujoco.mj_forward(model, data)
-        viewer.sync()
-        time.sleep(0.5)
+        ctx.sync()
 
-        # Create executors
-        if args.physics:
-            controller = RobotPhysicsController(robot, viewer=viewer)
-            executors = {"left": controller.get_executor("left"), "right": controller.get_executor("right")}
-        else:
-            controller = None
-            executors = {
-                "left": KinematicExecutor(
-                    model, data, robot.left_arm.joint_qpos_indices,
-                    viewer=viewer, grasp_manager=robot.grasp_manager
-                ),
-                "right": KinematicExecutor(
-                    model, data, robot.right_arm.joint_qpos_indices,
-                    viewer=viewer, grasp_manager=robot.grasp_manager
-                ),
-            }
+        cycle = 0
+        while ctx.is_running():
+            cycle += 1
+            print(f"\n{'='*40}\nCycle {cycle}\n{'='*40}", flush=True)
 
-        print(f"Bimanual Recycling Demo ({'Physics' if args.physics else 'Kinematic'})")
-        print("Close viewer or Ctrl+C to exit\n")
+            # Get can position
+            can_id = mujoco.mj_name2id(robot.model, mujoco.mjtObj.mjOBJ_BODY, "can_0")
+            can_pos = robot.data.xpos[can_id].copy()
+            print(f"Can at {can_pos.round(3)}", flush=True)
 
-        try:
-            cycle = 1
-            while viewer.is_running():
-                success = run_cycle(robot, executors, viewer, args.physics, controller, cycle, base_executor)
+            # 1. Plan grasp (both arms at multiple heights)
+            print("\n1. Planning grasp...", flush=True)
+            grasp_tsr = load_grasp_tsr(can_pos)
 
-                if not viewer.is_running():
-                    break
+            result = robot.plan_to_tsr(
+                grasp_tsr,
+                base_heights=BASE_HEIGHTS,
+            )
 
-                # Spawn new can
-                print("\nSpawning new can...", flush=True)
-                can_pos, can_quat = sample_can_placement(model, data)
-                print(f"Can at {can_pos.round(3)}")
-                robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
-                mujoco.mj_forward(model, data)
-                viewer.sync()
-                time.sleep(0.5)
+            if result is None:
+                print("   Failed to plan grasp!", flush=True)
+                break
 
-                if success:
-                    cycle += 1
+            arm_name = result.arm.side
+            print(f"   {arm_name.upper()} arm @ base height {result.base_height:.1f}m", flush=True)
 
-        except KeyboardInterrupt:
-            print("\nInterrupted")
+            # 2. Execute grasp motion
+            print("\n2. Executing grasp motion...", flush=True)
+            ctx.execute(result)
+            ctx.sync()
 
-        print(f"\nCompleted {cycle - 1} cycles.")
+            # 3. Grasp the can (new simplified API)
+            print("\n3. Grasping...", flush=True)
+            ctx.arm(arm_name).grasp("can_0")
+
+            # 4. Lift
+            print("\n4. Lifting...", flush=True)
+            lift_pose = result.arm.get_ee_pose().copy()
+            lift_pose[2, 3] += 0.1  # Lift 10cm
+            lift_result = result.arm.plan_to_pose(lift_pose, timeout=5.0)
+            if lift_result is not None:
+                ctx.execute(lift_result)
+                robot.grasp_manager.update_attached_poses()
+            ctx.sync()
+
+            # 5. Plan to bin
+            bin_name = "recycle_bin_1" if arm_name == "left" else "recycle_bin_0"
+            print(f"\n5. Planning to {bin_name}...", flush=True)
+            place_tsr = load_place_tsr(robot, bin_name)
+            place_result = result.arm.plan_to_tsr(place_tsr, timeout=30.0)
+
+            if place_result is None:
+                print("   Failed to plan place! Trying with longer timeout...", flush=True)
+                place_result = result.arm.plan_to_tsr(place_tsr, timeout=60.0)
+
+            if place_result is None:
+                print("   Still failed to plan place!", flush=True)
+                break
+
+            ctx.execute(place_result)
+
+            # 6. Release (new simplified API)
+            print("\n6. Releasing...", flush=True)
+            ctx.arm(arm_name).release("can_0")
+
+            # Hide can
+            robot.env.registry.hide("can_0")
+            ctx.sync()
+
+            # 7. Return to ready
+            print("\n7. Returning to ready...", flush=True)
+            ready_config = np.array(robot.named_poses["ready"][arm_name])
+            ready_result = result.arm.plan_to(ready_config)
+            if ready_result is not None:
+                ctx.execute(ready_result)
+
+            print(f"\nDone! {arm_name.upper()} arm recycled can.", flush=True)
+
+            if not ctx.is_running():
+                break
+
+            # Spawn new can
+            print("\nSpawning new can...", flush=True)
+            can_pos, can_quat = sample_can_placement(robot)
+            print(f"Can at {can_pos.round(3)}", flush=True)
+            robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
+            ctx.sync()
+
+        print(f"\nCompleted {cycle} cycles.", flush=True)
 
 
 if __name__ == "__main__":

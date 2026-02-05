@@ -141,11 +141,8 @@ def plan_with_base_heights(
     goal_tsrs: list,
     base_heights: list[float],
     *,
-    execute: bool = True,
     timeout: float = 30.0,
     seed: int | None = None,
-    viewer=None,
-    executor_type: str = "physics",
 ) -> "PlanResult | None":
     """Plan arm motion at different base heights.
 
@@ -159,11 +156,8 @@ def plan_with_base_heights(
         arm: Arm to plan for
         goal_tsrs: List of goal TSRs (union - any one)
         base_heights: List of base heights to search (tried in order)
-        execute: If True (default), execute trajectories after planning
         timeout: Per-planner timeout in seconds
         seed: Random seed for reproducibility
-        viewer: Optional MuJoCo viewer for execution
-        executor_type: "physics" or "kinematic" for execution
 
     Returns:
         PlanResult with arm and base trajectories, or None if all fail
@@ -175,20 +169,16 @@ def plan_with_base_heights(
             robot.right_arm,
             [grasp_tsr],
             base_heights=[0.0, 0.1, 0.2, 0.3, 0.4],
-            execute=False,
         )
         if result:
             print(f"Found solution at height {result.base_height}")
-            # Execute manually
-            for traj in result.trajectories:
-                print(f"Execute {traj.entity}: {traj.duration:.2f}s")
+            # Execute via context
+            with robot.sim() as ctx:
+                ctx.execute(result)
     """
     return arm.plan_to_tsr(
         goal_tsrs,
-        execute=execute,
         base_heights=base_heights,
         timeout=timeout,
         seed=seed,
-        viewer=viewer,
-        executor_type=executor_type,
     )

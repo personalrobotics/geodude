@@ -151,6 +151,7 @@ class ArmConfig(EntityConfig):
     ee_site: str = ""
     gripper_actuator: str = ""
     gripper_bodies: list[str] = field(default_factory=list)  # Bodies for collision filtering
+    hand_type: str = ""  # Gripper type for affordance matching (e.g., "robotiq_2f_140")
     kinematic_limits: KinematicLimits = field(default_factory=KinematicLimits.ur5e_default)
     tracking_thresholds: TrackingThresholds = field(default_factory=TrackingThresholds.default)
     planning_defaults: PlanningDefaults = field(default_factory=PlanningDefaults.default)
@@ -258,6 +259,7 @@ class GeodudConfig:
                 ee_site="left_ur5e/gripper_attachment_site",
                 gripper_actuator="",  # No gripper in default geodude.xml
                 gripper_bodies=[],
+                hand_type="robotiq_2f_140",
             ),
             right_arm=ArmConfig(
                 name="right_arm",
@@ -278,6 +280,7 @@ class GeodudConfig:
                     "right_ur5e/gripper/right_pad",
                     "right_ur5e/gripper/left_pad",
                 ],
+                hand_type="robotiq_2f_140",
             ),
             left_base=VentionBaseConfig(
                 name="left_base",

@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Recycling Demo using Execution Context API.
+"""Recycling Demo - Manual approach with explicit TSR loading.
 
-Demonstrates the unified planning and execution API:
-- robot.sim() context manager for simulation
+This is the low-level version showing what happens under the hood.
+For the simpler high-level API, see recycle.py.
+
+Demonstrates:
+- Manual TSR template loading and instantiation
+- robot.plan_to_tsr() with base_heights for bimanual planning
 - ctx.execute() for trajectory execution
 - ctx.arm().grasp() / ctx.arm().release() for manipulation
-- robot.plan_to_tsr() with base_heights for bimanual planning
 
 Usage:
-    uv run mjpython examples/recycle_objects.py
+    uv run mjpython examples/recycle_manual.py
 """
 
 from pathlib import Path

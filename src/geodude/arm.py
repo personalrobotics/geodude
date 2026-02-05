@@ -314,19 +314,19 @@ class Arm:
         if self.ee_site_id == -1:
             raise ValueError(f"Site '{config.ee_site}' not found in model")
 
+        # Get the arm side for gripper and transforms
+        # The UR5e base body is named "{side}_ur5e/base" where side is "left" or "right"
+        side = "left" if "left" in config.name else "right"
+
         # Initialize gripper
         self.gripper = Gripper(
             self.model,
             self.data,
-            config.name,
+            side,  # Use side ("left"/"right"), not config.name ("left_arm"/"right_arm")
             config.gripper_actuator,
             config.gripper_bodies,
             grasp_manager,
         )
-
-        # Get the arm base body for coordinate transforms
-        # The UR5e base body is named "{side}_ur5e/base" where side is "left" or "right"
-        side = "left" if "left" in config.name else "right"
         base_body_name = f"{side}_ur5e/base"
         self._base_body_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_BODY, base_body_name
@@ -1624,6 +1624,55 @@ class Arm:
 
             best_height, best_path = min(successful_results, key=lambda x: path_length(x[1]))
             return build_result(best_height, best_path)
+
+    def pickup(
+        self,
+        target: str | None = None,
+        **kwargs,
+    ) -> bool:
+        """Pick up an object with this arm.
+
+        Uses affordance-based planning via the active execution context.
+
+        Args:
+            target: Object name (e.g., "can_0"), or None for any pickable
+            **kwargs: Additional args (see primitives.pickup)
+
+        Returns:
+            True if pickup succeeded
+
+        Example:
+            with robot.sim() as ctx:
+                robot.right_arm.pickup("can_0")
+        """
+        from geodude.primitives import pickup
+
+        return pickup(self._robot, target, arm=self, **kwargs)
+
+    def place(
+        self,
+        destination: str,
+        **kwargs,
+    ) -> bool:
+        """Place held object at a destination with this arm.
+
+        Uses affordance-based planning via the active execution context.
+
+        Args:
+            destination: Destination name (e.g., "recycle_bin_0")
+            **kwargs: Additional args (see primitives.place)
+
+        Returns:
+            True if place succeeded
+
+        Example:
+            with robot.sim() as ctx:
+                robot.right_arm.pickup("can_0")
+                robot.right_arm.place("recycle_bin_0")
+        """
+        from geodude.primitives import place
+
+        return place(self._robot, destination, arm=self, **kwargs)
 
     def close_gripper(self, steps: int = 100) -> str | None:
         """Close the gripper and detect grasp.

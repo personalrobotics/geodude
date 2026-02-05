@@ -11,9 +11,11 @@ Demonstrates:
 - ctx.arm().grasp() / ctx.arm().release() for manipulation
 
 Usage:
-    uv run mjpython examples/recycle_manual.py
+    uv run mjpython examples/recycle_manual.py            # Kinematic mode (default)
+    uv run mjpython examples/recycle_manual.py --physics  # Physics simulation
 """
 
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -25,9 +27,11 @@ from tsr.core.tsr_primitive import load_template_file
 
 TSR_DIR = Path(__file__).parent.parent / "tsr_templates"
 
-# Bin positions
-RIGHT_BIN_POS = [0.75, -0.35, 0.50]
-LEFT_BIN_POS = [-0.75, -0.35, 0.50]
+# Bin positions (floor-standing, 0.80m tall bins)
+# x=±0.85 to clear table collision (table extends to x=±0.65, bins are 0.25m wide)
+# Small z offset (0.01m) to avoid interpenetration with floor at startup
+RIGHT_BIN_POS = [0.85, -0.35, 0.01]
+LEFT_BIN_POS = [-0.85, -0.35, 0.01]
 
 # Base heights to try
 BASE_HEIGHTS = [0.2, 0.0, 0.4]
@@ -90,7 +94,12 @@ def load_place_tsr(robot, bin_name):
 def main():
     import mujoco
 
-    print("Simplified Recycling Demo (Execution Context API)", flush=True)
+    parser = argparse.ArgumentParser(description="Recycling demo with manual TSR loading")
+    parser.add_argument("--physics", action="store_true", help="Enable physics simulation")
+    args = parser.parse_args()
+
+    mode = "Physics" if args.physics else "Kinematic"
+    print(f"Recycling Demo (Manual TSR Loading) - {mode} Mode", flush=True)
     print("=" * 50, flush=True)
 
     # Create robot with objects
@@ -104,8 +113,7 @@ def main():
     robot.env.registry.activate("recycle_bin", pos=LEFT_BIN_POS)
     mujoco.mj_forward(robot.model, robot.data)
 
-    # Use the new execution context API (kinematic mode for reliable testing)
-    with robot.sim(physics=False) as ctx:
+    with robot.sim(physics=args.physics) as ctx:
         robot.go_to("ready")
         ctx.sync()
 

@@ -9,9 +9,11 @@ Demonstrates:
 - PlanResult for compound base+arm trajectories
 
 Usage:
-    uv run mjpython examples/arm_planning.py
+    uv run mjpython examples/arm_planning.py            # Kinematic mode (default)
+    uv run mjpython examples/arm_planning.py --physics  # Physics simulation
 """
 
+import argparse
 import time
 
 import numpy as np
@@ -32,15 +34,19 @@ def generate_random_goal(arm, rng: np.random.Generator, max_attempts: int = 50):
 
 
 def main():
-    print("Geodude Unified Planning API Demo", flush=True)
+    parser = argparse.ArgumentParser(description="Arm planning demo with unified API")
+    parser.add_argument("--physics", action="store_true", help="Enable physics simulation")
+    args = parser.parse_args()
+
+    mode = "Physics" if args.physics else "Kinematic"
+    print(f"Geodude Unified Planning API Demo - {mode} Mode", flush=True)
     print("=" * 50, flush=True)
     print("Running until viewer is closed...\n", flush=True)
 
     robot = Geodude()
     rng = np.random.default_rng()
 
-    # Use execution context for simulation
-    with robot.sim(physics=False) as ctx:
+    with robot.sim(physics=args.physics) as ctx:
         iteration = 0
         while ctx.is_running():
             iteration += 1

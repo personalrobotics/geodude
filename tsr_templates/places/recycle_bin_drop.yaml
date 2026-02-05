@@ -4,7 +4,7 @@ description: |
   Small box region above the bin center.
   Palm-down orientation so object falls into bin when fingers open.
 
-  Bin dimensions: ~24cm x 24cm inner area, ~30cm tall (top at z≈0.30)
+  Bin dimensions: ~24cm x 24cm inner area, ~80cm tall (floor-standing, top at z≈0.80)
   TSR convention: gripper z = approach direction.
   With -z approach, gripper z points downward,
   so opening the fingers releases the object into the bin.
@@ -17,7 +17,7 @@ position:
   type: box
   x: [-0.05, 0.05]   # Centered over bin opening
   y: [-0.05, 0.05]
-  z: [0.50, 0.55]    # 20-25cm above bin top (bin top at z≈0.30)
+  z: [0.82, 0.87]    # 2-7cm above bin top (bin top at z≈0.80)
 
 orientation:
   approach: -z

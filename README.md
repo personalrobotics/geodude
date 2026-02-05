@@ -167,6 +167,8 @@ robot.grasp_manager.detach_object("can")
 
 ## Architecture
 
+### Component Overview
+
 ```
 Geodude
 ├── left_arm / right_arm (Arm)
@@ -182,6 +184,50 @@ Geodude
 └── Collision checkers
     └── Grasp-aware collision checking
 ```
+
+### Ownership Model
+
+The framework separates **planning** (what to do) from **execution** (how to do it):
+
+| Component | Owns | Responsibilities |
+|-----------|------|------------------|
+| **Robot/Arm** | Planning & State | Motion planning, IK, collision checking, grasp management, TSR registry |
+| **Context** | Execution | Trajectory execution, gripper actuation, state synchronization, hardware abstraction |
+
+**Robot/Arm** is stateless with respect to execution—it plans trajectories but doesn't know whether they'll run in simulation or on hardware. This keeps planning logic portable.
+
+**Context** handles the messy reality of execution: timing, physics, hardware communication, error recovery. Different contexts (sim, hardware) implement the same interface.
+
+**The context manager** (`robot.sim()`, `robot.hardware()`) wires them together:
+
+```python
+with robot.sim() as ctx:
+    # Robot plans trajectories (doesn't know about sim vs hardware)
+    trajectory = robot.right_arm.plan_to(goal)
+
+    # Context executes them (knows exactly how)
+    ctx.execute(trajectory)
+
+    # Gripper ops go through context (updates robot's grasp state)
+    ctx.arm("right").grasp("can")
+```
+
+### Design Principles
+
+The architecture is designed for **multi-robot reusability**:
+
+1. **Robots implement interfaces, not inheritance** — Different robots (Geodude, HERB, Fetch) can implement the same planning/execution interfaces without sharing a base class.
+
+2. **TSRs live with objects, not robots** — Grasp and place TSRs are stored in `prl_assets` alongside object models. Any robot with a compatible hand can use them.
+
+3. **Hand compatibility, not robot compatibility** — TSRs declare which hands they work with (`robotiq_2f_140`, `wsg_50`). The robot queries its hand type to find compatible TSRs.
+
+4. **Context abstracts deployment** — The same manipulation code runs in kinematic sim, physics sim, or hardware by changing only the context.
+
+This separation allows:
+- Reusable manipulation primitives that work across robots
+- Objects that "just work" when added to the asset manager
+- Easy testing (kinematic sim) before deployment (hardware)
 
 ## Examples
 

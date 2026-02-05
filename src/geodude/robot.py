@@ -10,6 +10,7 @@ import mujoco
 import numpy as np
 from mj_environment import Environment
 
+from geodude.affordances import AffordanceRegistry
 from geodude.arm import Arm
 from geodude.config import GeodudConfig
 from geodude.grasp_manager import GraspManager
@@ -106,6 +107,10 @@ class Geodude:
         keyframe_poses = self._load_keyframe_poses()
         self._named_poses = {**self.config.named_poses, **keyframe_poses}
 
+        # Initialize affordance registry
+        tsr_templates_dir = Path(__file__).parent.parent.parent / "tsr_templates"
+        self._affordance_registry = AffordanceRegistry([tsr_templates_dir])
+
         # Run forward to initialize state
         mujoco.mj_forward(self.model, self.data)
 
@@ -166,6 +171,25 @@ class Geodude:
         """Named pose configurations (from keyframes + config)."""
         return self._named_poses
 
+    @property
+    def affordances(self) -> AffordanceRegistry:
+        """Affordance registry for manipulation discovery."""
+        return self._affordance_registry
+
+    @property
+    def _active_context(self) -> "SimContext | None":
+        """Currently active execution context, if any.
+
+        This is set by the context manager (robot.sim() or robot.hardware())
+        and used by primitives like pickup() and place() to execute actions.
+        """
+        return getattr(self, "_context", None)
+
+    @_active_context.setter
+    def _active_context(self, ctx: "SimContext | None") -> None:
+        """Set the active execution context."""
+        self._context = ctx
+
     def go_to(self, pose_name: str, speed: float = 1.0) -> bool:
         """Move both arms to a named configuration.
 
@@ -182,6 +206,98 @@ class Geodude:
         left_success = self.left_arm.go_to(pose_name, speed)
         right_success = self.right_arm.go_to(pose_name, speed)
         return left_success and right_success
+
+    def pickup(
+        self,
+        target: str | None = None,
+        **kwargs,
+    ) -> bool:
+        """Pick up an object using affordance-based planning.
+
+        Uses the AffordanceRegistry to discover grasp TSRs, then plans and
+        executes via the active execution context.
+
+        Args:
+            target: Object name (e.g., "can_0"), or None for any pickable
+            **kwargs: Additional args passed to primitives.pickup():
+                - object_type: Filter by type if target is None
+                - arm: Specific arm ("left"/"right") or None for auto
+                - base_heights: Heights to search (default [0.2, 0.0, 0.4])
+                - lift_height: Height to lift after grasping (default 0.1m)
+                - timeout: Planning timeout (default 30s)
+
+        Returns:
+            True if pickup succeeded
+
+        Raises:
+            RuntimeError: If no execution context is active
+
+        Example:
+            with robot.sim() as ctx:
+                robot.pickup("can_0")
+                robot.pickup(object_type="can")
+        """
+        from geodude.primitives import pickup
+
+        return pickup(self, target, **kwargs)
+
+    def place(
+        self,
+        destination: str,
+        **kwargs,
+    ) -> bool:
+        """Place held object at a destination.
+
+        Uses the AffordanceRegistry to discover place TSRs, then plans and
+        executes via the active execution context.
+
+        Args:
+            destination: Destination name (e.g., "recycle_bin_0")
+            **kwargs: Additional args passed to primitives.place():
+                - arm: Arm holding object, or None for auto-detect
+                - base_heights: Heights to search (default [0.2, 0.0, 0.4])
+                - timeout: Planning timeout (default 30s)
+
+        Returns:
+            True if place succeeded
+
+        Raises:
+            RuntimeError: If no execution context is active
+
+        Example:
+            with robot.sim() as ctx:
+                robot.pickup("can_0")
+                robot.place("recycle_bin_0")
+        """
+        from geodude.primitives import place
+
+        return place(self, destination, **kwargs)
+
+    def get_pickable_objects(self, object_type: str | None = None) -> list[str]:
+        """Get names of objects that can be picked up.
+
+        Args:
+            object_type: Filter by type (e.g., "can")
+
+        Returns:
+            List of pickable object instance names
+        """
+        from geodude.primitives import get_pickable_objects
+
+        return get_pickable_objects(self, object_type)
+
+    def get_place_destinations(self, object_type: str) -> list[str]:
+        """Get valid place destinations for an object type.
+
+        Args:
+            object_type: Type of object being placed
+
+        Returns:
+            List of destination instance names
+        """
+        from geodude.primitives import get_place_destinations
+
+        return get_place_destinations(self, object_type)
 
     def step(self, n_steps: int = 1) -> None:
         """Step the simulation forward.

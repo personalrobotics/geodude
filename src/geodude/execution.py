@@ -271,6 +271,9 @@ class SimContext:
         # Initialize executors
         self._setup_executors()
 
+        # Set as active context on robot (for primitives)
+        self._robot._active_context = self
+
         # Initial sync
         self.sync()
 
@@ -278,6 +281,9 @@ class SimContext:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Exit context manager, cleaning up resources."""
+        # Clear active context on robot
+        self._robot._active_context = None
+
         if self._owns_viewer and self._viewer is not None:
             self._viewer.close()
             self._viewer = None

@@ -1625,6 +1625,55 @@ class Arm:
             best_height, best_path = min(successful_results, key=lambda x: path_length(x[1]))
             return build_result(best_height, best_path)
 
+    def pickup(
+        self,
+        target: str | None = None,
+        **kwargs,
+    ) -> bool:
+        """Pick up an object with this arm.
+
+        Uses affordance-based planning via the active execution context.
+
+        Args:
+            target: Object name (e.g., "can_0"), or None for any pickable
+            **kwargs: Additional args (see primitives.pickup)
+
+        Returns:
+            True if pickup succeeded
+
+        Example:
+            with robot.sim() as ctx:
+                robot.right_arm.pickup("can_0")
+        """
+        from geodude.primitives import pickup
+
+        return pickup(self._robot, target, arm=self, **kwargs)
+
+    def place(
+        self,
+        destination: str,
+        **kwargs,
+    ) -> bool:
+        """Place held object at a destination with this arm.
+
+        Uses affordance-based planning via the active execution context.
+
+        Args:
+            destination: Destination name (e.g., "recycle_bin_0")
+            **kwargs: Additional args (see primitives.place)
+
+        Returns:
+            True if place succeeded
+
+        Example:
+            with robot.sim() as ctx:
+                robot.right_arm.pickup("can_0")
+                robot.right_arm.place("recycle_bin_0")
+        """
+        from geodude.primitives import place
+
+        return place(self._robot, destination, arm=self, **kwargs)
+
     def close_gripper(self, steps: int = 100) -> str | None:
         """Close the gripper and detect grasp.
 

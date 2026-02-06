@@ -1,5 +1,6 @@
 """Trajectory execution for simulation and real robot."""
 
+import logging
 import time
 from typing import Protocol
 
@@ -7,6 +8,8 @@ import mujoco
 import numpy as np
 
 from geodude.trajectory import Trajectory
+
+logger = logging.getLogger(__name__)
 
 # Import for type hints only - avoids circular import
 from typing import TYPE_CHECKING
@@ -602,9 +605,6 @@ class RobotPhysicsController:
         Returns:
             True if converged, False if timeout
         """
-        import logging
-        logger = logging.getLogger(__name__)
-
         # Use config defaults if not specified
         if position_tolerance is None:
             position_tolerance = self.execution_config.position_tolerance
@@ -740,9 +740,6 @@ class RobotPhysicsController:
         Returns:
             Name of grasped object, or None
         """
-        import logging
-        logger = logging.getLogger(__name__)
-
         # Use config defaults
         cfg = self.gripper_config
         if steps is None:

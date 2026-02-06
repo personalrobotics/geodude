@@ -1,7 +1,11 @@
 """Grasp state management and collision group updates."""
 
+import logging
+
 import mujoco
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # Collision group bit definitions
 # Bit 0 (value 1): Normal objects and robot arm
@@ -292,9 +296,6 @@ def detect_grasped_object(
     Returns:
         Name of grasped object, or None if nothing is grasped
     """
-    import logging
-    logger = logging.getLogger(__name__)
-
     # Separate gripper bodies into left and right sides
     left_body_ids = set()
     right_body_ids = set()

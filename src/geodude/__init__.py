@@ -57,6 +57,13 @@ def __getattr__(name):
     if name == "RecoveryConfig":
         from geodude.config import RecoveryConfig
         return RecoveryConfig
+    # Debug logging
+    if name == "DebugConfig":
+        from geodude.config import DebugConfig
+        return DebugConfig
+    if name == "setup_logging":
+        from geodude.config import setup_logging
+        return setup_logging
     # Execution context
     if name == "SimContext":
         from geodude.execution import SimContext
@@ -73,6 +80,8 @@ __all__ = [
     "PhysicsExecutionConfig",
     "GripperPhysicsConfig",
     "RecoveryConfig",
+    "DebugConfig",
+    "setup_logging",
     "Trajectory",
     "PlanResult",
     "SimContext",

@@ -443,28 +443,38 @@ class RobotPhysicsController:
     def __init__(
         self,
         robot: "Geodude",
-        control_dt: float = 0.008,
-        lookahead_time: float = 0.1,
         viewer=None,
         recorder=None,
+        initial_positions: dict[str, np.ndarray] | None = None,
     ):
         """Initialize physics controller for the robot.
 
         Args:
             robot: Geodude robot instance
-            control_dt: Control update rate in seconds
-            lookahead_time: Velocity feedforward gain
             viewer: Optional MuJoCo viewer to sync
             recorder: Optional FrameRecorder to capture frames during execution
+            initial_positions: Optional dict mapping arm names ("left", "right") to
+                             initial joint positions. If not provided for an arm,
+                             uses current qpos (which may be zeros if not initialized).
+
+        Physics parameters are read from robot.config.physics.
         """
         self.robot = robot
         self.model = robot.model
         self.data = robot.data
-        self.control_dt = control_dt
-        self.lookahead_time = lookahead_time
         self.viewer = viewer
         self.recorder = recorder
-        self.steps_per_control = max(1, int(control_dt / self.model.opt.timestep))
+
+        # Get physics config from robot
+        physics_config = robot.config.physics
+        self.execution_config = physics_config.execution
+        self.gripper_config = physics_config.gripper
+        self.recovery_config = physics_config.recovery
+
+        # Control timing from config
+        self.control_dt = self.execution_config.control_dt
+        self.lookahead_time = self.execution_config.lookahead_time
+        self.steps_per_control = max(1, int(self.control_dt / self.model.opt.timestep))
         self._step_count = 0  # For frame capture interval
 
         # Collect actuator info for both arms and grippers
@@ -480,11 +490,18 @@ class RobotPhysicsController:
                 # Remove "_joint" suffix if present
                 act_name = jname.replace("_joint", "")
                 actuator_ids.append(self.model.actuator(act_name).id)
+
+            # Use provided initial position or fall back to current qpos
+            if initial_positions and arm_name in initial_positions:
+                target_pos = np.asarray(initial_positions[arm_name]).copy()
+            else:
+                target_pos = arm.get_joint_positions().copy()
+
             self._arms[arm_name] = {
                 "arm": arm,
                 "actuator_ids": actuator_ids,
                 "joint_qpos_indices": arm.joint_qpos_indices,
-                "target_position": arm.get_joint_positions().copy(),
+                "target_position": target_pos,
                 "target_velocity": np.zeros(len(actuator_ids)),
             }
 
@@ -498,6 +515,37 @@ class RobotPhysicsController:
                     "ctrl_closed": gripper.ctrl_closed,
                     "target_ctrl": self.data.ctrl[gripper.actuator_id],
                 }
+
+        # Track base actuators for coordinated control
+        self._bases = {}
+        for side in ["left", "right"]:
+            base = getattr(robot, f"{side}_base", None)
+            if base is not None:
+                actuator_name = f"{side}_linear_actuator"
+                try:
+                    actuator_id = self.model.actuator(actuator_name).id
+                    self._bases[side] = {
+                        "actuator_id": actuator_id,
+                        "target_height": base.height,
+                    }
+                except KeyError:
+                    pass
+
+        # Initialize qpos and ctrl to target positions to avoid violent jumps
+        # This ensures physics starts with arms already at target, not at zeros
+        for arm_name, info in self._arms.items():
+            for i, qpos_idx in enumerate(info["joint_qpos_indices"]):
+                self.data.qpos[qpos_idx] = info["target_position"][i]
+                self.data.qvel[qpos_idx] = 0.0
+            for i, actuator_id in enumerate(info["actuator_ids"]):
+                self.data.ctrl[actuator_id] = info["target_position"][i]
+
+        # Initialize base ctrl to target heights
+        for info in self._bases.values():
+            self.data.ctrl[info["actuator_id"]] = info["target_height"]
+
+        # Update kinematics so everything is consistent
+        mujoco.mj_forward(self.model, self.data)
 
     def hold_all(self) -> None:
         """Update all position hold targets to current positions."""
@@ -519,6 +567,10 @@ class RobotPhysicsController:
         for info in self._grippers.values():
             self.data.ctrl[info["actuator_id"]] = info["target_ctrl"]
 
+        # Apply control to all bases (hold positions)
+        for info in self._bases.values():
+            self.data.ctrl[info["actuator_id"]] = info["target_height"]
+
         # Step physics
         for _ in range(self.steps_per_control):
             mujoco.mj_step(self.model, self.data)
@@ -532,6 +584,64 @@ class RobotPhysicsController:
         if self.recorder is not None and self._step_count % 4 == 0:
             self.recorder.capture()
 
+    def _wait_for_convergence(
+        self,
+        arm_name: str,
+        position_tolerance: float | None = None,
+        velocity_tolerance: float | None = None,
+        timeout_steps: int | None = None,
+    ) -> bool:
+        """Wait for arm to converge to target position.
+
+        Args:
+            arm_name: "left" or "right"
+            position_tolerance: Max position error in radians (default from config)
+            velocity_tolerance: Max velocity in rad/s (default from config)
+            timeout_steps: Max steps to wait (default from config)
+
+        Returns:
+            True if converged, False if timeout
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Use config defaults if not specified
+        if position_tolerance is None:
+            position_tolerance = self.execution_config.position_tolerance
+        if velocity_tolerance is None:
+            velocity_tolerance = self.execution_config.velocity_tolerance
+        if timeout_steps is None:
+            timeout_steps = self.execution_config.convergence_timeout_steps
+
+        info = self._arms[arm_name]
+
+        for step in range(timeout_steps):
+            self.step()
+
+            # Check position error
+            current_pos = np.array([
+                self.data.qpos[idx] for idx in info["joint_qpos_indices"]
+            ])
+            pos_error = np.abs(info["target_position"] - current_pos)
+
+            # Check velocity
+            current_vel = np.array([
+                self.data.qvel[idx] for idx in info["joint_qpos_indices"]
+            ])
+
+            if np.all(pos_error < position_tolerance) and np.all(np.abs(current_vel) < velocity_tolerance):
+                return True
+
+        # Log final error on timeout for debugging
+        max_pos_err = np.max(pos_error)
+        max_vel = np.max(np.abs(current_vel))
+        logger.warning(
+            f"Convergence timeout for {arm_name}: "
+            f"max_pos_err={np.rad2deg(max_pos_err):.2f}° (limit {np.rad2deg(position_tolerance):.2f}°), "
+            f"max_vel={max_vel:.3f} rad/s (limit {velocity_tolerance:.3f})"
+        )
+        return False
+
     def execute(self, arm_name: str, trajectory: Trajectory) -> bool:
         """Execute trajectory on specified arm while others hold position.
 
@@ -540,7 +650,7 @@ class RobotPhysicsController:
             trajectory: Trajectory to execute
 
         Returns:
-            True if execution completed
+            True if execution completed and converged, False if timeout
         """
         if arm_name not in self._arms:
             raise ValueError(f"Unknown arm: {arm_name}")
@@ -564,11 +674,10 @@ class RobotPhysicsController:
         info["target_position"] = trajectory.positions[-1].copy()
         info["target_velocity"] = np.zeros(len(info["actuator_ids"]))
 
-        # Settling period
-        for _ in range(self.steps_per_control * 20):
-            self.step()
+        # Convergence-based settling (replaces fixed-step settling)
+        converged = self._wait_for_convergence(arm_name)
 
-        return True
+        return converged
 
     def execute_right(self, trajectory: Trajectory) -> bool:
         """Execute trajectory on right arm."""
@@ -578,54 +687,177 @@ class RobotPhysicsController:
         """Execute trajectory on left arm."""
         return self.execute("left", trajectory)
 
-    def close_gripper(self, arm_name: str, steps: int = 200) -> str | None:
+    def execute_base(self, side: str, trajectory: Trajectory) -> bool:
+        """Execute base trajectory while maintaining arm positions.
+
+        Args:
+            side: "left" or "right"
+            trajectory: Base trajectory (1 DOF)
+
+        Returns:
+            True if execution completed
+        """
+        if side not in self._bases:
+            raise ValueError(f"Unknown base: {side}")
+
+        info = self._bases[side]
+
+        # Execute trajectory waypoints
+        for i in range(trajectory.num_waypoints):
+            info["target_height"] = trajectory.positions[i, 0]
+            self.step()
+            time.sleep(self.control_dt)
+
+        # Set final target for position hold
+        info["target_height"] = trajectory.positions[-1, 0]
+
+        # Brief settling period for base (simpler than arm convergence)
+        for _ in range(self.execution_config.base_settling_steps):
+            self.step()
+
+        return True
+
+    def set_base_height(self, side: str, height: float) -> None:
+        """Update base target height for position hold.
+
+        Args:
+            side: "left" or "right"
+            height: Target height in meters
+        """
+        if side in self._bases:
+            self._bases[side]["target_height"] = height
+
+    def close_gripper(self, arm_name: str, steps: int | None = None) -> str | None:
         """Close gripper while maintaining all arm positions.
+
+        Monitors for contact during closing and continues for a firm grip
+        once contact is detected.
 
         Args:
             arm_name: "left" or "right"
-            steps: Number of control steps for closing
+            steps: Number of control steps for closing (default from config)
 
         Returns:
             Name of grasped object, or None
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Use config defaults
+        cfg = self.gripper_config
+        if steps is None:
+            steps = cfg.close_steps
+
         if arm_name not in self._grippers:
+            logger.warning(f"No gripper found for {arm_name} arm")
             return None
 
         gripper_info = self._grippers[arm_name]
         gripper = gripper_info["gripper"]
 
-        # Gradually close gripper
-        start_ctrl = gripper_info["target_ctrl"]
+        from geodude.grasp_manager import detect_grasped_object
+
+        # Always start from open position to ensure gripper actually closes
+        # (using target_ctrl could be stale if gripper was already closed)
+        start_ctrl = gripper_info["ctrl_open"]
         end_ctrl = gripper_info["ctrl_closed"]
+
+        # First open the gripper to ensure clean start
+        gripper_info["target_ctrl"] = start_ctrl
+        for _ in range(cfg.pre_open_steps):
+            self.step()
+        if cfg.debug:
+            logger.info(f"Gripper {arm_name}: opening before close, ctrl={start_ctrl}")
+        contacts_detected = False
+        grasped = None
+
+        if cfg.debug:
+            logger.info(f"Gripper {arm_name}: closing from {start_ctrl} to {end_ctrl}")
 
         for i in range(steps):
             t = (i + 1) / steps
             gripper_info["target_ctrl"] = start_ctrl + t * (end_ctrl - start_ctrl)
             self.step()
+
+            # Check for contacts periodically
+            # Use require_bilateral=False during closing - we just want to know if contact started
+            if i % cfg.contact_check_interval == 0 and not contacts_detected:
+                grasped = detect_grasped_object(
+                    self.model,
+                    self.data,
+                    gripper.gripper_body_names,
+                    gripper._candidate_objects,
+                    require_bilateral=False,  # Less strict during closing
+                    debug=cfg.debug,
+                )
+                if grasped:
+                    contacts_detected = True
+                    if cfg.debug:
+                        logger.info(f"Gripper {arm_name}: contact detected at step {i}")
+
             time.sleep(self.control_dt * 0.5)  # Slower for gripper
 
-        # Detect grasp using gripper's detection
-        from geodude.grasp_manager import detect_grasped_object
+        if cfg.debug:
+            logger.info(f"Gripper {arm_name}: close complete, contacts_detected={contacts_detected}")
 
+        # If contacts detected, continue closing for firm grip
+        if contacts_detected:
+            for _ in range(cfg.firm_grip_steps):
+                self.step()
+                time.sleep(self.control_dt * 0.5)
+
+        # Check gripper position for logging
+        gripper_pos = gripper.get_actual_position()
+        if cfg.debug:
+            logger.info(f"Gripper {arm_name}: actual_position={gripper_pos:.3f}")
+
+        # Final grasp detection with bilateral contact for robust grasping
+        # Do contact detection FIRST - a thin object like a can may allow gripper
+        # to close to 0.95+ and still be successfully grasped
         grasped = detect_grasped_object(
             self.model,
             self.data,
             gripper.gripper_body_names,
             gripper._candidate_objects,
+            require_bilateral=True,  # Require both fingers touching
+            debug=cfg.debug,
         )
+
+        if not grasped:
+            # No bilateral contact - try relaxed detection as fallback
+            grasped = detect_grasped_object(
+                self.model,
+                self.data,
+                gripper.gripper_body_names,
+                gripper._candidate_objects,
+                require_bilateral=False,
+                debug=cfg.debug,
+            )
+            if grasped:
+                logger.warning(f"Gripper {arm_name}: only unilateral contact with {grasped} - grasp may be unstable")
+
+        # Only consider "fully closed = lost grasp" if there are NO contacts at all
+        # This catches cases where gripper completely missed or object slipped out
+        if not grasped and gripper_pos > cfg.fully_closed_threshold:
+            logger.warning(f"Gripper {arm_name}: fully closed (pos={gripper_pos:.3f}) with no contacts - missed or lost object")
+
+        logger.debug(f"Gripper {arm_name}: final grasp detection = {grasped}")
 
         if grasped:
             gripper.grasp_manager.mark_grasped(grasped, arm_name)
 
         return grasped
 
-    def open_gripper(self, arm_name: str, steps: int = 100) -> None:
+    def open_gripper(self, arm_name: str, steps: int | None = None) -> None:
         """Open gripper while maintaining all arm positions.
 
         Args:
             arm_name: "left" or "right"
-            steps: Number of control steps for opening
+            steps: Number of control steps for opening (default from config)
         """
+        if steps is None:
+            steps = self.gripper_config.open_steps
+
         if arm_name not in self._grippers:
             return
 

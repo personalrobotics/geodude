@@ -44,6 +44,19 @@ def __getattr__(name):
     if name == "PlanningDefaults":
         from geodude.config import PlanningDefaults
         return PlanningDefaults
+    # Physics config classes
+    if name == "PhysicsConfig":
+        from geodude.config import PhysicsConfig
+        return PhysicsConfig
+    if name == "PhysicsExecutionConfig":
+        from geodude.config import PhysicsExecutionConfig
+        return PhysicsExecutionConfig
+    if name == "GripperPhysicsConfig":
+        from geodude.config import GripperPhysicsConfig
+        return GripperPhysicsConfig
+    if name == "RecoveryConfig":
+        from geodude.config import RecoveryConfig
+        return RecoveryConfig
     # Execution context
     if name == "SimContext":
         from geodude.execution import SimContext
@@ -56,6 +69,10 @@ __all__ = [
     "VentionBaseConfig",
     "EntityConfig",
     "PlanningDefaults",
+    "PhysicsConfig",
+    "PhysicsExecutionConfig",
+    "GripperPhysicsConfig",
+    "RecoveryConfig",
     "Trajectory",
     "PlanResult",
     "SimContext",

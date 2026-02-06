@@ -193,11 +193,12 @@ class TestGeodueEndEffectors:
         robot.right_arm.gripper.set_position(0.5)
         assert robot.right_arm.gripper.get_position() == pytest.approx(0.5, abs=0.1)
 
-    def test_left_arm_no_gripper_actuator(self):
-        """Left arm has no gripper actuator (as per default geodude.xml)."""
+    def test_left_arm_has_gripper_actuator(self):
+        """Left arm has gripper actuator configured."""
         robot = Geodude()
-        # Left arm gripper has no actuator in default geodude.xml
-        assert robot.left_arm.gripper.actuator_id is None
+        # Left arm gripper was added to support bimanual manipulation
+        assert robot.left_arm.gripper is not None
+        assert robot.left_arm.gripper.actuator_id is not None
 
 
 class TestJointLimits:

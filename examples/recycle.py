@@ -15,11 +15,18 @@ Usage:
 """
 
 import argparse
+import logging
 from pathlib import Path
 
 import numpy as np
 
 from geodude import Geodude
+
+# Configure logging to see pickup/place introspection
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(name)s: %(message)s",
+)
 from tsr import TSR
 from tsr.core.tsr_primitive import load_template_file
 
@@ -63,6 +70,7 @@ def sample_can_placement(robot):
 
 def main():
     import mujoco
+    import traceback
 
     parser = argparse.ArgumentParser(description="Recycling demo with manipulation primitives")
     parser.add_argument("--physics", action="store_true", help="Enable physics simulation")
@@ -72,87 +80,98 @@ def main():
     print(f"Recycling Demo (Primitives API) - {mode} Mode", flush=True)
     print("=" * 50, flush=True)
 
-    # Create robot with objects
-    robot = Geodude(objects={"can": 1, "recycle_bin": 2})
+    try:
+        # Create robot with objects
+        robot = Geodude(objects={"can": 1, "recycle_bin": 2})
 
-    # Place can and bins
-    can_pos, can_quat = sample_can_placement(robot)
-    print(f"Can at {can_pos.round(3)}", flush=True)
-    robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
-    robot.env.registry.activate("recycle_bin", pos=RIGHT_BIN_POS)
-    robot.env.registry.activate("recycle_bin", pos=LEFT_BIN_POS)
-    mujoco.mj_forward(robot.model, robot.data)
+        # Place can and bins
+        can_pos, can_quat = sample_can_placement(robot)
+        print(f"Can at {can_pos.round(3)}", flush=True)
+        robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
+        robot.env.registry.activate("recycle_bin", pos=RIGHT_BIN_POS)
+        robot.env.registry.activate("recycle_bin", pos=LEFT_BIN_POS)
 
-    with robot.sim(physics=args.physics) as ctx:
+        # Set initial arm positions
+        # In kinematic mode: positions are set directly via go_to
+        # In physics mode: the controller initializes qpos to ready positions
+        # (so this is mainly for kinematic mode, physics mode handles it internally)
         robot.go_to("ready")
-        ctx.sync()
+        mujoco.mj_forward(robot.model, robot.data)
 
-        cycle = 0
-        while ctx.is_running():
-            cycle += 1
-            print(f"\n{'='*40}\nCycle {cycle}\n{'='*40}", flush=True)
+        with robot.sim(physics=args.physics) as ctx:
+            ctx.sync()
 
-            # Check what's pickable
-            pickable = robot.get_pickable_objects()
-            print(f"Pickable objects: {pickable}", flush=True)
+            cycle = 0
+            while ctx.is_running():
+                cycle += 1
+                print(f"\n{'='*40}\nCycle {cycle}\n{'='*40}", flush=True)
 
-            if not pickable:
-                print("No pickable objects, spawning new can...", flush=True)
+                # Check what's pickable
+                pickable = robot.get_pickable_objects()
+                print(f"Pickable objects: {pickable}", flush=True)
+
+                if not pickable:
+                    print("No pickable objects, spawning new can...", flush=True)
+                    can_pos, can_quat = sample_can_placement(robot)
+                    robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
+                    ctx.sync()
+                    continue
+
+                # ============================================================
+                # THE MAGIC: pickup + place with automatic affordance discovery
+                # ============================================================
+
+                # 1. Pick up any pickable object (auto-discovers grasp TSRs)
+                target = pickable[0]
+                print(f"\n1. Picking up {target}...", flush=True)
+                if not robot.pickup(target):
+                    print("   Pickup failed!", flush=True)
+                    break
+
+                print("   Pickup succeeded!", flush=True)
+
+                # 2. Place in recycle bin (auto-discovers place TSRs)
+                # Choose bin based on which arm picked up (same side for easier reach)
+                from geodude.primitives import _find_arm_holding_object
+                holding_arm = _find_arm_holding_object(robot)
+                # recycle_bin_0 is at x=0.85 (right), recycle_bin_1 is at x=-0.85 (left)
+                bin_name = "recycle_bin_0" if holding_arm.side == "right" else "recycle_bin_1"
+
+                print(f"\n2. Placing in {bin_name}...", flush=True)
+                if not robot.place(bin_name):
+                    print("   Place failed!", flush=True)
+                    break
+
+                print("   Place succeeded!", flush=True)
+
+                # 3. Hide object and return to ready
+                robot.env.registry.hide(target)
+
+                print("\n3. Returning to ready...", flush=True)
+                ready_config = np.array(robot.named_poses["ready"][holding_arm.side])
+                ready_result = holding_arm.plan_to(ready_config)
+                if ready_result is not None:
+                    ctx.execute(ready_result)
+                ctx.sync()
+
+                print(f"\nCycle {cycle} complete!", flush=True)
+
+                if not ctx.is_running():
+                    break
+
+                # Spawn new can
+                print("\nSpawning new can...", flush=True)
                 can_pos, can_quat = sample_can_placement(robot)
+                print(f"Can at {can_pos.round(3)}", flush=True)
                 robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
                 ctx.sync()
-                continue
 
-            # ============================================================
-            # THE MAGIC: pickup + place with automatic affordance discovery
-            # ============================================================
+            print(f"\nCompleted {cycle} cycles.", flush=True)
 
-            # 1. Pick up any pickable object (auto-discovers grasp TSRs)
-            target = pickable[0]
-            print(f"\n1. Picking up {target}...", flush=True)
-            if not robot.pickup(target):
-                print("   Pickup failed!", flush=True)
-                break
-
-            print("   Pickup succeeded!", flush=True)
-
-            # 2. Place in recycle bin (auto-discovers place TSRs)
-            # Choose bin based on which arm picked up (same side for easier reach)
-            from geodude.primitives import _find_arm_holding_object
-            holding_arm = _find_arm_holding_object(robot)
-            # recycle_bin_0 is at x=0.85 (right), recycle_bin_1 is at x=-0.85 (left)
-            bin_name = "recycle_bin_0" if holding_arm.side == "right" else "recycle_bin_1"
-
-            print(f"\n2. Placing in {bin_name}...", flush=True)
-            if not robot.place(bin_name):
-                print("   Place failed!", flush=True)
-                break
-
-            print("   Place succeeded!", flush=True)
-
-            # 3. Hide object and return to ready
-            robot.env.registry.hide(target)
-
-            print("\n3. Returning to ready...", flush=True)
-            ready_config = np.array(robot.named_poses["ready"][holding_arm.side])
-            ready_result = holding_arm.plan_to(ready_config)
-            if ready_result is not None:
-                ctx.execute(ready_result)
-            ctx.sync()
-
-            print(f"\nCycle {cycle} complete!", flush=True)
-
-            if not ctx.is_running():
-                break
-
-            # Spawn new can
-            print("\nSpawning new can...", flush=True)
-            can_pos, can_quat = sample_can_placement(robot)
-            print(f"Can at {can_pos.round(3)}", flush=True)
-            robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
-            ctx.sync()
-
-        print(f"\nCompleted {cycle} cycles.", flush=True)
+    except Exception as e:
+        print(f"\n\nERROR: {e}", flush=True)
+        traceback.print_exc()
+        raise
 
 
 if __name__ == "__main__":

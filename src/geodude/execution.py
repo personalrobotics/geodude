@@ -171,9 +171,13 @@ class SimArmController:
             grasped = object_name
 
         if grasped:
-            # Update grasp manager
+            # Update grasp manager (changes collision groups for planning)
             self._arm.grasp_manager.mark_grasped(grasped, side)
-            # Attach to gripper body for kinematic tracking
+
+            # Always create kinematic attachment for collision checking during planning.
+            # In physics mode, friction holds the object during EXECUTION, but the
+            # attachment is still needed so the collision checker can move the object
+            # with the gripper when checking candidate arm configurations.
             attach_body = f"{side}_ur5e/gripper/right_follower"
             self._arm.grasp_manager.attach_object(grasped, attach_body)
 
@@ -294,12 +298,26 @@ class SimContext:
 
     def _setup_executors(self) -> None:
         """Set up executors based on physics mode."""
+        import numpy as np
+
         from geodude.executor import KinematicExecutor, RobotPhysicsController
 
         if self._physics:
             # Physics mode: use RobotPhysicsController
+            # Pass ready positions so controller initializes arms correctly
+            # even if qpos hasn't been set yet
+            initial_positions = {}
+            if "ready" in self._robot.named_poses:
+                for side in ["left", "right"]:
+                    if side in self._robot.named_poses["ready"]:
+                        initial_positions[side] = np.array(
+                            self._robot.named_poses["ready"][side]
+                        )
+
             self._controller = RobotPhysicsController(
-                self._robot, viewer=self._viewer
+                self._robot,
+                viewer=self._viewer,
+                initial_positions=initial_positions if initial_positions else None,
             )
             self._executors["left_arm"] = self._controller.get_executor("left")
             self._executors["right_arm"] = self._controller.get_executor("right")
@@ -351,16 +369,21 @@ class SimContext:
         if entity in self._executors:
             return self._executors[entity].execute(trajectory)
         elif entity.endswith("_base"):
-            # Base trajectories - execute via base.move_to
+            # Base trajectories
             side = "left" if "left" in entity else "right"
             base = getattr(self._robot, f"{side}_base")
             if base is not None and trajectory.num_waypoints > 0:
-                target_height = trajectory.positions[-1, 0]
-                base.move_to(
-                    target_height,
-                    viewer=self._viewer,
-                    executor_type="physics" if self._physics else "kinematic",
-                )
+                if self._physics and self._controller is not None:
+                    # Physics mode: use unified controller to avoid dual-commanding
+                    return self._controller.execute_base(side, trajectory)
+                else:
+                    # Kinematic mode: use base.move_to directly
+                    target_height = trajectory.positions[-1, 0]
+                    base.move_to(
+                        target_height,
+                        viewer=self._viewer,
+                        executor_type="kinematic",
+                    )
             return True
         else:
             raise ValueError(f"Unknown entity: {entity}")

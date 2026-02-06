@@ -45,14 +45,14 @@ def _get_object_type(robot: "Geodude", object_name: str) -> str:
 
 
 def _get_object_pose(robot: "Geodude", object_name: str) -> np.ndarray | None:
-    """Get object pose from MuJoCo.
+    """Get object pose (4x4 transformation matrix) from MuJoCo.
 
     Args:
         robot: Robot instance
         object_name: Instance name
 
     Returns:
-        3D position array, or None if not found
+        4x4 homogeneous transformation matrix, or None if not found
     """
     import mujoco
 
@@ -62,7 +62,16 @@ def _get_object_pose(robot: "Geodude", object_name: str) -> np.ndarray | None:
         )
         if body_id < 0:
             return None
-        return robot.data.xpos[body_id].copy()
+
+        # Get position and orientation
+        pos = robot.data.xpos[body_id].copy()
+        rot_mat = robot.data.xmat[body_id].reshape(3, 3).copy()
+
+        # Build 4x4 transformation matrix
+        T = np.eye(4)
+        T[:3, :3] = rot_mat
+        T[:3, 3] = pos
+        return T
     except Exception:
         return None
 
@@ -81,6 +90,92 @@ def _find_arm_holding_object(robot: "Geodude") -> "Arm | None":
         if grasped:
             return robot.left_arm if side == "left" else robot.right_arm
     return None
+
+
+def _return_to_ready(robot: "Geodude", arm: "Arm") -> bool:
+    """Return arm to ready position after failure.
+
+    Used for recovery when a grasp fails, so the arm doesn't block
+    the other arm from attempting the same target.
+
+    If planning to ready fails, attempts a simple retract (lift up) first.
+    As a last resort in physics mode, directly commands the arm to ready.
+
+    Args:
+        robot: Robot instance
+        arm: Arm to return to ready
+
+    Returns:
+        True if successful, False if planning or execution failed
+    """
+    import numpy as np
+
+    ctx = robot._active_context
+    if ctx is None:
+        return False
+
+    if "ready" not in robot.named_poses or arm.side not in robot.named_poses["ready"]:
+        logger.warning(f"No ready pose defined for {arm.side} arm")
+        return False
+
+    # Get recovery config
+    recovery_cfg = robot.config.physics.recovery
+
+    ready_config = np.array(robot.named_poses["ready"][arm.side])
+    trajectory = arm.plan_to(ready_config)
+
+    if trajectory is None:
+        # Fallback: try to lift up first, then plan to ready
+        logger.info(f"Direct path to ready failed for {arm.side} arm, trying retract first...")
+        current_pose = arm.get_ee_pose().copy()
+        retract_pose = current_pose.copy()
+        retract_pose[2, 3] += recovery_cfg.retract_height
+
+        retract_result = arm.plan_to_pose(retract_pose, timeout=5.0)
+        if retract_result:
+            logger.info(f"  Retracting {arm.side} arm...")
+            ctx.execute(retract_result)
+            # Now try planning to ready again
+            trajectory = arm.plan_to(ready_config)
+
+    if trajectory is None:
+        # Planning failed - try forced recovery in physics mode
+        # First lift arm up (move shoulder_lift and elbow to clear workspace)
+        # then move to ready. This is safer than direct interpolation.
+        if hasattr(ctx, '_physics') and ctx._physics and hasattr(ctx, '_controller'):
+            logger.warning(f"Planning failed - attempting safe forced recovery for {arm.side} arm")
+            controller = ctx._controller
+            if controller is not None and arm.side in controller._arms:
+                arm_info = controller._arms[arm.side]
+                current_pos = arm_info["target_position"].copy()
+
+                # Phase 1: Lift arm by moving shoulder_lift and elbow to clear workspace
+                lift_config = current_pos.copy()
+                lift_config[1] = recovery_cfg.lift_shoulder_angle
+                lift_config[2] = recovery_cfg.lift_elbow_angle
+
+                # Interpolate to lift position
+                steps = recovery_cfg.interpolation_steps
+                for i in range(steps):
+                    t = (i + 1) / steps
+                    t_smooth = t * t * (3 - 2 * t)  # Smoothstep
+                    arm_info["target_position"] = current_pos + t_smooth * (lift_config - current_pos)
+                    controller.step()
+
+                # Phase 2: Move to ready position
+                lift_pos = arm_info["target_position"].copy()
+                for i in range(steps):
+                    t = (i + 1) / steps
+                    t_smooth = t * t * (3 - 2 * t)
+                    arm_info["target_position"] = lift_pos + t_smooth * (ready_config - lift_pos)
+                    controller.step()
+
+                ctx.sync()
+                return True
+        logger.warning(f"Could not plan recovery path for {arm.side} arm")
+        return False
+
+    return ctx.execute(trajectory)
 
 
 def pickup(
@@ -187,13 +282,20 @@ def pickup(
 
     # Try each arm with all its compatible TSRs at once
     for a, affs in arm_affordances.items():
-        aff_names = [aff.name for aff in affs]
-        logger.debug(f"Trying {a.side} arm with TSRs: {aff_names}")
+        # Re-read object pose before each attempt (object may have moved/fallen)
+        obj_pose = _get_object_pose(robot, target)
+        if obj_pose is None:
+            logger.warning(f"Object {target} no longer found in scene")
+            return False
 
-        # Create all TSRs at object pose - CBiRRT will find path to any of them
+        aff_names = [aff.name for aff in affs]
+        logger.info(f"Trying {a.side} arm with TSRs: {aff_names}")
+
+        # Create all TSRs at CURRENT object pose - CBiRRT will find path to any of them
         grasp_tsrs = [aff.create_tsr(obj_pose) for aff in affs]
 
         # Plan approach (planner picks best TSR)
+        logger.info(f"  Planning approach to {target}...")
         result = a.plan_to_tsr(
             grasp_tsrs,
             base_heights=base_heights,
@@ -201,26 +303,61 @@ def pickup(
         )
 
         if result is None:
-            logger.debug(f"Planning failed for {a.side} arm")
+            logger.warning(f"  Planning FAILED for {a.side} arm (timeout or collision)")
+            # Return to ready even on planning failure to clear the workspace
+            _return_to_ready(robot, a)
             continue
 
         # Execute approach
-        ctx.execute(result)
+        # result can be Trajectory or PlanResult - get waypoint count for logging
+        from geodude.planning import PlanResult
+        if isinstance(result, PlanResult):
+            waypoints = result.arm_trajectory.num_waypoints
+        else:
+            waypoints = result.num_waypoints
+        logger.info(f"  Executing approach trajectory ({waypoints} waypoints)...")
+        exec_success = ctx.execute(result)
+        if not exec_success:
+            logger.warning(f"  Execution FAILED - arm did not converge to target")
+            # Recovery: return to ready
+            ctx.arm(a.side).release()
+            _return_to_ready(robot, a)
+            continue
+        logger.info(f"  Approach execution completed")
 
         # Grasp
+        logger.info(f"  Closing gripper on {target}...")
         grasped = ctx.arm(a.side).grasp(target)
         if not grasped:
-            logger.debug(f"Grasp failed for {target}")
+            logger.warning(f"  Grasp FAILED - no contact detected with {target}")
+            # Check if object moved/fell (Z is at [2,3] in 4x4 pose matrix)
+            new_pose = _get_object_pose(robot, target)
+            if new_pose is not None:
+                old_z = obj_pose[2, 3]
+                new_z = new_pose[2, 3]
+                if new_z < old_z - 0.1:  # Object fell more than 10cm
+                    logger.warning(f"  Object {target} appears to have fallen (z: {old_z:.3f} -> {new_z:.3f})")
+            # Open gripper and return to ready before trying another arm
+            ctx.arm(a.side).release()
+            _return_to_ready(robot, a)
             continue
+        logger.info(f"  Grasp succeeded - holding {grasped}")
 
         # Lift
         if lift_height > 0:
+            logger.info(f"  Lifting {lift_height*100:.0f}cm...")
             lift_pose = a.get_ee_pose().copy()
             lift_pose[2, 3] += lift_height
             lift_result = a.plan_to_pose(lift_pose, timeout=5.0)
             if lift_result:
-                ctx.execute(lift_result)
-                robot.grasp_manager.update_attached_poses()
+                lift_success = ctx.execute(lift_result)
+                if lift_success:
+                    robot.grasp_manager.update_attached_poses()
+                    logger.info(f"  Lift completed")
+                else:
+                    logger.warning(f"  Lift execution did not converge")
+            else:
+                logger.warning(f"  Could not plan lift motion")
 
         logger.info(f"Successfully picked up {target} with {a.side} arm")
         return True
@@ -316,11 +453,12 @@ def place(
 
     # Create all place TSRs - CBiRRT will find path to any of them
     aff_names = [aff.name for aff in affordances]
-    logger.debug(f"Trying place with TSRs: {aff_names}")
+    logger.info(f"Placing {held_object} at {destination} with TSRs: {aff_names}")
 
     place_tsrs = [aff.create_tsr(dest_pose) for aff in affordances]
 
     # Plan place motion (planner picks best TSR)
+    logger.info(f"  Planning place motion...")
     result = a.plan_to_tsr(
         place_tsrs,
         base_heights=base_heights,
@@ -328,14 +466,34 @@ def place(
     )
 
     if result is None:
-        logger.warning(f"All place attempts failed for {destination}")
+        logger.warning(f"  Place planning FAILED for {destination} (timeout or collision)")
+        # Return to ready with object still held
+        _return_to_ready(robot, a)
         return False
 
     # Execute place motion
-    ctx.execute(result)
+    # result can be Trajectory or PlanResult
+    from geodude.planning import PlanResult
+    if isinstance(result, PlanResult):
+        waypoints = result.arm_trajectory.num_waypoints
+    else:
+        waypoints = result.num_waypoints
+    logger.info(f"  Executing place trajectory ({waypoints} waypoints)...")
+    exec_success = ctx.execute(result)
+    if not exec_success:
+        logger.warning(f"  Place execution FAILED - arm did not converge")
+        # Return to ready with object still held
+        _return_to_ready(robot, a)
+        return False
+    logger.info(f"  Place execution completed")
 
     # Release
+    logger.info(f"  Opening gripper to release {held_object}...")
     ctx.arm(a.side).release(held_object)
+
+    # Return to ready after successful place
+    logger.info(f"  Returning to ready position...")
+    _return_to_ready(robot, a)
 
     logger.info(f"Successfully placed {held_object} at {destination}")
     return True

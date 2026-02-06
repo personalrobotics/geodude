@@ -512,8 +512,8 @@ def move_until_touch(
     if config is None:
         config = CartesianControlConfig()
 
-    # Minimum progress threshold
-    min_progress = 0.1
+    # Minimum progress threshold (50% of desired velocity)
+    min_progress = 0.5
 
     logger.debug(
         f"move_until_touch: direction={direction}, distance={distance:.3f}, "
@@ -677,7 +677,7 @@ def execute_twist(
     dt = 0.004  # 4ms control timestep
     elapsed = 0.0
     start_pos = data.site_xpos[arm.ee_site_id].copy()
-    min_progress = 0.1
+    min_progress = 0.5
 
     logger.debug(
         f"execute_twist: twist={twist}, duration={duration}, "

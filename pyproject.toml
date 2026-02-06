@@ -12,6 +12,7 @@ dependencies = [
     "numpy",
     "mujoco",
     "pyyaml",
+    "scipy",
     "toppra>=0.6.3",
     "mj_environment @ git+https://github.com/personalrobotics/mj_environment.git",
     "geodude-assets",

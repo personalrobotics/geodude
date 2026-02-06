@@ -1,10 +1,13 @@
 """Jacobian-based Cartesian velocity control.
 
 Provides robust Cartesian control primitives for contact-based grasping.
-The core function `twist_to_joint_velocity()` handles:
-- Singularity robustness via damped least squares
-- Joint velocity limit scaling (preserves Cartesian direction)
-- Joint position limit avoidance via null-space repulsion
+The core function `twist_to_joint_velocity()` solves a constrained QP:
+
+    min  (1/2)||J*q_dot - v_d||_W^2 + (λ/2)||q_dot||^2
+    s.t. ℓ <= q_dot <= u
+
+where bounds ℓ,u incorporate both velocity limits AND position limits
+(converted to per-timestep velocity bounds).
 
 Works in both physics mode (F/T sensor) and kinematic mode (data.contact).
 """
@@ -17,6 +20,7 @@ from typing import TYPE_CHECKING, Callable, Literal
 
 import mujoco
 import numpy as np
+from scipy.optimize import minimize
 
 if TYPE_CHECKING:
     from geodude.arm import Arm
@@ -33,45 +37,42 @@ logger = logging.getLogger(__name__)
 class CartesianControlConfig:
     """Configuration for Cartesian velocity control.
 
-    User-friendly parameters that control the behavior of twist execution.
-    All parameters have sensible defaults for manipulation tasks.
+    Based on constrained QP formulation for Jacobian IK.
 
     Attributes:
-        velocity_scale: Fraction of robot's max joint velocity to use (0-1).
-                       Lower = safer/slower, higher = faster but riskier.
-                       Default 0.5 = use half of max velocity.
+        length_scale: Length scale L for twist weighting (meters).
+                     W = diag(1,1,1, 1/L², 1/L², 1/L²)
+                     Balances linear velocity (m/s) vs angular (rad/s).
+                     Default 0.1m works well for manipulation.
 
-        joint_margin_deg: Degrees from joint limits to start slowing down.
-                         When a joint is within this margin of its limit,
-                         null-space motion pushes it away.
-                         Default 10° provides good safety margin.
+        damping: Regularization λ for joint velocity.
+                Prevents large joint motions when twist is small.
+                Default 1e-4 is good for most cases.
 
-        singularity_robustness: How much to prioritize stability over accuracy
-                               near singularities (0-1).
-                               0 = pure accuracy (may be unstable)
-                               1 = pure stability (may be slow)
-                               Default 0.3 = slight preference for stability.
+        joint_margin_deg: Degrees from joint limits to treat as buffer.
+                         Position limits are shrunk by this margin.
+                         Default 5° provides safety margin.
 
-        min_progress_threshold: Minimum fraction of commanded velocity that
-                               must be achievable to continue (0-1).
-                               If we can only achieve less than this, declare
-                               that we can't make meaningful progress.
-                               Default 0.1 = require at least 10% progress.
+        velocity_scale: Fraction of max joint velocity to use (0-1).
+                       Default 1.0 uses full velocity limits.
+                       Lower values give slower, safer motion.
     """
 
-    velocity_scale: float = 0.5
-    joint_margin_deg: float = 10.0
-    singularity_robustness: float = 0.3
-    min_progress_threshold: float = 0.1
+    length_scale: float = 0.1
+    damping: float = 1e-4
+    joint_margin_deg: float = 5.0
+    velocity_scale: float = 1.0
 
     def __post_init__(self):
         """Validate configuration values."""
-        if not 0 < self.velocity_scale <= 1:
-            raise ValueError(f"velocity_scale must be in (0, 1], got {self.velocity_scale}")
+        if self.length_scale <= 0:
+            raise ValueError(f"length_scale must be > 0, got {self.length_scale}")
+        if self.damping < 0:
+            raise ValueError(f"damping must be >= 0, got {self.damping}")
         if self.joint_margin_deg < 0:
             raise ValueError(f"joint_margin_deg must be >= 0, got {self.joint_margin_deg}")
-        if not 0 <= self.singularity_robustness <= 1:
-            raise ValueError(f"singularity_robustness must be in [0, 1], got {self.singularity_robustness}")
+        if not 0 < self.velocity_scale <= 1:
+            raise ValueError(f"velocity_scale must be in (0, 1], got {self.velocity_scale}")
 
 
 # =============================================================================
@@ -83,35 +84,16 @@ class CartesianControlConfig:
 class TwistStepResult:
     """Result of a single twist-to-joint-velocity computation.
 
-    Provides interpretable metrics about the robot's current state and
-    how well it can execute the commanded twist.
-
     Attributes:
         joint_velocities: Computed joint velocities (rad/s)
-        achieved_fraction: Fraction of commanded twist that will be achieved (0-1).
-                          1.0 = full twist achieved
-                          <1.0 = had to scale down due to limits
-                          0.0 = cannot make progress
-
-        manipulability: Ability to move in all Cartesian directions (0-1).
-                       High (>0.5) = good dexterity
-                       Low (<0.1) = near singularity, motion constrained
-
-        joint_headroom: How far from the closest joint limit (0-1).
-                       1.0 = all joints at center of range
-                       0.0 = at least one joint at its limit
-
-        limiting_factor: What's currently limiting performance.
-                        None = no limitations
-                        "velocity" = joint velocity limit reached
-                        "singularity" = near singular configuration
-                        "joint_limit" = near joint position limit
+        twist_error: Residual ||J*q_dot - v_d||_W after optimization
+        achieved_fraction: Approximate fraction of desired twist achieved (0-1)
+        limiting_factor: What's constraining the solution, if any
     """
 
     joint_velocities: np.ndarray
+    twist_error: float
     achieved_fraction: float
-    manipulability: float
-    joint_headroom: float
     limiting_factor: str | None = None
 
 
@@ -193,101 +175,8 @@ def get_ee_jacobian(
     return np.vstack([J_pos, J_rot])
 
 
-def compute_manipulability(J: np.ndarray) -> float:
-    """Compute Yoshikawa's manipulability measure.
-
-    μ = sqrt(det(J @ J.T))
-
-    This measures the robot's ability to move in all Cartesian directions.
-    - μ > 0.1: Good manipulability
-    - μ ≈ 0: At or near a singularity
-
-    Args:
-        J: 6xN Jacobian matrix
-
-    Returns:
-        Manipulability measure (0 to ~1, higher is better)
-    """
-    JJT = J @ J.T
-    det_val = np.linalg.det(JJT)
-    if det_val <= 0:
-        return 0.0
-    # Normalize to roughly 0-1 range for UR5e
-    # UR5e has max manipulability around 0.01, so scale up
-    return min(1.0, np.sqrt(det_val) * 10)
-
-
-def compute_joint_headroom(
-    q: np.ndarray,
-    lower: np.ndarray,
-    upper: np.ndarray,
-) -> float:
-    """Compute minimum distance to any joint limit as a fraction.
-
-    Returns 1.0 if all joints are at the center of their range,
-    0.0 if any joint is at its limit.
-
-    Args:
-        q: Current joint positions
-        lower: Lower joint limits
-        upper: Upper joint limits
-
-    Returns:
-        Headroom fraction (0-1)
-    """
-    ranges = upper - lower
-    # Distance from lower limit as fraction of range
-    from_lower = (q - lower) / ranges
-    # Distance from upper limit as fraction of range
-    from_upper = (upper - q) / ranges
-    # Minimum headroom for each joint (0.5 = centered)
-    headroom_per_joint = np.minimum(from_lower, from_upper)
-    # Return minimum across all joints, scaled to 0-1 (0.5 -> 1.0)
-    return float(np.min(headroom_per_joint) * 2)
-
-
-def compute_joint_limit_repulsion(
-    q: np.ndarray,
-    lower: np.ndarray,
-    upper: np.ndarray,
-    margin_rad: float,
-) -> np.ndarray:
-    """Compute repulsive velocity to push joints away from limits.
-
-    When a joint is within `margin_rad` of its limit, this returns a
-    velocity that pushes it back toward the center of its range.
-
-    Args:
-        q: Current joint positions
-        lower: Lower joint limits
-        upper: Upper joint limits
-        margin_rad: Distance from limit to start pushing (radians)
-
-    Returns:
-        Repulsive joint velocities (rad/s)
-    """
-    n = len(q)
-    repulsion = np.zeros(n)
-
-    for i in range(n):
-        dist_lower = q[i] - lower[i]
-        dist_upper = upper[i] - q[i]
-
-        # Repel from lower limit
-        if dist_lower < margin_rad:
-            strength = 1.0 - (dist_lower / margin_rad)
-            repulsion[i] += strength * 0.5  # 0.5 rad/s max repulsion
-
-        # Repel from upper limit
-        if dist_upper < margin_rad:
-            strength = 1.0 - (dist_upper / margin_rad)
-            repulsion[i] -= strength * 0.5
-
-    return repulsion
-
-
 # =============================================================================
-# Core Control Function
+# Core Control Function (Constrained QP)
 # =============================================================================
 
 
@@ -295,127 +184,140 @@ def twist_to_joint_velocity(
     J: np.ndarray,
     twist: np.ndarray,
     q_current: np.ndarray,
-    lower_limits: np.ndarray,
-    upper_limits: np.ndarray,
-    velocity_limits: np.ndarray,
+    q_min: np.ndarray,
+    q_max: np.ndarray,
+    qd_max: np.ndarray,
+    dt: float,
     config: CartesianControlConfig | None = None,
 ) -> TwistStepResult:
-    """Convert a Cartesian twist to joint velocities with constraint handling.
+    """Convert a Cartesian twist to joint velocities via constrained QP.
 
-    This is the core function that handles:
-    1. Singularity robustness via damped least squares
-    2. Joint velocity limit scaling (preserves Cartesian direction)
-    3. Joint position limit avoidance via null-space repulsion
+    Solves:
+        min  (1/2)||J*q_dot - v_d||_W^2 + (λ/2)||q_dot||^2
+        s.t. ℓ <= q_dot <= u
+
+    where:
+        W = diag(1,1,1, 1/L², 1/L², 1/L²) balances linear/angular
+        ℓ, u combine velocity limits with position-derived bounds
 
     Args:
         J: 6xN Jacobian matrix
-        twist: 6D twist [vx, vy, vz, wx, wy, wz] in m/s and rad/s
-        q_current: Current joint positions
-        lower_limits: Lower joint position limits
-        upper_limits: Upper joint position limits
-        velocity_limits: Maximum joint velocities (rad/s)
+        twist: 6D desired twist [vx, vy, vz, wx, wy, wz] in m/s and rad/s
+        q_current: Current joint positions (rad)
+        q_min: Lower joint position limits (rad)
+        q_max: Upper joint position limits (rad)
+        qd_max: Maximum joint velocities (rad/s), assumed symmetric
+        dt: Controller timestep (seconds)
         config: Control configuration (uses defaults if None)
 
     Returns:
-        TwistStepResult with joint velocities and metrics
+        TwistStepResult with joint velocities and diagnostics
     """
     if config is None:
         config = CartesianControlConfig()
 
     n_joints = J.shape[1]
-    m_task = J.shape[0]
+    L = config.length_scale
+    lam = config.damping
+    margin = np.deg2rad(config.joint_margin_deg)
 
-    # Scale velocity limits by config
-    scaled_vel_limits = velocity_limits * config.velocity_scale
+    # Scale velocity limits
+    qd_max_scaled = qd_max * config.velocity_scale
 
-    # ==========================================================================
-    # Step 1: Compute metrics
-    # ==========================================================================
+    # =========================================================================
+    # Step 1: Convert position limits to velocity bounds
+    # =========================================================================
+    # One-step safe bounds: ensure q + q_dot*dt stays within [q_min+m, q_max-m]
+    ell_pos = ((q_min + margin) - q_current) / dt
+    u_pos = ((q_max - margin) - q_current) / dt
 
-    manipulability = compute_manipulability(J)
-    joint_headroom = compute_joint_headroom(q_current, lower_limits, upper_limits)
+    # Combine with velocity limits
+    ell = np.maximum(-qd_max_scaled, ell_pos)
+    u = np.minimum(+qd_max_scaled, u_pos)
 
-    # ==========================================================================
-    # Step 2: Damped Least Squares
-    # ==========================================================================
+    # Check for infeasible bounds (joint already past limit + margin)
+    infeasible = ell > u
+    if np.any(infeasible):
+        # Relax bounds for infeasible joints (allow them to move back)
+        ell[infeasible] = np.minimum(ell[infeasible], 0)
+        u[infeasible] = np.maximum(u[infeasible], 0)
 
-    # Adaptive damping based on manipulability and config
-    # Low manipulability -> higher damping for stability
-    # High singularity_robustness -> higher base damping
-    lambda_base = 0.01 + 0.1 * config.singularity_robustness
+    # =========================================================================
+    # Step 2: Build QP matrices
+    # =========================================================================
+    # Twist weighting: W = diag(1,1,1, 1/L², 1/L², 1/L²)
+    w_diag = np.array([1.0, 1.0, 1.0, 1.0/L**2, 1.0/L**2, 1.0/L**2])
+    W = np.diag(w_diag)
 
-    if manipulability < 0.1:
-        # Near singularity - increase damping significantly
-        lambda_damp = lambda_base + 0.2 * (1 - manipulability / 0.1)
-    else:
-        lambda_damp = lambda_base
+    # H = J^T W J + λI
+    # g = -J^T W v_d
+    JtW = J.T @ W
+    H = JtW @ J + lam * np.eye(n_joints)
+    g = -JtW @ twist
 
-    # Compute damped pseudoinverse: J^T (J J^T + λ²I)^-1
-    JJT = J @ J.T
-    damped_inv = J.T @ np.linalg.inv(JJT + lambda_damp**2 * np.eye(m_task))
+    # =========================================================================
+    # Step 3: Solve box-constrained QP
+    # =========================================================================
+    # min (1/2) q_dot^T H q_dot + g^T q_dot  s.t. ell <= q_dot <= u
 
-    # Primary task: achieve desired twist
-    q_dot_task = damped_inv @ twist
+    # Use scipy's L-BFGS-B which handles box constraints efficiently
+    def objective(qd):
+        return 0.5 * qd @ H @ qd + g @ qd
 
-    # ==========================================================================
-    # Step 3: Null-space repulsion from joint limits
-    # ==========================================================================
+    def gradient(qd):
+        return H @ qd + g
 
-    margin_rad = np.deg2rad(config.joint_margin_deg)
-    q_dot_repulsion = compute_joint_limit_repulsion(
-        q_current, lower_limits, upper_limits, margin_rad
+    # Initial guess: unconstrained solution clamped to bounds
+    qd_unconstrained = np.linalg.solve(H, -g)
+    qd_init = np.clip(qd_unconstrained, ell, u)
+
+    result = minimize(
+        objective,
+        qd_init,
+        method='L-BFGS-B',
+        jac=gradient,
+        bounds=list(zip(ell, u)),
+        options={'maxiter': 50, 'ftol': 1e-10},
     )
 
-    # Project repulsion into null space (won't affect Cartesian motion)
-    J_pinv = np.linalg.pinv(J)
-    null_projector = np.eye(n_joints) - J_pinv @ J
-    q_dot_null = null_projector @ q_dot_repulsion
+    q_dot = result.x
 
-    # Combine task and null-space motion
-    q_dot = q_dot_task + q_dot_null
+    # =========================================================================
+    # Step 4: Compute diagnostics
+    # =========================================================================
+    # Twist error: ||J*q_dot - v_d||_W
+    twist_achieved = J @ q_dot
+    twist_diff = twist_achieved - twist
+    twist_error = float(np.sqrt(twist_diff @ W @ twist_diff))
 
-    # ==========================================================================
-    # Step 4: Scale for velocity limits (preserve Cartesian direction)
-    # ==========================================================================
+    # Achieved fraction: compare achieved twist magnitude to desired
+    twist_norm = float(np.sqrt(twist @ W @ twist))
+    if twist_norm > 1e-10:
+        # Project achieved onto desired direction
+        achieved_fraction = float(np.dot(twist_achieved, W @ twist) / (twist_norm**2))
+        achieved_fraction = max(0.0, min(1.0, achieved_fraction))
+    else:
+        achieved_fraction = 1.0  # No motion requested
 
+    # Determine limiting factor
     limiting_factor = None
-    achieved_fraction = 1.0
+    at_lower = np.abs(q_dot - ell) < 1e-6
+    at_upper = np.abs(q_dot - u) < 1e-6
+    at_bound = at_lower | at_upper
 
-    # Check which joints exceed velocity limits
-    abs_qd = np.abs(q_dot)
-    violations = abs_qd > scaled_vel_limits
-
-    if np.any(violations):
-        # Compute scale factors needed for each violating joint
-        scale_factors = scaled_vel_limits[violations] / abs_qd[violations]
-        scale = float(np.min(scale_factors))
-
-        # Scale down entire solution to maintain direction
-        q_dot = q_dot * scale
-        achieved_fraction = scale
-        limiting_factor = "velocity"
-
-    # ==========================================================================
-    # Step 5: Check for singularity limitation
-    # ==========================================================================
-
-    if manipulability < 0.05 and limiting_factor is None:
-        limiting_factor = "singularity"
-        # Estimate achieved fraction from manipulability
-        achieved_fraction = min(achieved_fraction, manipulability / 0.05)
-
-    # ==========================================================================
-    # Step 6: Check for joint limit limitation
-    # ==========================================================================
-
-    if joint_headroom < 0.1 and limiting_factor is None:
-        limiting_factor = "joint_limit"
+    if np.any(at_bound):
+        # Check if it's position or velocity limit
+        at_pos_lower = at_lower & (ell > -qd_max_scaled + 1e-6)
+        at_pos_upper = at_upper & (u < qd_max_scaled - 1e-6)
+        if np.any(at_pos_lower | at_pos_upper):
+            limiting_factor = "joint_limit"
+        else:
+            limiting_factor = "velocity"
 
     return TwistStepResult(
         joint_velocities=q_dot,
+        twist_error=twist_error,
         achieved_fraction=achieved_fraction,
-        manipulability=manipulability,
-        joint_headroom=joint_headroom,
         limiting_factor=limiting_factor,
     )
 
@@ -434,9 +336,8 @@ def step_twist(
 ) -> tuple[np.ndarray, TwistStepResult]:
     """Execute one timestep of Cartesian velocity control.
 
-    Uses the robust `twist_to_joint_velocity()` function to compute joint
-    velocities that achieve the desired Cartesian twist while respecting
-    all constraints.
+    Uses the constrained QP solver to compute joint velocities that
+    achieve the desired Cartesian twist while respecting all limits.
 
     Args:
         arm: Arm instance
@@ -465,27 +366,23 @@ def step_twist(
 
     # Get current state and limits
     q_current = arm.get_joint_positions()
-    lower, upper = arm.get_joint_limits()
+    q_min, q_max = arm.get_joint_limits()
+    qd_max = np.array(arm.config.kinematic_limits.velocity)
 
-    # Get velocity limits from arm config
-    vel_limits = np.array(arm.config.kinematic_limits.velocity)
-
-    # Compute joint velocities with constraint handling
+    # Solve constrained QP
     result = twist_to_joint_velocity(
         J=J,
         twist=twist,
         q_current=q_current,
-        lower_limits=lower,
-        upper_limits=upper,
-        velocity_limits=vel_limits,
+        q_min=q_min,
+        q_max=q_max,
+        qd_max=qd_max,
+        dt=dt,
         config=config,
     )
 
     # Integrate to get new positions
     q_new = q_current + result.joint_velocities * dt
-
-    # Final clamp to joint limits (safety)
-    q_new = np.clip(q_new, lower, upper)
 
     return q_new, result
 
@@ -615,17 +512,20 @@ def move_until_touch(
     if config is None:
         config = CartesianControlConfig()
 
+    # Minimum progress threshold
+    min_progress = 0.1
+
     logger.debug(
         f"move_until_touch: direction={direction}, distance={distance:.3f}, "
         f"max_distance={max_distance:.3f}, speed={speed:.3f}, physics={physics}"
     )
 
     while total_distance < max_distance:
-        # Compute new joint positions with constraint handling
+        # Compute new joint positions with QP solver
         q_new, step_result = step_twist(arm, twist, frame=frame, dt=dt, config=config)
 
         # Check if we can make meaningful progress
-        if step_result.achieved_fraction < config.min_progress_threshold:
+        if step_result.achieved_fraction < min_progress:
             logger.debug(
                 f"move_until_touch: cannot make progress "
                 f"(achieved={step_result.achieved_fraction:.2f}, "
@@ -777,6 +677,7 @@ def execute_twist(
     dt = 0.004  # 4ms control timestep
     elapsed = 0.0
     start_pos = data.site_xpos[arm.ee_site_id].copy()
+    min_progress = 0.1
 
     logger.debug(
         f"execute_twist: twist={twist}, duration={duration}, "
@@ -813,11 +714,11 @@ def execute_twist(
                 final_pose=final_pose,
             )
 
-        # Execute one step with constraint handling
+        # Execute one step with QP solver
         q_new, step_result = step_twist(arm, twist, frame=frame, dt=dt, config=config)
 
         # Check if we can make meaningful progress
-        if step_result.achieved_fraction < config.min_progress_threshold:
+        if step_result.achieved_fraction < min_progress:
             logger.debug(
                 f"execute_twist: cannot make progress "
                 f"(achieved={step_result.achieved_fraction:.2f})"

@@ -12,7 +12,7 @@ from mj_environment import Environment
 
 from geodude.affordances import AffordanceRegistry
 from geodude.arm import Arm
-from geodude.config import GeodudConfig
+from geodude.config import GeodudConfig, setup_logging
 from geodude.grasp_manager import GraspManager
 from geodude.planning import PlanResult
 from geodude.trajectory import Trajectory
@@ -114,6 +114,9 @@ class Geodude:
         # Run forward to initialize state
         mujoco.mj_forward(self.model, self.data)
 
+        # Configure debug logging based on config (reads from env if not set)
+        setup_logging(self.config.debug)
+
     @classmethod
     def from_config(cls, config_path: str | Path) -> "Geodude":
         """Create Geodude from a YAML configuration file.
@@ -189,6 +192,21 @@ class Geodude:
     def _active_context(self, ctx: "SimContext | None") -> None:
         """Set the active execution context."""
         self._context = ctx
+
+    def apply_debug_config(self) -> None:
+        """Re-apply debug configuration to loggers.
+
+        Call this after modifying robot.config.debug to apply changes.
+
+        Example:
+            robot.config.debug.enable("executor", "gripper")
+            robot.apply_debug_config()
+        """
+        setup_logging(self.config.debug)
+
+        # Sync gripper debug flag with the debug config
+        # This allows the per-call verbose logging in close_gripper to work
+        self.config.physics.gripper.debug = self.config.debug.gripper
 
     def go_to(self, pose_name: str, speed: float = 1.0) -> bool:
         """Move both arms to a named configuration.

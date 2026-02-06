@@ -1,5 +1,8 @@
 """Robot configuration for Geodude."""
 
+from __future__ import annotations
+
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -329,6 +332,181 @@ class PhysicsConfig:
 
 
 @dataclass
+class DebugConfig:
+    """Debug logging configuration.
+
+    Controls which subsystems emit debug-level log messages. Uses Python's
+    logging framework with geodude.* logger hierarchy.
+
+    Subsystems:
+        - executor: Trajectory execution, convergence, physics stepping
+        - gripper: Gripper open/close, contact detection, grasp detection
+        - planning: Motion planning, collision checking, IK
+        - primitives: High-level pickup/place operations
+        - grasp_manager: Object attachment, collision group updates
+        - affordances: TSR template loading, affordance matching
+
+    Example:
+        # Enable all debug logging
+        robot.config.debug.enable_all()
+
+        # Enable specific subsystems
+        robot.config.debug.executor = True
+        robot.config.debug.gripper = True
+        robot.apply_debug_config()  # Apply changes
+
+        # Or via environment variable
+        GEODUDE_DEBUG=executor,gripper python script.py
+    """
+
+    # Per-subsystem debug flags (maps to geodude.<name> logger)
+    executor: bool = False
+    gripper: bool = False
+    planning: bool = False
+    primitives: bool = False
+    grasp_manager: bool = False
+    affordances: bool = False
+
+    # Log format settings
+    show_timestamps: bool = True
+    show_module: bool = True
+
+    def enable_all(self) -> None:
+        """Enable debug logging for all subsystems."""
+        self.executor = True
+        self.gripper = True
+        self.planning = True
+        self.primitives = True
+        self.grasp_manager = True
+        self.affordances = True
+
+    def disable_all(self) -> None:
+        """Disable debug logging for all subsystems."""
+        self.executor = False
+        self.gripper = False
+        self.planning = False
+        self.primitives = False
+        self.grasp_manager = False
+        self.affordances = False
+
+    def enable(self, *subsystems: str) -> None:
+        """Enable debug logging for specific subsystems.
+
+        Args:
+            *subsystems: Names of subsystems to enable (e.g., "executor", "gripper")
+        """
+        for name in subsystems:
+            if hasattr(self, name):
+                setattr(self, name, True)
+            else:
+                raise ValueError(f"Unknown subsystem: {name}")
+
+    def get_enabled_subsystems(self) -> list[str]:
+        """Get list of enabled subsystems."""
+        subsystems = ["executor", "gripper", "planning", "primitives",
+                      "grasp_manager", "affordances"]
+        return [s for s in subsystems if getattr(self, s)]
+
+    @classmethod
+    def from_env(cls) -> "DebugConfig":
+        """Create config from GEODUDE_DEBUG environment variable.
+
+        Format: GEODUDE_DEBUG=subsystem1,subsystem2 or GEODUDE_DEBUG=all
+        """
+        import os
+        config = cls()
+        debug_env = os.environ.get("GEODUDE_DEBUG", "")
+        if debug_env:
+            if debug_env.lower() == "all":
+                config.enable_all()
+            else:
+                subsystems = [s.strip() for s in debug_env.split(",")]
+                for s in subsystems:
+                    if s and hasattr(config, s):
+                        setattr(config, s, True)
+        return config
+
+    @classmethod
+    def default(cls) -> "DebugConfig":
+        """Default debug configuration (all disabled)."""
+        return cls()
+
+
+# Mapping from subsystem name to logger name
+_SUBSYSTEM_LOGGERS = {
+    "executor": "geodude.executor",
+    "gripper": "geodude.executor",  # Gripper is part of executor module
+    "planning": "geodude.arm",  # Planning is in arm module
+    "primitives": "geodude.primitives",
+    "grasp_manager": "geodude.grasp_manager",
+    "affordances": "geodude.affordances",
+}
+
+
+def setup_logging(config: DebugConfig | None = None) -> None:
+    """Configure geodude loggers based on debug config.
+
+    Sets up the logging hierarchy for geodude modules. By default, all
+    geodude loggers are set to WARNING level. When a subsystem is enabled
+    in DebugConfig, its logger is set to DEBUG level.
+
+    Args:
+        config: Debug configuration. If None, uses DebugConfig.from_env()
+
+    Example:
+        from geodude.config import setup_logging, DebugConfig
+
+        # From environment variable
+        setup_logging()
+
+        # Programmatic
+        config = DebugConfig()
+        config.enable("executor", "gripper")
+        setup_logging(config)
+    """
+    if config is None:
+        config = DebugConfig.from_env()
+
+    # Configure root geodude logger
+    root_logger = logging.getLogger("geodude")
+
+    # Prevent propagation to root logger (avoids duplicate output)
+    root_logger.propagate = False
+
+    # Only add handler if none exists (avoid duplicate handlers)
+    if not root_logger.handlers:
+        handler = logging.StreamHandler()
+
+        # Build format string based on config
+        fmt_parts = []
+        if config.show_timestamps:
+            fmt_parts.append("%(asctime)s")
+        fmt_parts.append("%(levelname)s")
+        if config.show_module:
+            fmt_parts.append("[%(name)s]")
+        fmt_parts.append("%(message)s")
+
+        formatter = logging.Formatter(" - ".join(fmt_parts))
+        handler.setFormatter(formatter)
+        root_logger.addHandler(handler)
+
+    # Set root to WARNING by default (so DEBUG/INFO are suppressed unless enabled)
+    root_logger.setLevel(logging.WARNING)
+
+    # Enable DEBUG for specific subsystems
+    enabled = config.get_enabled_subsystems()
+    enabled_loggers = set()
+    for subsystem in enabled:
+        logger_name = _SUBSYSTEM_LOGGERS.get(subsystem)
+        if logger_name:
+            enabled_loggers.add(logger_name)
+
+    for logger_name in enabled_loggers:
+        logger = logging.getLogger(logger_name)
+        logger.setLevel(logging.DEBUG)
+
+
+@dataclass
 class GeodudConfig:
     """Full robot configuration."""
 
@@ -339,6 +517,7 @@ class GeodudConfig:
     right_base: VentionBaseConfig | None = None
     named_poses: dict[str, dict[str, list[float]]] = field(default_factory=dict)
     physics: PhysicsConfig = field(default_factory=PhysicsConfig.default)
+    debug: DebugConfig = field(default_factory=DebugConfig.from_env)
 
     @classmethod
     def default(cls) -> "GeodudConfig":

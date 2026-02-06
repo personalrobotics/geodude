@@ -5,10 +5,14 @@ Demonstrates the Jacobian-based Cartesian velocity controller by moving
 each arm in random directions until it can't progress further (joint limits,
 singularities, workspace boundary, or collision).
 
+Runs continuously until the viewer window is closed.
+
 Usage:
-    uv run mjpython examples/cartesian_demo.py
+    uv run mjpython examples/cartesian_demo.py            # Kinematic mode
+    uv run mjpython examples/cartesian_demo.py --physics  # Physics mode
 """
 
+import argparse
 import time
 
 import mujoco
@@ -37,7 +41,12 @@ def check_arm_collision(robot, arm) -> bool:
 
 
 def main():
-    print("Cartesian Velocity Control Demo", flush=True)
+    parser = argparse.ArgumentParser(description="Cartesian velocity control demo")
+    parser.add_argument("--physics", action="store_true", help="Enable physics simulation")
+    args = parser.parse_args()
+
+    mode = "Physics" if args.physics else "Kinematic"
+    print(f"Cartesian Velocity Control Demo - {mode} Mode", flush=True)
     print("=" * 50, flush=True)
     print("Each arm will move in random directions until blocked.", flush=True)
     print("Stops on: joint limits, singularities, or collisions.", flush=True)
@@ -47,7 +56,7 @@ def main():
     robot.go_to("ready")
     mujoco.mj_forward(robot.model, robot.data)
 
-    # Slower, safer config for demo
+    # Config for demo
     config = CartesianControlConfig(
         velocity_scale=0.8,
         joint_margin_deg=10.0,
@@ -56,7 +65,7 @@ def main():
     arms = [robot.right_arm, robot.left_arm]
     arm_names = ["Right", "Left"]
 
-    with robot.sim(physics=False) as ctx:
+    with robot.sim(physics=args.physics) as ctx:
         ctx.sync()
 
         iteration = 0
@@ -93,7 +102,7 @@ def main():
                     frame="world",
                     max_distance=0.60,  # Max 60cm per move
                     until=collision_check,
-                    physics=False,
+                    physics=args.physics,
                     viewer=ctx._viewer,
                     config=config,
                 )

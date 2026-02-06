@@ -1970,3 +1970,133 @@ class Arm:
             self.execute(retract_path)
 
         return True
+
+    def move_until_touch(
+        self,
+        direction: np.ndarray,
+        distance: float,
+        max_distance: float,
+        max_force: float = 5.0,
+        max_torque: float | None = None,
+        speed: float = 0.02,
+        frame: str = "world",
+        push_distance: float = 0.0,
+        physics: bool | None = None,
+        viewer=None,
+    ):
+        """Move gripper in direction until contact or max_distance reached.
+
+        Jacobian-based Cartesian velocity control for contact-based grasping.
+        Moves the end-effector at constant velocity in the specified direction,
+        stopping when contact is detected.
+
+        In physics mode, contact is detected via F/T sensor force threshold.
+        In kinematic mode, contact is detected via MuJoCo collision detection.
+
+        Args:
+            direction: Direction vector for motion (will be normalized)
+            distance: Minimum distance to travel before contact checking (meters).
+                     Use this to ignore initial collisions (e.g., object on table).
+            max_distance: Maximum distance to travel - safety limit (meters).
+                         Motion stops here even if no contact detected.
+            max_force: Force magnitude threshold in Newtons (default 5.0).
+                      Only used in physics mode.
+            max_torque: Torque magnitude threshold in Nm (optional).
+                       Only used in physics mode.
+            speed: Cartesian velocity in m/s (default 0.02 = 2cm/s)
+            frame: "world" or "hand" frame for direction vector
+            push_distance: Distance to continue after contact (meters).
+                          Use for push-grasp to seat object in gripper.
+            physics: True for physics mode (F/T sensor), False for kinematic
+                    (collision detection). If None, uses active context mode.
+            viewer: Optional MuJoCo viewer to sync during motion
+
+        Returns:
+            MoveUntilTouchResult with:
+                - success: True if contact was detected after min_distance
+                - terminated_by: "contact", "max_distance", or "error"
+                - distance_moved: Actual distance traveled
+                - final_force/final_torque: F/T readings (physics mode)
+                - contact_geom: Name of contacted geometry (kinematic mode)
+
+        Example:
+            # Approach object from above until contact
+            result = robot.right_arm.move_until_touch(
+                direction=[0, 0, -1],  # Down in world frame
+                distance=0.01,         # Min 1cm before checking
+                max_distance=0.05,     # Max 5cm
+                max_force=3.0,         # Light touch
+            )
+            if result.success:
+                robot.right_arm.close_gripper()
+
+            # Push-grasp: continue 5mm after contact to seat object
+            result = robot.right_arm.move_until_touch(
+                direction=[0, 0, 1],   # Forward in gripper frame
+                distance=0.01,
+                max_distance=0.08,
+                max_force=5.0,
+                frame="hand",
+                push_distance=0.005,   # Push 5mm after contact
+            )
+        """
+        from geodude.cartesian import move_until_touch, MoveUntilTouchResult
+
+        # Determine physics mode from context if not specified
+        if physics is None:
+            ctx = self.robot._active_context
+            if ctx is not None:
+                physics = ctx._physics
+            else:
+                physics = True  # Default to physics mode
+
+        # Get viewer from context if not provided
+        if viewer is None:
+            ctx = self.robot._active_context
+            if ctx is not None:
+                viewer = ctx._viewer
+
+        # Call the cartesian module function
+        result = move_until_touch(
+            arm=self,
+            direction=np.asarray(direction),
+            distance=distance,
+            max_distance=max_distance,
+            max_force=max_force,
+            max_torque=max_torque,
+            speed=speed,
+            frame=frame,
+            physics=physics,
+            viewer=viewer,
+        )
+
+        # Handle push_distance if contact was detected
+        if result.success and push_distance > 0:
+            from geodude.cartesian import execute_twist
+
+            # Continue moving in the same direction for push_distance
+            direction = np.asarray(direction, dtype=float)
+            direction = direction / np.linalg.norm(direction)
+            twist = np.zeros(6)
+            twist[:3] = direction * speed
+
+            execute_twist(
+                arm=self,
+                twist=twist,
+                frame=frame,
+                max_distance=push_distance,
+                physics=physics,
+                viewer=viewer,
+            )
+
+            # Update distance_moved in result
+            result = MoveUntilTouchResult(
+                success=result.success,
+                terminated_by=result.terminated_by,
+                distance_moved=result.distance_moved + push_distance,
+                final_force=result.final_force,
+                final_torque=result.final_torque,
+                contact_geom=result.contact_geom,
+            )
+
+        return result

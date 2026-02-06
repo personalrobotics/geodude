@@ -3,7 +3,7 @@
 
 Demonstrates the Jacobian-based Cartesian velocity controller by moving
 each arm in random directions until it can't progress further (joint limits,
-singularities, or workspace boundary).
+singularities, workspace boundary, or collision).
 
 Usage:
     uv run mjpython examples/cartesian_demo.py
@@ -24,10 +24,23 @@ def random_direction():
     return d / np.linalg.norm(d)
 
 
+def check_arm_collision(robot, arm) -> bool:
+    """Check if arm is in collision with anything.
+
+    Returns True if collision detected (motion should stop).
+    """
+    # Use the arm's collision checker
+    if arm._collision_checker is not None:
+        q = arm.get_joint_positions()
+        return not arm._collision_checker.is_valid(q)
+    return False
+
+
 def main():
     print("Cartesian Velocity Control Demo", flush=True)
     print("=" * 50, flush=True)
     print("Each arm will move in random directions until blocked.", flush=True)
+    print("Stops on: joint limits, singularities, or collisions.", flush=True)
     print("Close the viewer window to exit.\n", flush=True)
 
     robot = Geodude()
@@ -69,12 +82,17 @@ def main():
                       f"[{direction[0]:.2f}, {direction[1]:.2f}, {direction[2]:.2f}]",
                       flush=True)
 
-                # Execute twist until blocked or max distance
+                # Collision check function for this arm
+                def collision_check():
+                    return check_arm_collision(robot, arm)
+
+                # Execute twist until blocked, collision, or max distance
                 result = execute_twist(
                     arm=arm,
                     twist=twist,
                     frame="world",
-                    max_distance=0.15,  # Max 15cm per move
+                    max_distance=0.60,  # Max 60cm per move
+                    until=collision_check,
                     physics=False,
                     viewer=ctx._viewer,
                     config=config,
@@ -83,7 +101,12 @@ def main():
                 end_pos = robot.data.site_xpos[arm.ee_site_id].copy()
                 actual_displacement = end_pos - start_pos
 
-                print(f"    Terminated by: {result.terminated_by}", flush=True)
+                # Check if we stopped due to collision
+                termination = result.terminated_by
+                if termination == "condition":
+                    termination = "collision"
+
+                print(f"    Terminated by: {termination}", flush=True)
                 print(f"    Distance moved: {result.distance_moved*100:.1f} cm", flush=True)
                 print(f"    Displacement: [{actual_displacement[0]*100:.1f}, "
                       f"{actual_displacement[1]*100:.1f}, {actual_displacement[2]*100:.1f}] cm",

@@ -348,6 +348,30 @@ The demo:
 uv run pytest
 ```
 
+## Debug Logging
+
+Enable debug output for specific subsystems via environment variable or programmatically:
+
+```bash
+# Via environment variable
+GEODUDE_DEBUG=gripper,executor uv run mjpython examples/recycle.py --physics
+
+# Or enable all subsystems
+GEODUDE_DEBUG=all uv run mjpython examples/recycle.py --physics
+```
+
+```python
+# Programmatically
+robot.config.debug.enable("gripper", "executor")
+robot.apply_debug_config()
+
+# Or enable all
+robot.config.debug.enable_all()
+robot.apply_debug_config()
+```
+
+Available subsystems: `executor`, `gripper`, `planning`, `primitives`, `grasp_manager`, `affordances`
+
 ## Dependencies
 
 Core libraries developed by our lab:

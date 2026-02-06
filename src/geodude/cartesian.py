@@ -56,12 +56,18 @@ class CartesianControlConfig:
         velocity_scale: Fraction of max joint velocity to use (0-1).
                        Default 1.0 uses full velocity limits.
                        Lower values give slower, safer motion.
+
+        min_progress: Minimum achieved_fraction to continue motion (0-1).
+                     If the achieved twist falls below this fraction of
+                     the desired twist, motion stops with "no_progress".
+                     Default 0.5 requires at least 50% of desired velocity.
     """
 
     length_scale: float = 0.1
     damping: float = 1e-4
     joint_margin_deg: float = 5.0
     velocity_scale: float = 1.0
+    min_progress: float = 0.5
 
     def __post_init__(self):
         """Validate configuration values."""
@@ -73,6 +79,8 @@ class CartesianControlConfig:
             raise ValueError(f"joint_margin_deg must be >= 0, got {self.joint_margin_deg}")
         if not 0 < self.velocity_scale <= 1:
             raise ValueError(f"velocity_scale must be in (0, 1], got {self.velocity_scale}")
+        if not 0 <= self.min_progress <= 1:
+            raise ValueError(f"min_progress must be in [0, 1], got {self.min_progress}")
 
 
 # =============================================================================
@@ -512,9 +520,6 @@ def move_until_touch(
     if config is None:
         config = CartesianControlConfig()
 
-    # Minimum progress threshold (50% of desired velocity)
-    min_progress = 0.5
-
     logger.debug(
         f"move_until_touch: direction={direction}, distance={distance:.3f}, "
         f"max_distance={max_distance:.3f}, speed={speed:.3f}, physics={physics}"
@@ -525,7 +530,7 @@ def move_until_touch(
         q_new, step_result = step_twist(arm, twist, frame=frame, dt=dt, config=config)
 
         # Check if we can make meaningful progress
-        if step_result.achieved_fraction < min_progress:
+        if step_result.achieved_fraction < config.min_progress:
             logger.debug(
                 f"move_until_touch: cannot make progress "
                 f"(achieved={step_result.achieved_fraction:.2f}, "
@@ -677,7 +682,6 @@ def execute_twist(
     dt = 0.004  # 4ms control timestep
     elapsed = 0.0
     start_pos = data.site_xpos[arm.ee_site_id].copy()
-    min_progress = 0.5
 
     logger.debug(
         f"execute_twist: twist={twist}, duration={duration}, "
@@ -718,7 +722,7 @@ def execute_twist(
         q_new, step_result = step_twist(arm, twist, frame=frame, dt=dt, config=config)
 
         # Check if we can make meaningful progress
-        if step_result.achieved_fraction < min_progress:
+        if step_result.achieved_fraction < config.min_progress:
             logger.debug(
                 f"execute_twist: cannot make progress "
                 f"(achieved={step_result.achieved_fraction:.2f})"

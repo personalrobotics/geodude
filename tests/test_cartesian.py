@@ -23,6 +23,7 @@ class TestCartesianControlConfig:
         assert config.damping == 1e-4
         assert config.joint_margin_deg == 5.0
         assert config.velocity_scale == 1.0
+        assert config.min_progress == 0.5
 
     def test_custom_values(self):
         """Test custom configuration values."""
@@ -31,11 +32,13 @@ class TestCartesianControlConfig:
             damping=1e-3,
             joint_margin_deg=10.0,
             velocity_scale=0.5,
+            min_progress=0.3,
         )
         assert config.length_scale == 0.2
         assert config.damping == 1e-3
         assert config.joint_margin_deg == 10.0
         assert config.velocity_scale == 0.5
+        assert config.min_progress == 0.3
 
     def test_invalid_length_scale(self):
         """Test that invalid length_scale raises ValueError."""
@@ -62,6 +65,13 @@ class TestCartesianControlConfig:
             CartesianControlConfig(velocity_scale=1.5)
         with pytest.raises(ValueError, match="velocity_scale must be in"):
             CartesianControlConfig(velocity_scale=-0.1)
+
+    def test_invalid_min_progress(self):
+        """Test that invalid min_progress raises ValueError."""
+        with pytest.raises(ValueError, match="min_progress must be in"):
+            CartesianControlConfig(min_progress=-0.1)
+        with pytest.raises(ValueError, match="min_progress must be in"):
+            CartesianControlConfig(min_progress=1.5)
 
 
 class TestTwistToJointVelocity:

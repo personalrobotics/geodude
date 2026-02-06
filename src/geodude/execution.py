@@ -239,19 +239,27 @@ class SimContext:
         robot: "Geodude",
         viewer=None,
         physics: bool = True,
+        viewer_fps: float = 30.0,
     ):
         """Initialize simulation context.
 
         Args:
             robot: Geodude robot instance
-            viewer: Optional MuJoCo viewer (created internally if None and
-                   context is used as context manager)
+            viewer: Optional MuJoCo viewer. Pass an existing viewer, or:
+                   - None: viewer will be created automatically
+                   - False: headless mode, no viewer created
             physics: If True, use physics simulation. If False, use kinematic
                     execution (perfect tracking, no dynamics).
+            viewer_fps: Target viewer refresh rate in Hz (default 30).
+                       Higher values = smoother but slower execution.
+                       Set to 0 or inf for unlimited (sync every step).
         """
         self._robot = robot
-        self._viewer = viewer
+        # viewer=False means explicit headless mode
+        self._headless = viewer is False
+        self._viewer = None if self._headless else viewer
         self._physics = physics
+        self._viewer_fps = viewer_fps
         self._controller = None
         self._executors: dict[str, object] = {}
         self._arm_controllers: dict[str, SimArmController] = {}
@@ -259,8 +267,8 @@ class SimContext:
 
     def __enter__(self) -> "SimContext":
         """Enter context manager, optionally creating viewer."""
-        # Create viewer if not provided
-        if self._viewer is None:
+        # Create viewer if not provided and not in headless mode
+        if self._viewer is None and not self._headless:
             self._viewer = mujoco.viewer.launch_passive(
                 self._robot.model, self._robot.data
             )
@@ -277,6 +285,20 @@ class SimContext:
 
         # Set as active context on robot (for primitives)
         self._robot._active_context = self
+
+        # Physics mode: let settle and tare F/T sensors
+        if self._physics and self._controller is not None:
+            # Let physics settle (100 steps = ~0.2s)
+            for _ in range(100):
+                self._controller.step()
+
+            # Tare F/T sensors to compensate for gravity
+            # This zeros out the gripper weight so contact detection works
+            for arm in [self._robot.left_arm, self._robot.right_arm]:
+                try:
+                    arm.tare_ft_sensor()
+                except RuntimeError:
+                    pass  # No F/T sensor available
 
         # Initial sync
         self.sync()
@@ -302,6 +324,12 @@ class SimContext:
 
         from geodude.executor import KinematicExecutor, RobotPhysicsController
 
+        # Convert fps to interval (0 or inf means sync every step)
+        if self._viewer_fps <= 0 or self._viewer_fps == float("inf"):
+            viewer_sync_interval = 0.0
+        else:
+            viewer_sync_interval = 1.0 / self._viewer_fps
+
         if self._physics:
             # Physics mode: use RobotPhysicsController
             # Pass ready positions so controller initializes arms correctly
@@ -318,6 +346,7 @@ class SimContext:
                 self._robot,
                 viewer=self._viewer,
                 initial_positions=initial_positions if initial_positions else None,
+                viewer_sync_interval=viewer_sync_interval,
             )
             self._executors["left_arm"] = self._controller.get_executor("left")
             self._executors["right_arm"] = self._controller.get_executor("right")
@@ -331,6 +360,7 @@ class SimContext:
                     arm.joint_qpos_indices,
                     viewer=self._viewer,
                     grasp_manager=self._robot.grasp_manager,
+                    viewer_sync_interval=viewer_sync_interval,
                 )
 
     def execute(self, item: "Trajectory | PlanResult") -> bool:
@@ -432,3 +462,78 @@ class SimContext:
     def robot(self) -> "Geodude":
         """Get the robot instance."""
         return self._robot
+
+    @property
+    def control_dt(self) -> float:
+        """Get control timestep in seconds.
+
+        In physics mode, returns the physics controller's control_dt.
+        In kinematic mode, returns a default 4ms timestep (suitable for
+        real-time visualization).
+        """
+        if self._physics and self._controller is not None:
+            return self._controller.control_dt
+        else:
+            return 0.004  # 4ms default for kinematic mode
+
+    @property
+    def viewer_fps(self) -> float:
+        """Get viewer refresh rate in Hz."""
+        return self._viewer_fps
+
+    @viewer_fps.setter
+    def viewer_fps(self, fps: float) -> None:
+        """Set viewer refresh rate in Hz.
+
+        Higher fps = smoother but slower execution.
+        Set to 0 for unlimited (sync every step).
+        """
+        self._viewer_fps = fps
+        # Convert to interval
+        if fps <= 0 or fps == float("inf"):
+            interval = 0.0
+        else:
+            interval = 1.0 / fps
+        # Update executors
+        if self._controller is not None:
+            self._controller._viewer_sync_interval = interval
+        for executor in self._executors.values():
+            if hasattr(executor, "_viewer_sync_interval"):
+                executor._viewer_sync_interval = interval
+
+    def step_cartesian(
+        self,
+        arm_name: str,
+        position,
+        velocity=None,
+    ) -> None:
+        """Step simulation with new arm target for cartesian control.
+
+        This is the unified interface for reactive cartesian control.
+        In physics mode, updates the target and steps physics.
+        In kinematic mode, sets position and runs forward kinematics.
+
+        For smooth streaming, pass velocity for feedforward. The controller
+        uses a small lookahead (2x control_dt) to give the PD controller
+        a "heads up" about where we're going, enabling smooth interpolation.
+
+        Args:
+            arm_name: "left" or "right"
+            position: Target joint positions (numpy array)
+            velocity: Target joint velocities for feedforward (physics only).
+                     Enables smooth streaming motion when provided.
+        """
+        import numpy as np
+
+        position = np.asarray(position)
+
+        if self._physics and self._controller is not None:
+            # Physics mode: set target and step with reactive lookahead
+            # Use 2x control_dt lookahead for smooth streaming (not the 0.1s trajectory lookahead)
+            self._controller.step_reactive(arm_name, position, velocity)
+        else:
+            # Kinematic mode: set position and step
+            executor = self._executors.get(f"{arm_name}_arm")
+            if executor is not None:
+                executor.set_position(position)
+                executor.step()

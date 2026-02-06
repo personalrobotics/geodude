@@ -283,14 +283,19 @@ class Arm:
         self.data = robot.data
 
         # Get joint indices
+        # Note: qpos indices (jnt_qposadr) and qvel indices (jnt_dofadr) can differ
+        # in MuJoCo, especially with free joints or quaternion-based joints.
+        # For hinge joints they match, but we track both for correctness.
         self.joint_ids = []
         self.joint_qpos_indices = []
+        self.joint_qvel_indices = []
         for name in config.joint_names:
             jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
             if jid == -1:
                 raise ValueError(f"Joint '{name}' not found in model")
             self.joint_ids.append(jid)
             self.joint_qpos_indices.append(self.model.jnt_qposadr[jid])
+            self.joint_qvel_indices.append(self.model.jnt_dofadr[jid])
 
         # Get actuator IDs for position control
         # Find actuators that control these joints
@@ -809,6 +814,7 @@ class Arm:
                 joint_qpos_indices=self.joint_qpos_indices,
                 actuator_ids=self.actuator_ids,
                 viewer=viewer,
+                joint_qvel_indices=self.joint_qvel_indices,
             )
         else:
             raise ValueError(
@@ -1981,8 +1987,6 @@ class Arm:
         speed: float = 0.02,
         frame: str = "world",
         push_distance: float = 0.0,
-        physics: bool | None = None,
-        viewer=None,
     ):
         """Move gripper in direction until contact or max_distance reached.
 
@@ -1992,6 +1996,8 @@ class Arm:
 
         In physics mode, contact is detected via F/T sensor force threshold.
         In kinematic mode, contact is detected via MuJoCo collision detection.
+
+        Requires an active SimContext on the robot.
 
         Args:
             direction: Direction vector for motion (will be normalized)
@@ -2007,9 +2013,6 @@ class Arm:
             frame: "world" or "hand" frame for direction vector
             push_distance: Distance to continue after contact (meters).
                           Use for push-grasp to seat object in gripper.
-            physics: True for physics mode (F/T sensor), False for kinematic
-                    (collision detection). If None, uses active context mode.
-            viewer: Optional MuJoCo viewer to sync during motion
 
         Returns:
             MoveUntilTouchResult with:
@@ -2019,44 +2022,34 @@ class Arm:
                 - final_force/final_torque: F/T readings (physics mode)
                 - contact_geom: Name of contacted geometry (kinematic mode)
 
-        Example:
-            # Approach object from above until contact
-            result = robot.right_arm.move_until_touch(
-                direction=[0, 0, -1],  # Down in world frame
-                distance=0.01,         # Min 1cm before checking
-                max_distance=0.05,     # Max 5cm
-                max_force=3.0,         # Light touch
-            )
-            if result.success:
-                robot.right_arm.close_gripper()
+        Raises:
+            RuntimeError: If no active SimContext
 
-            # Push-grasp: continue 5mm after contact to seat object
-            result = robot.right_arm.move_until_touch(
-                direction=[0, 0, 1],   # Forward in gripper frame
-                distance=0.01,
-                max_distance=0.08,
-                max_force=5.0,
-                frame="hand",
-                push_distance=0.005,   # Push 5mm after contact
-            )
+        Example:
+            with robot.sim(physics=True) as ctx:
+                # Approach object from above until contact
+                result = robot.right_arm.move_until_touch(
+                    direction=[0, 0, -1],  # Down in world frame
+                    distance=0.01,         # Min 1cm before checking
+                    max_distance=0.05,     # Max 5cm
+                    max_force=3.0,         # Light touch
+                )
+                if result.success:
+                    ctx.arm("right").grasp("can_0")
+
+                # Push-grasp: continue 5mm after contact to seat object
+                result = robot.right_arm.move_until_touch(
+                    direction=[0, 0, 1],   # Forward in gripper frame
+                    distance=0.01,
+                    max_distance=0.08,
+                    max_force=5.0,
+                    frame="hand",
+                    push_distance=0.005,   # Push 5mm after contact
+                )
         """
         from geodude.cartesian import move_until_touch, MoveUntilTouchResult
 
-        # Determine physics mode from context if not specified
-        if physics is None:
-            ctx = self.robot._active_context
-            if ctx is not None:
-                physics = ctx._physics
-            else:
-                physics = True  # Default to physics mode
-
-        # Get viewer from context if not provided
-        if viewer is None:
-            ctx = self.robot._active_context
-            if ctx is not None:
-                viewer = ctx._viewer
-
-        # Call the cartesian module function
+        # Call the cartesian module function (requires context)
         result = move_until_touch(
             arm=self,
             direction=np.asarray(direction),
@@ -2066,8 +2059,6 @@ class Arm:
             max_torque=max_torque,
             speed=speed,
             frame=frame,
-            physics=physics,
-            viewer=viewer,
         )
 
         # Handle push_distance if contact was detected
@@ -2085,8 +2076,6 @@ class Arm:
                 twist=twist,
                 frame=frame,
                 max_distance=push_distance,
-                physics=physics,
-                viewer=viewer,
             )
 
             # Update distance_moved in result

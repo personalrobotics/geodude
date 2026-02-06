@@ -63,6 +63,7 @@ class KinematicExecutor:
         viewer=None,
         grasp_manager: "GraspManager | None" = None,
         recorder=None,
+        viewer_sync_interval: float = 0.033,  # ~30 Hz
     ):
         """Initialize kinematic executor.
 
@@ -75,6 +76,8 @@ class KinematicExecutor:
             grasp_manager: Optional GraspManager for kinematic manipulation.
                           When set, attached objects move with the gripper.
             recorder: Optional FrameRecorder to capture frames during execution
+            viewer_sync_interval: Minimum time between viewer syncs in seconds.
+                                 Lower = smoother but slower. 0 = sync every step.
         """
         self.model = model
         self.data = data
@@ -83,6 +86,15 @@ class KinematicExecutor:
         self.viewer = viewer
         self.grasp_manager = grasp_manager
         self.recorder = recorder
+
+        # Viewer sync throttling
+        self._last_viewer_sync = 0.0
+        self._viewer_sync_interval = viewer_sync_interval
+
+        # Target position for step() - initialize to current
+        self._target_position = np.array([
+            data.qpos[idx] for idx in joint_qpos_indices
+        ])
 
     def execute(self, trajectory: Trajectory) -> bool:
         """Execute trajectory kinematically with perfect tracking.
@@ -117,9 +129,12 @@ class KinematicExecutor:
                 self.grasp_manager.update_attached_poses()
                 mujoco.mj_forward(self.model, self.data)
 
-            # Sync viewer if provided
+            # Sync viewer if provided (throttled to ~30Hz)
             if self.viewer is not None:
-                self.viewer.sync()
+                now = time.time()
+                if now - self._last_viewer_sync >= self._viewer_sync_interval:
+                    self.viewer.sync()
+                    self._last_viewer_sync = now
 
             # Capture frame for recording (every 8th frame for reasonable GIF size)
             if self.recorder is not None and i % 8 == 0:
@@ -153,6 +168,7 @@ class KinematicExecutor:
         Args:
             q: Joint positions to set
         """
+        self._target_position = np.asarray(q).copy()
         for joint_idx, qpos_idx in enumerate(self.joint_qpos_indices):
             self.data.qpos[qpos_idx] = q[joint_idx]
             self.data.qvel[qpos_idx] = 0.0
@@ -162,6 +178,29 @@ class KinematicExecutor:
         if self.grasp_manager is not None:
             self.grasp_manager.update_attached_poses()
             mujoco.mj_forward(self.model, self.data)
+
+    def step(self) -> None:
+        """Apply current target position and sync viewer (kinematic).
+
+        For cartesian control - set target with set_position() then call step().
+        """
+        # Apply current target
+        for joint_idx, qpos_idx in enumerate(self.joint_qpos_indices):
+            self.data.qpos[qpos_idx] = self._target_position[joint_idx]
+            self.data.qvel[qpos_idx] = 0.0
+        mujoco.mj_forward(self.model, self.data)
+
+        # Update attached object poses
+        if self.grasp_manager is not None:
+            self.grasp_manager.update_attached_poses()
+            mujoco.mj_forward(self.model, self.data)
+
+        # Sync viewer (throttled to ~30Hz)
+        if self.viewer is not None:
+            now = time.time()
+            if now - self._last_viewer_sync >= self._viewer_sync_interval:
+                self.viewer.sync()
+                self._last_viewer_sync = now
 
 
 class PhysicsExecutor:
@@ -202,6 +241,7 @@ class PhysicsExecutor:
         control_dt: float = 0.008,  # 125 Hz to match UR5e
         lookahead_time: float = 0.1,  # Like servoj lookahead (0.03-0.2s range)
         viewer=None,
+        joint_qvel_indices: list[int] | None = None,
     ):
         """Initialize physics executor.
 
@@ -215,10 +255,13 @@ class PhysicsExecutor:
                            Command = q_desired + lookahead_time * qd_desired.
                            Set to 0 for pure position control (no feedforward).
             viewer: Optional MuJoCo viewer to sync during execution
+            joint_qvel_indices: Indices into data.qvel for the arm joints.
+                               If None, assumes same as qpos indices (valid for hinge joints).
         """
         self.model = model
         self.data = data
         self.joint_qpos_indices = joint_qpos_indices
+        self.joint_qvel_indices = joint_qvel_indices if joint_qvel_indices is not None else joint_qpos_indices
         self.actuator_ids = actuator_ids
         self.control_dt = control_dt
         self.lookahead_time = lookahead_time
@@ -233,6 +276,10 @@ class PhysicsExecutor:
             data.qpos[idx] for idx in joint_qpos_indices
         ])
         self._target_velocity = np.zeros(len(joint_qpos_indices))
+
+        # Viewer sync throttling (~30Hz)
+        self._last_viewer_sync = 0.0
+        self._viewer_sync_interval = 0.033  # 30 Hz
 
     @property
     def target_position(self) -> np.ndarray:
@@ -281,9 +328,12 @@ class PhysicsExecutor:
         for _ in range(self.steps_per_control):
             mujoco.mj_step(self.model, self.data)
 
-        # Sync viewer if provided
+        # Sync viewer if provided (throttled to ~30Hz)
         if self.viewer is not None:
-            self.viewer.sync()
+            now = time.time()
+            if now - self._last_viewer_sync >= self._viewer_sync_interval:
+                self.viewer.sync()
+                self._last_viewer_sync = now
 
     def hold(self) -> None:
         """Update target to current position (capture and hold).
@@ -362,7 +412,7 @@ class PhysicsExecutor:
         Returns:
             Current joint velocities from qvel
         """
-        return np.array([self.data.qvel[idx] for idx in self.joint_qpos_indices])
+        return np.array([self.data.qvel[idx] for idx in self.joint_qvel_indices])
 
     def get_tracking_error(self) -> np.ndarray:
         """Get current position tracking error.
@@ -449,6 +499,7 @@ class RobotPhysicsController:
         viewer=None,
         recorder=None,
         initial_positions: dict[str, np.ndarray] | None = None,
+        viewer_sync_interval: float = 0.033,  # ~30 Hz
     ):
         """Initialize physics controller for the robot.
 
@@ -459,6 +510,8 @@ class RobotPhysicsController:
             initial_positions: Optional dict mapping arm names ("left", "right") to
                              initial joint positions. If not provided for an arm,
                              uses current qpos (which may be zeros if not initialized).
+            viewer_sync_interval: Minimum time between viewer syncs in seconds.
+                                 Lower = smoother but slower. 0 = sync every step.
 
         Physics parameters are read from robot.config.physics.
         """
@@ -479,6 +532,10 @@ class RobotPhysicsController:
         self.lookahead_time = self.execution_config.lookahead_time
         self.steps_per_control = max(1, int(self.control_dt / self.model.opt.timestep))
         self._step_count = 0  # For frame capture interval
+
+        # Viewer sync throttling
+        self._last_viewer_sync = 0.0
+        self._viewer_sync_interval = viewer_sync_interval
 
         # Collect actuator info for both arms and grippers
         self._arms = {}
@@ -504,6 +561,7 @@ class RobotPhysicsController:
                 "arm": arm,
                 "actuator_ids": actuator_ids,
                 "joint_qpos_indices": arm.joint_qpos_indices,
+                "joint_qvel_indices": arm.joint_qvel_indices,
                 "target_position": target_pos,
                 "target_velocity": np.zeros(len(actuator_ids)),
             }
@@ -539,7 +597,8 @@ class RobotPhysicsController:
         for arm_name, info in self._arms.items():
             for i, qpos_idx in enumerate(info["joint_qpos_indices"]):
                 self.data.qpos[qpos_idx] = info["target_position"][i]
-                self.data.qvel[qpos_idx] = 0.0
+            for qvel_idx in info["joint_qvel_indices"]:
+                self.data.qvel[qvel_idx] = 0.0
             for i, actuator_id in enumerate(info["actuator_ids"]):
                 self.data.ctrl[actuator_id] = info["target_position"][i]
 
@@ -558,8 +617,37 @@ class RobotPhysicsController:
             ])
             info["target_velocity"] = np.zeros(len(info["actuator_ids"]))
 
+    def set_arm_target(
+        self,
+        arm_name: str,
+        position: np.ndarray,
+        velocity: np.ndarray | None = None,
+    ) -> None:
+        """Set target position and velocity for an arm.
+
+        Use this for cartesian control - set the target then call step().
+
+        Args:
+            arm_name: "left" or "right"
+            position: Target joint positions (rad)
+            velocity: Target joint velocities (rad/s), or None for zero velocity
+        """
+        if arm_name not in self._arms:
+            raise ValueError(f"Unknown arm: {arm_name}")
+
+        info = self._arms[arm_name]
+        info["target_position"] = np.asarray(position).copy()
+        if velocity is not None:
+            info["target_velocity"] = np.asarray(velocity).copy()
+        else:
+            info["target_velocity"] = np.zeros(len(info["actuator_ids"]))
+
     def step(self) -> None:
-        """Apply control to all actuators and step physics."""
+        """Apply control to all actuators and step physics.
+
+        Uses lookahead_time (default 0.1s) for trajectory following.
+        For reactive/streaming control, use step_reactive() instead.
+        """
         # Apply control to all arms
         for info in self._arms.values():
             q_command = info["target_position"] + self.lookahead_time * info["target_velocity"]
@@ -578,11 +666,89 @@ class RobotPhysicsController:
         for _ in range(self.steps_per_control):
             mujoco.mj_step(self.model, self.data)
 
-        # Sync viewer
+        # Sync viewer (throttled to ~30Hz)
         if self.viewer is not None:
-            self.viewer.sync()
+            now = time.time()
+            if now - self._last_viewer_sync >= self._viewer_sync_interval:
+                self.viewer.sync()
+                self._last_viewer_sync = now
 
         # Capture frame for recording (every 4th step)
+        self._step_count += 1
+        if self.recorder is not None and self._step_count % 4 == 0:
+            self.recorder.capture()
+
+    def step_reactive(
+        self,
+        arm_name: str,
+        position: np.ndarray,
+        velocity: np.ndarray | None = None,
+    ) -> None:
+        """Step physics with reactive/streaming control for one arm.
+
+        Unlike step() which uses a large lookahead (0.1s) for trajectory
+        following, this uses control_dt lookahead - treating each step as
+        a mini-trajectory segment. This gives smooth motion without overshoot.
+
+        The commanded position leads the target by control_dt * velocity,
+        so the PD controller smoothly interpolates rather than chasing
+        discrete position jumps.
+
+        Args:
+            arm_name: "left" or "right"
+            position: Target joint positions (rad)
+            velocity: Target joint velocities (rad/s) for feedforward.
+                     If provided, enables smooth streaming motion.
+        """
+        if arm_name not in self._arms:
+            raise ValueError(f"Unknown arm: {arm_name}")
+
+        info = self._arms[arm_name]
+
+        # Update stored target for this arm
+        info["target_position"] = np.asarray(position).copy()
+        if velocity is not None:
+            info["target_velocity"] = np.asarray(velocity).copy()
+        else:
+            info["target_velocity"] = np.zeros(len(info["actuator_ids"]))
+
+        # Compute command with small lookahead (2x control_dt = 16ms, not 0.1s)
+        # This treats each step as a mini-trajectory segment.
+        # Using 2x control_dt gives the PD controller enough "heads up" for smooth
+        # interpolation while staying small enough to avoid overshoot.
+        reactive_lookahead = 2.0 * self.control_dt
+        q_command = info["target_position"] + reactive_lookahead * info["target_velocity"]
+
+        # Apply to this arm
+        for joint_idx, actuator_id in enumerate(info["actuator_ids"]):
+            self.data.ctrl[actuator_id] = q_command[joint_idx]
+
+        # Apply control to other arms (hold position, no velocity feedforward)
+        for other_name, other_info in self._arms.items():
+            if other_name != arm_name:
+                for joint_idx, actuator_id in enumerate(other_info["actuator_ids"]):
+                    self.data.ctrl[actuator_id] = other_info["target_position"][joint_idx]
+
+        # Apply control to all grippers
+        for grip_info in self._grippers.values():
+            self.data.ctrl[grip_info["actuator_id"]] = grip_info["target_ctrl"]
+
+        # Apply control to all bases (hold positions)
+        for base_info in self._bases.values():
+            self.data.ctrl[base_info["actuator_id"]] = base_info["target_height"]
+
+        # Step physics
+        for _ in range(self.steps_per_control):
+            mujoco.mj_step(self.model, self.data)
+
+        # Sync viewer (throttled)
+        if self.viewer is not None:
+            now = time.time()
+            if now - self._last_viewer_sync >= self._viewer_sync_interval:
+                self.viewer.sync()
+                self._last_viewer_sync = now
+
+        # Capture frame for recording
         self._step_count += 1
         if self.recorder is not None and self._step_count % 4 == 0:
             self.recorder.capture()
@@ -624,9 +790,9 @@ class RobotPhysicsController:
             ])
             pos_error = np.abs(info["target_position"] - current_pos)
 
-            # Check velocity
+            # Check velocity (use qvel indices, not qpos indices)
             current_vel = np.array([
-                self.data.qvel[idx] for idx in info["joint_qpos_indices"]
+                self.data.qvel[idx] for idx in info["joint_qvel_indices"]
             ])
 
             if np.all(pos_error < position_tolerance) and np.all(np.abs(current_vel) < velocity_tolerance):

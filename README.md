@@ -6,16 +6,99 @@ A Python library for bimanual robot manipulation with collision-free motion plan
   <img src="docs/images/recycle_demo.gif" alt="Pick and place demo" width="480">
 </p>
 
-## What It Does
+## Motivation
 
-Geodude controls a bimanual UR5e robot system—two arms on height-adjustable Vention rails with Robotiq grippers. It handles the hard parts of manipulation:
+Robot manipulation research needs a clean abstraction layer between high-level task logic and low-level execution. When you write `robot.pickup("can")`, you shouldn't need to think about inverse kinematics, collision checking, trajectory timing, or whether you're running in simulation or on hardware.
 
-- **Manipulation primitives**: `robot.pickup()` and `robot.place()` with automatic affordance discovery
-- **Motion planning**: Find collision-free paths using CBiRRT with TSR goals
-- **Grasp-aware collision**: Objects you're holding don't collide with your arm
-- **Unified planning API**: Simple `plan_to()` with automatic arm selection and height search
-- **Execution context**: Same code works for simulation and hardware deployment
-- **Time-optimal trajectories**: TOPP-RA retiming respects joint velocity/acceleration limits
+Geodude provides this abstraction for bimanual manipulation:
+
+- **Task-level primitives** like `pickup()` and `place()` that handle the complexity
+- **Automatic grasp discovery** so objects just work when you add them to the scene
+- **Same code for sim and hardware** through an execution context abstraction
+- **Grasp-aware collision checking** so held objects don't cause false collisions
+
+## The Robot
+
+Geodude controls a bimanual manipulation platform:
+
+```
+                    ┌─────────────────────────────────────┐
+                    │           Vention Frame             │
+                    └─────────────────────────────────────┘
+                         │                       │
+                    ┌────┴────┐             ┌────┴────┐
+                    │ Linear  │             │ Linear  │
+                    │ Rail    │             │ Rail    │
+                    │ (0-50cm)│             │ (0-50cm)│
+                    └────┬────┘             └────┬────┘
+                         │                       │
+                    ┌────┴────┐             ┌────┴────┐
+                    │  UR5e   │             │  UR5e   │
+                    │  Left   │             │  Right  │
+                    └────┬────┘             └────┬────┘
+                         │                       │
+                    ┌────┴────┐             ┌────┴────┐
+                    │ Robotiq │             │ Robotiq │
+                    │ 2F-140  │             │ 2F-140  │
+                    └─────────┘             └─────────┘
+```
+
+**Components:**
+- **2× UR5e arms** — 6-DOF industrial manipulators
+- **2× Vention linear actuators** — Height-adjustable bases (0-50cm range)
+- **2× Robotiq 2F-140 grippers** — Parallel-jaw grippers with 140mm stroke
+
+The height-adjustable bases expand the workspace significantly. An object unreachable at one height may be easily grasped at another.
+
+## Architecture
+
+The core design principle is **separation of planning from execution**:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Your Code                            │
+│   robot.pickup("can")  →  robot.place("bin")               │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                     Planning Layer                          │
+│  • Motion planning (CBiRRT)                                │
+│  • Inverse kinematics (EAIK)                               │
+│  • Collision checking (grasp-aware)                        │
+│  • TSR-based goal specification                            │
+│  • Affordance discovery                                     │
+│                                                             │
+│  Output: Trajectory (time-parameterized joint positions)   │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Execution Context                        │
+│                                                             │
+│  ┌─────────────────┐              ┌─────────────────┐      │
+│  │  SimContext     │              │  HardwareContext│      │
+│  │  (physics=True) │              │  (future)       │      │
+│  │  (physics=False)│              │                 │      │
+│  └─────────────────┘              └─────────────────┘      │
+│                                                             │
+│  • Trajectory execution                                     │
+│  • Gripper control                                          │
+│  • State synchronization                                    │
+│  • Error recovery                                           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Planning** is stateless with respect to execution—it produces trajectories without knowing whether they'll run in simulation or on hardware. This keeps planning logic portable and testable.
+
+**Execution contexts** handle the messy reality: timing, physics simulation, hardware communication. Different contexts implement the same interface, so your task code doesn't change.
+
+```python
+# Same code works in kinematic sim, physics sim, or hardware
+with robot.sim(physics=True) as ctx:
+    trajectory = robot.right_arm.plan_to(goal)  # Planning
+    ctx.execute(trajectory)                      # Execution
+```
 
 ## Installation
 
@@ -246,9 +329,7 @@ robot.grasp_manager.mark_released("can")
 robot.grasp_manager.detach_object("can")
 ```
 
-## Architecture
-
-### Component Overview
+## Component Overview
 
 ```
 Geodude
@@ -268,34 +349,7 @@ Geodude
     └── Grasp-aware collision checking
 ```
 
-### Ownership Model
-
-The framework separates **planning** (what to do) from **execution** (how to do it):
-
-| Component | Owns | Responsibilities |
-|-----------|------|------------------|
-| **Robot/Arm** | Planning & State | Motion planning, IK, collision checking, grasp management, TSR registry |
-| **Context** | Execution | Trajectory execution, gripper actuation, state synchronization, hardware abstraction |
-
-**Robot/Arm** is stateless with respect to execution—it plans trajectories but doesn't know whether they'll run in simulation or on hardware. This keeps planning logic portable.
-
-**Context** handles the messy reality of execution: timing, physics, hardware communication, error recovery. Different contexts (sim, hardware) implement the same interface.
-
-**The context manager** (`robot.sim()`, `robot.hardware()`) wires them together:
-
-```python
-with robot.sim() as ctx:
-    # Robot plans trajectories (doesn't know about sim vs hardware)
-    trajectory = robot.right_arm.plan_to(goal)
-
-    # Context executes them (knows exactly how)
-    ctx.execute(trajectory)
-
-    # Gripper ops go through context (updates robot's grasp state)
-    ctx.arm("right").grasp("can")
-```
-
-### Design Principles
+## Design Principles
 
 The architecture is designed for **multi-robot reusability**:
 

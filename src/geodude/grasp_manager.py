@@ -267,29 +267,60 @@ def detect_grasped_object(
     data: mujoco.MjData,
     gripper_body_names: list[str],
     candidate_objects: list[str] | None = None,
+    require_bilateral: bool = True,
+    debug: bool = False,
 ) -> str | None:
     """Detect which object (if any) is being grasped by the gripper.
 
     Checks MuJoCo contacts to find objects in contact with gripper bodies.
+    For realistic grasp detection, requires bilateral contact (both left
+    and right fingers touching the object).
 
     Args:
         model: MuJoCo model
         data: MuJoCo data (after mj_forward)
-        gripper_body_names: Names of gripper bodies (pads, fingers)
+        gripper_body_names: Names of gripper bodies (pads, fingers).
+            Should include both left and right finger bodies, e.g.,
+            ["right_ur5e/gripper/left_pad", "right_ur5e/gripper/right_pad", ...]
         candidate_objects: Optional list of object names to consider.
                           If None, considers all bodies.
+        require_bilateral: If True (default), requires contact with both
+                          left AND right gripper fingers. If False, any
+                          contact is sufficient.
+        debug: If True, print detailed debug information
 
     Returns:
         Name of grasped object, or None if nothing is grasped
     """
-    # Get gripper body IDs
-    gripper_body_ids = set()
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # Separate gripper bodies into left and right sides
+    left_body_ids = set()
+    right_body_ids = set()
+    all_gripper_body_ids = set()
+
     for name in gripper_body_names:
         body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
         if body_id != -1:
-            gripper_body_ids.add(body_id)
+            all_gripper_body_ids.add(body_id)
+            # Categorize by finger side (left_pad, left_follower vs right_pad, right_follower)
+            if "/left_" in name or name.endswith("/left_pad") or name.endswith("/left_follower"):
+                left_body_ids.add(body_id)
+            elif "/right_" in name or name.endswith("/right_pad") or name.endswith("/right_follower"):
+                right_body_ids.add(body_id)
+        elif debug:
+            logger.warning(f"Gripper body not found: {name}")
 
-    if not gripper_body_ids:
+    if debug:
+        logger.info(f"Total contacts in sim: {data.ncon}")
+        logger.info(f"Gripper bodies: {gripper_body_names}")
+        logger.info(f"  Left body IDs: {left_body_ids}, Right body IDs: {right_body_ids}")
+        logger.info(f"Candidate objects: {candidate_objects}")
+
+    if not all_gripper_body_ids:
+        if debug:
+            logger.warning("No gripper body IDs found!")
         return None
 
     # Get candidate object body IDs
@@ -301,8 +332,9 @@ def detect_grasped_object(
             if body_id != -1:
                 candidate_body_ids.add(body_id)
 
-    # Check contacts
-    contacted_objects: dict[int, int] = {}  # body_id -> contact_count
+    # Track which objects have contact with left/right sides
+    # object_body_id -> {"left": bool, "right": bool, "count": int}
+    object_contacts: dict[int, dict] = {}
 
     for i in range(data.ncon):
         contact = data.contact[i]
@@ -314,10 +346,10 @@ def detect_grasped_object(
         gripper_body = None
         other_body = None
 
-        if body1 in gripper_body_ids:
+        if body1 in all_gripper_body_ids:
             gripper_body = body1
             other_body = body2
-        elif body2 in gripper_body_ids:
+        elif body2 in all_gripper_body_ids:
             gripper_body = body2
             other_body = body1
 
@@ -325,19 +357,53 @@ def detect_grasped_object(
             continue
 
         # Skip if other body is also part of gripper/robot
-        if other_body in gripper_body_ids:
+        if other_body in all_gripper_body_ids:
             continue
 
         # Skip if not in candidate list (when specified)
         if candidate_body_ids is not None and other_body not in candidate_body_ids:
             continue
 
-        # Count contacts with this object
-        contacted_objects[other_body] = contacted_objects.get(other_body, 0) + 1
+        # Initialize tracking for this object
+        if other_body not in object_contacts:
+            object_contacts[other_body] = {"left": False, "right": False, "count": 0}
 
-    # Return object with most contacts (heuristic for "most grasped")
-    if not contacted_objects:
+        # Record which side made contact
+        if gripper_body in left_body_ids:
+            object_contacts[other_body]["left"] = True
+        if gripper_body in right_body_ids:
+            object_contacts[other_body]["right"] = True
+        object_contacts[other_body]["count"] += 1
+
+    if debug:
+        logger.info(f"Object contacts found: {len(object_contacts)}")
+        for body_id, info in object_contacts.items():
+            body_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id)
+            logger.info(f"  {body_name}: left={info['left']}, right={info['right']}, count={info['count']}")
+
+    if not object_contacts:
+        if debug:
+            logger.info("No object contacts found")
         return None
 
-    best_body_id = max(contacted_objects, key=lambda x: contacted_objects[x])
-    return mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, best_body_id)
+    # Filter by bilateral contact requirement
+    if require_bilateral and left_body_ids and right_body_ids:
+        # Only consider objects with both left AND right contact
+        bilateral_objects = {
+            body_id: info for body_id, info in object_contacts.items()
+            if info["left"] and info["right"]
+        }
+        if bilateral_objects:
+            object_contacts = bilateral_objects
+        else:
+            # No bilateral grasps found
+            if debug:
+                logger.info("No bilateral contacts found (need both left and right finger touching)")
+            return None
+
+    # Return object with most contacts (heuristic for "most grasped")
+    best_body_id = max(object_contacts, key=lambda x: object_contacts[x]["count"])
+    result = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, best_body_id)
+    if debug:
+        logger.info(f"Returning grasped object: {result}")
+    return result

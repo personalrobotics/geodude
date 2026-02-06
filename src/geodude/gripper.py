@@ -294,12 +294,45 @@ class Gripper:
         return grasped
 
     def get_position(self) -> float:
-        """Get current gripper position (0=open, 1=closed)."""
+        """Get current gripper TARGET position (0=open, 1=closed).
+
+        Note: This returns the control target, not the actual position.
+        Use get_actual_position() for the actual joint position.
+        """
         if self.actuator_id is None:
             return 0.0
 
         ctrl = self.data.ctrl[self.actuator_id]
         return (ctrl - self.ctrl_open) / (self.ctrl_closed - self.ctrl_open)
+
+    def get_actual_position(self) -> float:
+        """Get actual gripper position from joint qpos (0=open, 1=closed).
+
+        Reads the actual joint positions and estimates the gripper opening
+        by comparing to the known open/closed trajectory waypoints.
+        """
+        if not self._gripper_joint_qpos_indices:
+            return 0.0
+
+        # Read actual joint positions
+        actual = np.array([self.data.qpos[idx] for idx in self._gripper_joint_qpos_indices])
+
+        # Compare to open and closed positions from trajectory
+        open_pos = _GRIPPER_TRAJECTORY[0]
+        closed_pos = _GRIPPER_TRAJECTORY[-1]
+
+        # Use the driver joint (index 1, "right_driver") as reference - it has the most range
+        # Driver goes from ~-0.026 (open) to ~-0.241 (closed)
+        driver_idx = 1
+        driver_actual = actual[driver_idx]
+        driver_open = open_pos[driver_idx]
+        driver_closed = closed_pos[driver_idx]
+
+        # Compute normalized position (0=open, 1=closed)
+        if abs(driver_closed - driver_open) < 1e-6:
+            return 0.0
+        t = (driver_actual - driver_open) / (driver_closed - driver_open)
+        return float(np.clip(t, 0.0, 1.0))
 
     def set_position(self, position: float) -> None:
         """Set gripper position (0=open, 1=closed)."""

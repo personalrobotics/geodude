@@ -58,7 +58,7 @@ robot = Geodude(objects={"can": 1, "recycle_bin": 2})
 
 # Activate objects in scene
 robot.env.registry.activate("can", pos=[0.4, -0.3, 0.82])
-robot.env.registry.activate("recycle_bin", pos=[0.75, -0.35, 0.50])
+robot.env.registry.activate("recycle_bin", pos=[0.75, -0.35, 0.0])  # Floor-standing
 
 with robot.sim() as ctx:
     robot.go_to("ready")

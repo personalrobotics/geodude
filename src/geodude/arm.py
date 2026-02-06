@@ -1009,6 +1009,10 @@ class Arm:
     def go_to(self, target: str | np.ndarray, speed: float = 1.0) -> bool:
         """Move to a named configuration or joint positions.
 
+        If an execution context is active (inside `with robot.sim()`), plans
+        and executes a collision-free trajectory. Otherwise, sets positions
+        directly (kinematic mode, useful for initialization).
+
         Args:
             target: Named configuration (e.g., 'home') or joint positions array
             speed: Execution speed multiplier (not yet implemented)
@@ -1024,10 +1028,18 @@ class Arm:
         else:
             q_target = np.asarray(target)
 
-        # For now, just set directly (no planning/interpolation)
-        # TODO: Plan and execute trajectory
-        self.set_joint_positions(q_target)
-        return True
+        # Check if we have an active execution context
+        ctx = self.robot._active_context
+        if ctx is not None:
+            # Plan and execute trajectory
+            trajectory = self.plan_to(q_target)
+            if trajectory is None:
+                return False
+            return ctx.execute(trajectory)
+        else:
+            # No context - set positions directly (kinematic initialization)
+            self.set_joint_positions(q_target)
+            return True
 
     def plan_to_configuration(
         self,

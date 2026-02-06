@@ -217,6 +217,118 @@ class VentionBaseConfig(EntityConfig):
 
 
 @dataclass
+class PhysicsExecutionConfig:
+    """Parameters for physics-based trajectory execution.
+
+    These control how the RobotPhysicsController tracks trajectories
+    and determines when motions have converged.
+    """
+
+    # Control loop timing
+    control_dt: float = 0.008  # 125 Hz to match UR5e servo rate
+    lookahead_time: float = 0.1  # Velocity feedforward gain (seconds)
+
+    # Convergence thresholds for settling after trajectory
+    position_tolerance: float = 0.1  # ~5.7 degrees - acceptable for grasping
+    velocity_tolerance: float = 0.1  # rad/s
+    convergence_timeout_steps: int = 500  # ~1 second at 500Hz physics
+
+    # Base settling (simpler than arm convergence)
+    base_settling_steps: int = 50
+
+    @classmethod
+    def default(cls) -> "PhysicsExecutionConfig":
+        """Default physics execution parameters."""
+        return cls()
+
+    @classmethod
+    def tight(cls) -> "PhysicsExecutionConfig":
+        """Tighter convergence for precision tasks."""
+        return cls(
+            position_tolerance=0.02,  # ~1 degree
+            velocity_tolerance=0.05,
+            convergence_timeout_steps=1000,
+        )
+
+
+@dataclass
+class GripperPhysicsConfig:
+    """Parameters for physics-based gripper control.
+
+    Controls gripper closing/opening behavior and grasp detection
+    in physics simulation mode.
+    """
+
+    # Motion steps (at control_dt rate)
+    close_steps: int = 200  # Steps to fully close
+    open_steps: int = 100  # Steps to fully open
+    firm_grip_steps: int = 50  # Extra steps after contact for firm grip
+    pre_open_steps: int = 20  # Steps to open before closing (clean start)
+
+    # Contact detection
+    contact_check_interval: int = 10  # Check contacts every N steps during close
+
+    # Lost grasp detection
+    fully_closed_threshold: float = 0.98  # Gripper position above this = no object
+
+    # Logging
+    debug: bool = False  # Enable detailed grasp detection logging
+
+    @classmethod
+    def default(cls) -> "GripperPhysicsConfig":
+        """Default gripper physics parameters."""
+        return cls()
+
+
+@dataclass
+class RecoveryConfig:
+    """Parameters for failure recovery motions.
+
+    When planning fails (e.g., after a failed grasp), these parameters
+    control the forced recovery motion to return the arm to a safe pose.
+    """
+
+    # Retract motion (first recovery attempt)
+    retract_height: float = 0.15  # Lift 15cm before re-planning
+
+    # Forced recovery interpolation (when planning fails entirely)
+    interpolation_steps: int = 1000  # Steps per phase (~2 seconds at 500Hz)
+
+    # Safe lift configuration (joint angles in radians)
+    # These move the arm up to clear the workspace before going to ready
+    lift_shoulder_angle: float = -1.57  # shoulder_lift to -90° (arm up)
+    lift_elbow_angle: float = 1.57  # elbow to 90° (forearm up)
+
+    @classmethod
+    def default(cls) -> "RecoveryConfig":
+        """Default recovery parameters."""
+        return cls()
+
+
+@dataclass
+class PhysicsConfig:
+    """Combined physics simulation configuration.
+
+    Groups all physics-related parameters for easy access.
+    """
+
+    execution: PhysicsExecutionConfig = field(
+        default_factory=PhysicsExecutionConfig.default
+    )
+    gripper: GripperPhysicsConfig = field(
+        default_factory=GripperPhysicsConfig.default
+    )
+    recovery: RecoveryConfig = field(
+        default_factory=RecoveryConfig.default
+    )
+
+    @classmethod
+    def default(cls) -> "PhysicsConfig":
+        """Default physics configuration."""
+        return cls()
+
+
+@dataclass
 class GeodudConfig:
     """Full robot configuration."""
 
@@ -226,6 +338,7 @@ class GeodudConfig:
     left_base: VentionBaseConfig | None = None
     right_base: VentionBaseConfig | None = None
     named_poses: dict[str, dict[str, list[float]]] = field(default_factory=dict)
+    physics: PhysicsConfig = field(default_factory=PhysicsConfig.default)
 
     @classmethod
     def default(cls) -> "GeodudConfig":
@@ -257,8 +370,13 @@ class GeodudConfig:
                     "left_ur5e/wrist_3_joint",
                 ],
                 ee_site="left_ur5e/gripper_attachment_site",
-                gripper_actuator="",  # No gripper in default geodude.xml
-                gripper_bodies=[],
+                gripper_actuator="left_ur5e/gripper/fingers_actuator",
+                gripper_bodies=[
+                    "left_ur5e/gripper/right_follower",
+                    "left_ur5e/gripper/left_follower",
+                    "left_ur5e/gripper/right_pad",
+                    "left_ur5e/gripper/left_pad",
+                ],
                 hand_type="robotiq_2f_140",
             ),
             right_arm=ArmConfig(

@@ -39,6 +39,7 @@ class MockRobot:
             "home": {"right": [-1.5708, -1.5708, 1.5708, -1.5708, -1.5708, 0]},
             "ready": {"right": [-2.14, -1.5708, 1.5708, -1.5708, -1.5708, 0]},
         }
+        self._active_context = None  # For go_to() compatibility
 
 
 class TestArm:

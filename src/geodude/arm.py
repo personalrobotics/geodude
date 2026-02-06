@@ -2014,7 +2014,7 @@ class Arm:
         Returns:
             MoveUntilTouchResult with:
                 - success: True if contact was detected after min_distance
-                - terminated_by: "contact", "max_distance", or "error"
+                - terminated_by: "contact", "max_distance", or "no_progress"
                 - distance_moved: Actual distance traveled
                 - final_force/final_torque: F/T readings (physics mode)
                 - contact_geom: Name of contacted geometry (kinematic mode)

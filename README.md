@@ -3,8 +3,12 @@
 A Python library for bimanual robot manipulation with collision-free motion planning.
 
 <p align="center">
-  <img src="docs/images/recycle_demo.gif" alt="Pick and place demo" width="480">
+  <a href="docs/images/recycle_demo.mp4">
+    <img src="docs/images/recycle_demo.gif" alt="Pick and place demo - click for video" width="480">
+  </a>
 </p>
+
+> Click the image above to watch the demo video, or [view directly](docs/images/recycle_demo.mp4).
 
 ## Motivation
 

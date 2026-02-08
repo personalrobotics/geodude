@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Record recycling demo as animated GIF for README.
+"""Record recycling demo as MP4 video for README.
 
-Captures frames using MuJoCo's offscreen renderer.
+Captures frames during trajectory execution and encodes to MP4.
 
 Usage:
     uv run mjpython scripts/record_demo.py
 """
 
-import time
+import subprocess
+import tempfile
 from pathlib import Path
 
 import mujoco
@@ -54,14 +55,16 @@ def sample_can_placement(robot):
     return pos, quat
 
 
-class FrameRecorder:
-    """Records frames from MuJoCo simulation."""
+class VideoRecorder:
+    """Records frames from MuJoCo simulation to MP4."""
 
     def __init__(self, model, data, width=640, height=480):
         self.model = model
         self.data = data
         self.renderer = mujoco.Renderer(model, height, width)
         self.frames = []
+        self.width = width
+        self.height = height
 
         # Camera settings (from CLAUDE.md preferred view)
         self.camera = mujoco.MjvCamera()
@@ -75,12 +78,11 @@ class FrameRecorder:
         mujoco.mj_forward(self.model, self.data)
         self.renderer.update_scene(self.data, self.camera)
         frame = self.renderer.render()
-        img = Image.fromarray(frame)
         for _ in range(n):
-            self.frames.append(img.copy())
+            self.frames.append(frame.copy())
 
-    def save_gif(self, path, fps=15):
-        """Save frames as GIF."""
+    def save_mp4(self, path, fps=30):
+        """Save frames as MP4 using ffmpeg."""
         if not self.frames:
             print("No frames to save!")
             return
@@ -88,53 +90,91 @@ class FrameRecorder:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        self.frames[0].save(
-            path,
-            save_all=True,
-            append_images=self.frames[1:],
-            duration=1000 // fps,
-            loop=0,
-            optimize=True,
-        )
-        print(f"Saved {len(self.frames)} frames to {path}", flush=True)
-        print(f"File size: {path.stat().st_size / 1024:.1f} KB", flush=True)
+        # Write frames to ffmpeg via pipe
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "rawvideo",
+            "-vcodec", "rawvideo",
+            "-s", f"{self.width}x{self.height}",
+            "-pix_fmt", "rgb24",
+            "-r", str(fps),
+            "-i", "-",
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            str(path)
+        ]
+
+        print(f"Encoding {len(self.frames)} frames to {path}...", flush=True)
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        for frame in self.frames:
+            proc.stdin.write(frame.tobytes())
+
+        proc.stdin.close()
+        proc.wait()
+
+        if proc.returncode != 0:
+            print(f"ffmpeg error: {proc.stderr.read().decode()}")
+        else:
+            print(f"Saved to {path}", flush=True)
+            print(f"File size: {path.stat().st_size / 1024:.1f} KB", flush=True)
 
 
-def execute_with_recording(ctx, trajectory, recorder, frames_per_waypoint=2):
+def execute_trajectory_with_recording(robot, trajectory, recorder, skip=3):
     """Execute trajectory while capturing frames."""
     if trajectory is None:
-        return False
+        return
 
-    # Sample waypoints for smooth animation
+    entity = trajectory.entity
     n_waypoints = trajectory.num_waypoints
-    step = max(1, n_waypoints // 30)  # ~30 frames per trajectory
 
-    for i in range(0, n_waypoints, step):
+    for i in range(0, n_waypoints, skip):
         pos = trajectory.positions[i]
 
-        # Set joint positions based on entity
-        entity = trajectory.entity
         if entity and "arm" in entity:
             side = "left" if "left" in entity else "right"
-            arm = ctx._robot.left_arm if side == "left" else ctx._robot.right_arm
+            arm = robot.left_arm if side == "left" else robot.right_arm
             arm.set_joint_positions(pos)
         elif entity and "base" in entity:
             side = "left" if "left" in entity else "right"
-            base = getattr(ctx._robot, f"{side}_base")
+            base = getattr(robot, f"{side}_base")
             if base:
                 base.set_height(pos[0])
 
-        recorder.capture(frames_per_waypoint)
+        # Update attached object positions (so grasped objects move with gripper)
+        mujoco.mj_forward(robot.model, robot.data)
+        robot.grasp_manager.update_attached_poses()
 
-    return True
+        recorder.capture(1)
+
+    # Capture final position
+    if n_waypoints > 0:
+        pos = trajectory.positions[-1]
+        if entity and "arm" in entity:
+            side = "left" if "left" in entity else "right"
+            arm = robot.left_arm if side == "left" else robot.right_arm
+            arm.set_joint_positions(pos)
+        mujoco.mj_forward(robot.model, robot.data)
+        robot.grasp_manager.update_attached_poses()
+        recorder.capture(1)
+
+
+def execute_plan_result_with_recording(robot, result, recorder, skip=3):
+    """Execute a PlanResult with frame recording."""
+    if result is None:
+        return
+    for traj in result.trajectories:
+        execute_trajectory_with_recording(robot, traj, recorder, skip)
 
 
 def main():
-    print("Recording recycling demo...", flush=True)
+    print("Recording recycling demo video...", flush=True)
 
-    output_path = Path(__file__).parent.parent / "docs" / "images" / "recycle_demo.gif"
+    output_path = Path(__file__).parent.parent / "docs" / "images" / "recycle_demo.mp4"
     cycles = 3
-    fps = 15
+    fps = 30
 
     # Create robot
     robot = Geodude(objects={"can": 1, "recycle_bin": 2})
@@ -148,11 +188,11 @@ def main():
     robot.go_to("ready")
     mujoco.mj_forward(robot.model, robot.data)
 
-    # Create recorder
-    recorder = FrameRecorder(robot.model, robot.data)
+    # Create recorder (480p - limited by MuJoCo offscreen buffer)
+    recorder = VideoRecorder(robot.model, robot.data)
 
-    # Capture initial frames
-    recorder.capture(fps)  # 1 second at start
+    # Capture initial frames (1.5 second pause at start)
+    recorder.capture(int(fps * 1.5))
 
     with robot.sim(physics=False, viewer=False) as ctx:
         for cycle in range(1, cycles + 1):
@@ -170,11 +210,27 @@ def main():
 
             # === PICKUP ===
             print(f"  Picking up {target}...", flush=True)
+
+            original_execute = ctx.execute
+
+            def recording_execute(item):
+                from geodude.planning import PlanResult
+                from geodude.trajectory import Trajectory
+
+                if isinstance(item, PlanResult):
+                    execute_plan_result_with_recording(robot, item, recorder, skip=3)
+                elif isinstance(item, Trajectory):
+                    execute_trajectory_with_recording(robot, item, recorder, skip=3)
+                return original_execute(item)
+
+            ctx.execute = recording_execute
+
             if not robot.pickup(target):
                 print(f"  Pickup failed!", flush=True)
+                ctx.execute = original_execute
                 break
 
-            # Capture post-pickup state
+            # Pause after grasp
             recorder.capture(fps // 2)
 
             # === PLACE ===
@@ -184,9 +240,12 @@ def main():
             print(f"  Placing in {bin_name}...", flush=True)
             if not robot.place(bin_name):
                 print(f"  Place failed!", flush=True)
+                ctx.execute = original_execute
                 break
 
-            # Capture post-place state
+            ctx.execute = original_execute
+
+            # Pause after place
             recorder.capture(fps // 2)
 
             # === RETURN TO READY ===
@@ -194,7 +253,8 @@ def main():
             ready_config = np.array(robot.named_poses["ready"][holding_arm.side])
             ready_result = holding_arm.plan_to(ready_config)
             if ready_result is not None:
-                execute_with_recording(ctx, ready_result, recorder)
+                execute_trajectory_with_recording(robot, ready_result, recorder, skip=3)
+                ctx.execute(ready_result)
 
             recorder.capture(fps // 4)
 
@@ -206,10 +266,10 @@ def main():
                 recorder.capture(fps // 2)
 
     # Final pause
-    recorder.capture(fps)
+    recorder.capture(int(fps * 1.5))
 
     print(f"\nTotal frames: {len(recorder.frames)}", flush=True)
-    recorder.save_gif(output_path, fps=fps)
+    recorder.save_mp4(output_path, fps=fps)
 
 
 if __name__ == "__main__":

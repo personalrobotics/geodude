@@ -331,6 +331,37 @@ robot.grasp_manager.mark_released("can")
 robot.grasp_manager.detach_object("can")
 ```
 
+## Cartesian Velocity Control
+
+For contact-based manipulation, Geodude provides real-time Cartesian velocity control with hard joint limit enforcement:
+
+```python
+with robot.sim(physics=True) as ctx:
+    # Move toward object until contact detected
+    contact = robot.right_arm.move_until_touch(
+        direction=[0, 0, -1],    # Move down (world frame)
+        distance=0.02,           # Ignore first 2cm (clear table surface)
+        max_distance=0.15,       # Safety limit
+        max_force=5.0,           # Stop at 5N contact force
+        speed=0.02,              # 2 cm/s approach
+    )
+
+    if contact:
+        ctx.arm("right").grasp("object")
+```
+
+The controller solves a constrained optimization at each timestep:
+
+$$\min_{\dot{\mathbf{q}}} \| \mathbf{J} \dot{\mathbf{q}} - \mathbf{v}_d \|^2 + \lambda \| \dot{\mathbf{q}} \|^2 \quad \text{s.t.} \quad \boldsymbol{\ell} \leq \dot{\mathbf{q}} \leq \mathbf{u}$$
+
+Key features:
+- **Hard constraint enforcement**: Joint position and velocity limits are never violated
+- **Implicit singularity handling**: Damping prevents large velocities near singular configurations
+- **Real-time**: Warm-started QP solver converges in 2-5 iterations at 125 Hz
+- **Contact detection**: F/T sensor (physics) or collision detection (kinematic)
+
+> **Deep Dive**: See [Cartesian Velocity Control](docs/cartesian-control.md) for the mathematical derivation, comparison with MoveIt Servo, and implementation details.
+
 ## Component Overview
 
 ```

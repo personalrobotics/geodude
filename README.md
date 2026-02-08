@@ -196,10 +196,12 @@ position:
   type: box
   x: [-0.05, 0.05]
   y: [-0.05, 0.05]
-  z: [0.50, 0.55]           # Height above bin
+  z: [0.97, 1.02]           # ~20cm above bin rim
 
 orientation:
   approach: -z              # Palm down
+  roll: [-10, 10]           # Allow slight tilt
+  pitch: [-10, 10]
   yaw: [0, 360]
 
 standoff: 0.0

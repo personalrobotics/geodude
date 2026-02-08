@@ -2,13 +2,7 @@
 
 A Python library for bimanual robot manipulation with collision-free motion planning.
 
-<p align="center">
-  <a href="docs/images/recycle_demo.mp4">
-    <img src="docs/images/recycle_demo.gif" alt="Pick and place demo - click for video" width="480">
-  </a>
-</p>
-
-> Click the image above to watch the demo video, or [view directly](docs/images/recycle_demo.mp4).
+**[▶️ Watch the demo video](docs/images/recycle_demo.mp4)** — Pick and place with automatic grasp discovery
 
 ## Motivation
 

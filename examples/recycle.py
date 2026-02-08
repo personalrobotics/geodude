@@ -74,7 +74,15 @@ def main():
 
     parser = argparse.ArgumentParser(description="Recycling demo with manipulation primitives")
     parser.add_argument("--physics", action="store_true", help="Enable physics simulation")
+    parser.add_argument("--headless", action="store_true", help="Run without visualization")
+    parser.add_argument("--cycles", type=int, default=5, help="Number of cycles to run")
+    parser.add_argument("--debug", action="store_true", help="Enable DEBUG level logging")
     args = parser.parse_args()
+
+    # Set logging level based on --debug flag
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logging.getLogger("geodude").setLevel(logging.DEBUG)
 
     mode = "Physics" if args.physics else "Kinematic"
     print(f"Recycling Demo (Primitives API) - {mode} Mode", flush=True)
@@ -98,11 +106,15 @@ def main():
         robot.go_to("ready")
         mujoco.mj_forward(robot.model, robot.data)
 
-        with robot.sim(physics=args.physics) as ctx:
+        # viewer=False means headless mode (no viewer created)
+        # viewer=None means auto-create viewer
+        viewer = False if args.headless else None
+        with robot.sim(physics=args.physics, viewer=viewer) as ctx:
             ctx.sync()
 
             cycle = 0
-            while ctx.is_running():
+            max_cycles = args.cycles
+            while ctx.is_running() and cycle < max_cycles:
                 cycle += 1
                 print(f"\n{'='*40}\nCycle {cycle}\n{'='*40}", flush=True)
 

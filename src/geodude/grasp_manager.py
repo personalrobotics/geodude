@@ -1,4 +1,10 @@
-"""Grasp state management and collision group updates."""
+"""Grasp state management for manipulation.
+
+This module tracks which objects are grasped and handles kinematic attachments
+so grasped objects move with the gripper. Collision detection is handled
+entirely in software by the collision checker - no MuJoCo collision group
+changes are needed.
+"""
 
 import logging
 
@@ -7,44 +13,27 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Collision group bit definitions
-# Bit 0 (value 1): Normal objects and robot arm
-# Bit 1 (value 2): Grasped objects (only collides with gripper pads)
-COLLISION_GROUP_NORMAL = 1
-COLLISION_GROUP_GRASPED = 2
-COLLISION_GROUP_GRIPPER_PADS = 3  # Both bits: collides with normal AND grasped
-
 
 class GraspManager:
-    """Manages grasp state and updates collision groups accordingly.
+    """Manages grasp state and kinematic attachments.
 
-    When an object is grasped:
-    - Its collision group changes from NORMAL (1) to GRASPED (2)
-    - This means it no longer collides with the robot arm (group 1)
-    - But still collides with gripper pads (group 3 = 1|2)
-    - And still collides with environment/other objects
+    Tracks which objects are grasped by which arm, and maintains kinematic
+    attachments so objects move with the gripper during manipulation.
 
-    This allows planning motions with a grasped object without false
-    collisions between the object and the robot's arm.
-
-    For kinematic execution (no physics), this class also tracks object
-    attachments so grasped objects move with the gripper.
+    The collision checker uses `is_grasped()` to determine how to filter
+    contacts - gripper-to-object contacts are allowed, while arm-to-object
+    and object-to-environment contacts are flagged as collisions.
     """
 
     def __init__(self, model: mujoco.MjModel, data: mujoco.MjData):
         self.model = model
         self.data = data
         self.grasped: dict[str, str] = {}  # object_name -> arm_name
-        self._original_collision_groups: dict[str, list[tuple[int, int]]] = {}
         # Kinematic attachments: object_name -> (gripper_body_name, T_gripper_object)
         self._attachments: dict[str, tuple[str, np.ndarray]] = {}
 
     def mark_grasped(self, object_name: str, arm: str) -> None:
         """Mark an object as grasped by the specified arm.
-
-        Updates the object's collision group so it doesn't collide with
-        the robot arm during planning, but still collides with gripper
-        pads and environment.
 
         Args:
             object_name: Name of the grasped object body in MuJoCo
@@ -54,12 +43,9 @@ class GraspManager:
             return  # Already grasped
 
         self.grasped[object_name] = arm
-        self._save_and_update_collision_group(object_name, grasped=True)
 
     def mark_released(self, object_name: str) -> None:
         """Mark an object as released.
-
-        Restores the object's original collision group.
 
         Args:
             object_name: Name of the released object body in MuJoCo
@@ -68,7 +54,6 @@ class GraspManager:
             return  # Not currently grasped
 
         del self.grasped[object_name]
-        self._restore_collision_group(object_name)
 
     def get_grasped_by(self, arm: str) -> list[str]:
         """Get list of objects currently grasped by the specified arm."""
@@ -222,48 +207,6 @@ class GraspManager:
         quat = np.zeros(4)
         mujoco.mju_mat2Quat(quat, mat.flatten())
         return quat
-
-    def _get_body_geom_ids(self, body_name: str) -> list[int]:
-        """Get all geom IDs belonging to a body."""
-        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
-        if body_id == -1:
-            raise ValueError(f"Body '{body_name}' not found in model")
-
-        geom_ids = []
-        for geom_id in range(self.model.ngeom):
-            if self.model.geom_bodyid[geom_id] == body_id:
-                geom_ids.append(geom_id)
-        return geom_ids
-
-    def _save_and_update_collision_group(self, object_name: str, grasped: bool) -> None:
-        """Save original collision groups and update to grasped state."""
-        geom_ids = self._get_body_geom_ids(object_name)
-
-        # Save original values
-        self._original_collision_groups[object_name] = [
-            (int(self.model.geom_contype[gid]), int(self.model.geom_conaffinity[gid]))
-            for gid in geom_ids
-        ]
-
-        # Update to grasped collision group
-        # contype=GRASPED means only gripper pads (conaffinity=3) will see this as a collision partner
-        # conaffinity=GRASPED only, so arm links (contype=1) won't detect collision with grasped object
-        # This allows planning while holding the object
-        for geom_id in geom_ids:
-            self.model.geom_contype[geom_id] = COLLISION_GROUP_GRASPED
-            self.model.geom_conaffinity[geom_id] = COLLISION_GROUP_GRASPED
-
-    def _restore_collision_group(self, object_name: str) -> None:
-        """Restore original collision groups for an object."""
-        if object_name not in self._original_collision_groups:
-            return
-
-        geom_ids = self._get_body_geom_ids(object_name)
-        original = self._original_collision_groups.pop(object_name)
-
-        for geom_id, (contype, conaffinity) in zip(geom_ids, original):
-            self.model.geom_contype[geom_id] = contype
-            self.model.geom_conaffinity[geom_id] = conaffinity
 
 
 def detect_grasped_object(

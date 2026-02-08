@@ -317,6 +317,8 @@ with robot.sim() as ctx:
     ctx.arm("right").release("can")
 ```
 
+> **Deep Dive**: See [Grasp-Aware Collision Detection](docs/grasp-aware-collision.md) for a detailed explanation of how Geodude filters contacts during manipulation.
+
 For manual control:
 
 ```python
@@ -369,11 +371,17 @@ This separation allows:
 ## Examples
 
 ```bash
-# Recycling demo - pick up objects and place in bins
+# Recycling demo - pick up objects and place in bins (kinematic mode)
 uv run mjpython examples/recycle.py
+
+# Recycling demo with physics simulation
+uv run mjpython examples/recycle.py --physics
 
 # Same demo with manual TSR loading (educational)
 uv run mjpython examples/recycle_manual.py
+
+# Cartesian velocity control demo
+uv run mjpython examples/cartesian_demo.py
 
 # Planning API demo with base height search
 uv run mjpython examples/arm_planning.py

@@ -65,8 +65,8 @@ class TestGraspAwareCollisionChecker:
         assert len(checker.joint_indices) == 6
         assert checker.grasp_manager is gm
 
-    def test_grasped_object_doesnt_collide_with_arm(self, mujoco_model_and_data, arm_joint_names):
-        """When object is grasped, it shouldn't cause arm collision."""
+    def test_grasped_object_tracked_in_manager(self, mujoco_model_and_data, arm_joint_names):
+        """When object is grasped, it is tracked by the grasp manager."""
         model, data = mujoco_model_and_data
         gm = GraspManager(model, data)
         checker = GraspAwareCollisionChecker(model, data, arm_joint_names, gm)
@@ -74,76 +74,21 @@ class TestGraspAwareCollisionChecker:
         # Mark box1 as grasped
         gm.mark_grasped("box1", "right")
 
-        # Move box1 to overlap with arm link
-        box1_jnt_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "box1_joint")
-        box1_qpos_adr = model.jnt_qposadr[box1_jnt_id]
+        # Verify grasp manager tracks the grasped state
+        assert gm.is_grasped("box1")
+        assert gm.get_holder("box1") == "right"
 
-        mujoco.mj_forward(model, data)
+        # The collision checker should use this state for filtering
+        # (software-based filtering, not MuJoCo collision groups)
 
-        # Put box near arm
-        data.qpos[box1_qpos_adr:box1_qpos_adr + 3] = [0.3, 0, 0.8]
-        data.qpos[box1_qpos_adr + 3:box1_qpos_adr + 7] = [1, 0, 0, 0]
-
-        mujoco.mj_forward(model, data)
-
-        # The collision groups should filter out this collision
-        # because box1 is grasped (group 2) and arm is group 1
-        # They don't share any bits in contype & conaffinity
-
-        # Check that MuJoCo's collision filtering is working
-        # by verifying contype/conaffinity
-        box1_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "box1_geom")
-
-        box1_contype = model.geom_contype[box1_geom_id]
-
-        # Box is group 2 when grasped
-        from geodude.grasp_manager import COLLISION_GROUP_GRASPED
-        assert box1_contype == COLLISION_GROUP_GRASPED
-
-    def test_ungrasped_object_collides_normally(self, mujoco_model_and_data, arm_joint_names):
-        """Non-grasped objects should collide with arm normally."""
+    def test_ungrasped_object_not_in_manager(self, mujoco_model_and_data, arm_joint_names):
+        """Non-grasped objects are not tracked in grasp manager."""
         model, data = mujoco_model_and_data
         gm = GraspManager(model, data)
 
-        # Check collision groups are normal
-        box1_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "box1_geom")
-
-        box1_contype = model.geom_contype[box1_geom_id]
-        box1_conaffinity = model.geom_conaffinity[box1_geom_id]
-
-        # Both should be normal collision group
-        from geodude.grasp_manager import COLLISION_GROUP_NORMAL
-        assert box1_contype == COLLISION_GROUP_NORMAL
-        assert box1_conaffinity == COLLISION_GROUP_NORMAL
-
-
-class TestCollisionGroupSemantics:
-    """Tests verifying collision group math works correctly."""
-
-    def test_collision_group_definitions(self):
-        """Verify collision groups interact correctly."""
-        # Group 1: Normal (arm, ungrasped objects)
-        # Group 2: Grasped objects
-        # Group 3: Gripper pads (1|2)
-
-        normal = 1
-        grasped = 2
-        gripper = 3
-
-        # Normal collides with normal
-        assert (normal & normal) != 0
-
-        # Normal does NOT collide with grasped
-        assert (normal & grasped) == 0
-
-        # Gripper collides with normal
-        assert (gripper & normal) != 0
-
-        # Gripper collides with grasped
-        assert (gripper & grasped) != 0
-
-        # Grasped collides with grasped (objects can touch each other)
-        assert (grasped & grasped) != 0
+        # Without marking as grasped, object is not tracked
+        assert not gm.is_grasped("box1")
+        assert gm.get_holder("box1") is None
 
 
 class TestArmBodyIdCompleteness:

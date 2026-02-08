@@ -92,6 +92,126 @@ def _find_arm_holding_object(robot: "Geodude") -> "Arm | None":
     return None
 
 
+def _has_grasped_object_arm_collision(robot: "Geodude", arm: "Arm") -> bool:
+    """Check if grasped object is colliding with arm (not gripper).
+
+    In physics mode, the grasped object can swing into the forearm.
+    This is a recoverable condition - we can try to separate them.
+
+    Args:
+        robot: Robot instance
+        arm: Arm to check
+
+    Returns:
+        True if grasped object is touching non-gripper arm parts
+    """
+    import mujoco
+
+    collision_checker = arm._get_collision_checker()
+    model = collision_checker.model
+    data = collision_checker.data
+
+    # Get grasped objects for this arm
+    grasped = list(robot.grasp_manager.get_grasped_by(arm.side))
+    if not grasped:
+        return False
+
+    grasped_set = set(grasped)
+
+    for i in range(data.ncon):
+        contact = data.contact[i]
+        body1 = model.geom_bodyid[contact.geom1]
+        body2 = model.geom_bodyid[contact.geom2]
+
+        body1_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body1)
+        body2_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body2)
+
+        # Check if one is grasped and other is arm (but not gripper)
+        body1_is_grasped = body1_name in grasped_set
+        body2_is_grasped = body2_name in grasped_set
+        body1_is_arm = body1 in collision_checker._arm_body_ids
+        body2_is_arm = body2 in collision_checker._arm_body_ids
+        body1_is_gripper = body1_is_arm and body1_name and "gripper" in body1_name
+        body2_is_gripper = body2_is_arm and body2_name and "gripper" in body2_name
+
+        # Grasped object touching non-gripper arm part
+        if body1_is_grasped and body2_is_arm and not body2_is_gripper:
+            logger.debug(f"Grasped-to-arm collision: {body1_name} <-> {body2_name}")
+            return True
+        if body2_is_grasped and body1_is_arm and not body1_is_gripper:
+            logger.debug(f"Grasped-to-arm collision: {body2_name} <-> {body1_name}")
+            return True
+
+    return False
+
+
+def _separate_grasped_object(robot: "Geodude", arm: "Arm") -> bool:
+    """Try to separate grasped object from arm with small motions.
+
+    When the grasped object is touching the forearm, try lifting up
+    and/or wiggling to separate them.
+
+    Args:
+        robot: Robot instance
+        arm: Arm with grasped object
+
+    Returns:
+        True if separation successful, False otherwise
+    """
+    from geodude.cartesian import execute_twist, CartesianControlConfig
+
+    ctx = robot._active_context
+    if ctx is None:
+        return False
+
+    logger.info(f"  Attempting to separate grasped object from {arm.side} arm...")
+
+    # Try lifting up a bit more
+    lift_config = CartesianControlConfig(min_progress=0.05)
+    twist = np.array([0.0, 0.0, 0.15, 0.0, 0.0, 0.0])  # 15 cm/s upward
+
+    lift_result = execute_twist(
+        arm=arm,
+        twist=twist,
+        max_distance=0.05,  # 5cm additional lift
+        frame="world",
+        config=lift_config,
+    )
+
+    if lift_result.distance_moved > 0.02:
+        logger.info(f"    Lifted additional {lift_result.distance_moved*100:.1f}cm")
+        robot.grasp_manager.update_attached_poses()
+
+    # Check if separated
+    if not _has_grasped_object_arm_collision(robot, arm):
+        logger.info(f"  Separation successful")
+        return True
+
+    # Try a small rotation to shift the object
+    logger.debug(f"  Trying rotation to separate...")
+    rotate_config = CartesianControlConfig(min_progress=0.05)
+    # Small wrist rotation
+    rotate_twist = np.array([0.0, 0.0, 0.0, 0.0, 0.3, 0.0])  # 0.3 rad/s rotation
+
+    rotate_result = execute_twist(
+        arm=arm,
+        twist=rotate_twist,
+        duration=0.3,  # Short rotation
+        frame="hand",
+        config=rotate_config,
+    )
+
+    robot.grasp_manager.update_attached_poses()
+
+    # Check if separated
+    if not _has_grasped_object_arm_collision(robot, arm):
+        logger.info(f"  Separation successful after rotation")
+        return True
+
+    logger.warning(f"  Could not separate grasped object from arm")
+    return False
+
+
 def _return_to_ready(robot: "Geodude", arm: "Arm") -> bool:
     """Return arm to ready position after failure.
 
@@ -125,16 +245,24 @@ def _return_to_ready(robot: "Geodude", arm: "Arm") -> bool:
     trajectory = arm.plan_to(ready_config)
 
     if trajectory is None:
-        # Fallback: try to lift up first, then plan to ready
+        # Fallback: use Cartesian velocity to lift up first, then plan to ready
+        # execute_twist is more robust than planning - just moves until it can't
         logger.info(f"Direct path to ready failed for {arm.side} arm, trying retract first...")
-        current_pose = arm.get_ee_pose().copy()
-        retract_pose = current_pose.copy()
-        retract_pose[2, 3] += recovery_cfg.retract_height
+        from geodude.cartesian import execute_twist, CartesianControlConfig
 
-        retract_result = arm.plan_to_pose(retract_pose, timeout=5.0)
-        if retract_result:
-            logger.info(f"  Retracting {arm.side} arm...")
-            ctx.execute(retract_result)
+        # Move straight up in world frame
+        retract_config = CartesianControlConfig(min_progress=0.1)
+        twist = np.array([0.0, 0.0, 0.10, 0.0, 0.0, 0.0])  # 10 cm/s upward
+        retract_result = execute_twist(
+            arm=arm,
+            twist=twist,
+            max_distance=recovery_cfg.retract_height,
+            frame="world",
+            config=retract_config,
+        )
+
+        if retract_result.distance_moved > 0.01:  # Moved at least 1cm
+            logger.info(f"  Retracted {retract_result.distance_moved*100:.1f}cm")
             # Now try planning to ready again
             trajectory = arm.plan_to(ready_config)
 
@@ -185,7 +313,7 @@ def pickup(
     object_type: str | None = None,
     arm: "Arm | str | None" = None,
     base_heights: list[float] | None = None,
-    lift_height: float = 0.10,
+    lift_height: float = 0.05,  # 5cm lift (collision-checked)
     timeout: float = 30.0,
 ) -> bool:
     """Pick up an object using affordance-based planning.
@@ -325,6 +453,46 @@ def pickup(
             continue
         logger.info(f"  Approach execution completed")
 
+        # Move forward until contact (close the standoff gap)
+        from geodude.cartesian import move_until_touch
+
+        # Check for pre-existing arm collision before starting motion
+        # In physics mode, the arm might have sagged into collision with the base
+        collision_checker = a._get_collision_checker()
+        if collision_checker.is_arm_in_collision():
+            logger.warning(
+                f"  Arm already in collision before approach - skipping to other arm"
+            )
+            _return_to_ready(robot, a)
+            continue
+
+        logger.info(f"  Moving forward until contact...")
+        touch_result = move_until_touch(
+            arm=a,
+            direction=[0, 0, 1],  # Forward in gripper frame (+Z is gripper approach)
+            distance=0.01,        # Min 1cm before checking (avoid false positives)
+            max_distance=0.10,    # Max 10cm (slightly more than typical standoff)
+            max_force=10.0,       # Contact force threshold
+            speed=0.03,           # 3cm/s - slow for precision
+            frame="hand",
+            check_arm_collision=True,  # Stop if arm hits environment
+        )
+
+        if touch_result.success:
+            logger.info(f"  Contact detected at {touch_result.distance_moved*100:.1f}cm")
+        elif touch_result.terminated_by == "arm_collision":
+            logger.warning(
+                f"  Arm collision during approach at {touch_result.distance_moved*100:.1f}cm"
+            )
+            # Return to ready and try another arm
+            _return_to_ready(robot, a)
+            continue
+        else:
+            logger.info(
+                f"  Move stopped: {touch_result.terminated_by} "
+                f"at {touch_result.distance_moved*100:.1f}cm"
+            )
+
         # Grasp
         logger.info(f"  Closing gripper on {target}...")
         grasped = ctx.arm(a.side).grasp(target)
@@ -343,21 +511,45 @@ def pickup(
             continue
         logger.info(f"  Grasp succeeded - holding {grasped}")
 
-        # Lift
+        # Lift using Cartesian velocity control (simpler and more robust than planning)
         if lift_height > 0:
             logger.info(f"  Lifting {lift_height*100:.0f}cm...")
-            lift_pose = a.get_ee_pose().copy()
-            lift_pose[2, 3] += lift_height
-            lift_result = a.plan_to_pose(lift_pose, timeout=5.0)
-            if lift_result:
-                lift_success = ctx.execute(lift_result)
-                if lift_success:
-                    robot.grasp_manager.update_attached_poses()
-                    logger.info(f"  Lift completed")
-                else:
-                    logger.warning(f"  Lift execution did not converge")
+
+            from geodude.cartesian import execute_twist, CartesianControlConfig
+
+            # Move straight up in world frame
+            # Use lower min_progress to allow slower motion near joint limits
+            # Use higher velocity (20cm/s) to overcome contact forces in physics mode
+            lift_config = CartesianControlConfig(min_progress=0.05)
+            twist = np.array([0.0, 0.0, 0.20, 0.0, 0.0, 0.0])  # 20 cm/s upward
+            lift_result = execute_twist(
+                arm=a,
+                twist=twist,
+                max_distance=lift_height,
+                frame="world",
+                config=lift_config,
+                check_arm_collision=True,  # Stop if arm hits environment
+            )
+
+            if lift_result.terminated_by == "arm_collision":
+                logger.warning(
+                    f"  Arm collision during lift at {lift_result.distance_moved*100:.1f}cm - aborting grasp"
+                )
+                # Release object and try another arm
+                ctx.arm(a.side).release()
+                _return_to_ready(robot, a)
+                continue
+
+            if lift_result.distance_moved >= lift_height * 0.9:
+                robot.grasp_manager.update_attached_poses()
+                logger.info(f"  Lift completed ({lift_result.distance_moved*100:.1f}cm)")
             else:
-                logger.warning(f"  Could not plan lift motion")
+                # Partial lift is OK - update attached poses and continue
+                robot.grasp_manager.update_attached_poses()
+                logger.warning(
+                    f"  Lift incomplete: {lift_result.distance_moved*100:.1f}cm "
+                    f"(target: {lift_height*100:.0f}cm, stopped by: {lift_result.terminated_by})"
+                )
 
         logger.info(f"Successfully picked up {target} with {a.side} arm")
         return True
@@ -457,31 +649,90 @@ def place(
 
     place_tsrs = [aff.create_tsr(dest_pose) for aff in affordances]
 
+    # Log arm state before planning (debug level)
+    q_current = a.get_joint_positions()
+    ee_pose = a.get_ee_pose()
+    logger.debug(f"  Current joint positions: {q_current.round(3)}")
+    logger.debug(f"  Current EE position: {ee_pose[:3, 3].round(3)}")
+
+    # Check if current configuration is in collision
+    collision_checker = a._get_collision_checker()
+    is_collision_free = collision_checker.is_valid(q_current)
+    logger.debug(f"  Current config collision-free: {is_collision_free}")
+
+    # Debug contacts if in collision
+    if not is_collision_free:
+        logger.debug(f"  Collision detected - dumping contacts:")
+        collision_checker.debug_contacts(q_current)
+
+    # Log what object is being held (debug level)
+    logger.debug(f"  Holding object: {held_object} (type: {held_type})")
+    logger.debug(f"  Destination: {destination} (type: {dest_type})")
+    logger.debug(f"  Destination pose:\n{dest_pose.round(3)}")
+
     # Plan place motion (planner picks best TSR)
-    logger.info(f"  Planning place motion...")
-    result = a.plan_to_tsr(
-        place_tsrs,
-        base_heights=base_heights,
-        timeout=timeout,
-    )
+    # May need retry if grasped object is colliding with arm
+    max_retries = 2
+    result = None
+
+    for attempt in range(max_retries):
+        if attempt > 0:
+            logger.info(f"  Retry {attempt}: Planning place motion...")
+        else:
+            logger.info(f"  Planning place motion...")
+
+        result = a.plan_to_tsr(
+            place_tsrs,
+            base_heights=base_heights,
+            timeout=timeout,
+        )
+
+        if result is not None:
+            break
+
+        # Planning failed - check if recoverable
+        logger.warning(f"  Place planning FAILED for {destination} (timeout or collision)")
+        logger.debug(f"  Held objects by {a.side}: {list(robot.grasp_manager.get_grasped_by(a.side))}")
+
+        # Check if failure is due to grasped-object-to-arm collision
+        if attempt < max_retries - 1 and _has_grasped_object_arm_collision(robot, a):
+            logger.info(f"  Detected grasped object touching arm - attempting recovery...")
+            if _separate_grasped_object(robot, a):
+                continue  # Retry planning
+            else:
+                break  # Recovery failed
 
     if result is None:
-        logger.warning(f"  Place planning FAILED for {destination} (timeout or collision)")
-        # Return to ready with object still held
+        # All retries exhausted
         _return_to_ready(robot, a)
         return False
 
-    # Execute place motion
+    # Execute place motion (with retry on failure)
     # result can be Trajectory or PlanResult
     from geodude.planning import PlanResult
     if isinstance(result, PlanResult):
         waypoints = result.arm_trajectory.num_waypoints
     else:
         waypoints = result.num_waypoints
-    logger.info(f"  Executing place trajectory ({waypoints} waypoints)...")
-    exec_success = ctx.execute(result)
+
+    exec_success = False
+    for exec_attempt in range(2):
+        if exec_attempt > 0:
+            logger.info(f"  Retry {exec_attempt}: Executing place trajectory...")
+            # Let physics settle before retry
+            for _ in range(50):
+                ctx.step()
+        else:
+            logger.info(f"  Executing place trajectory ({waypoints} waypoints)...")
+
+        exec_success = ctx.execute(result)
+        if exec_success:
+            break
+
+        logger.warning(f"  Place execution failed (attempt {exec_attempt + 1}) - arm did not converge")
+
     if not exec_success:
-        logger.warning(f"  Place execution FAILED - arm did not converge")
+        logger.warning(f"  Place execution FAILED after retries")
         # Return to ready with object still held
         _return_to_ready(robot, a)
         return False

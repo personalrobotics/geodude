@@ -6,9 +6,9 @@ Real-time Cartesian control is fundamental to manipulation: move the end-effecto
 
 Given a desired end-effector twist $\mathbf{v}_d \in \mathbb{R}^6$ (linear and angular velocity), find joint velocities $\dot{\mathbf{q}} \in \mathbb{R}^n$ such that:
 
-$$
+```math
 \mathbf{J}(\mathbf{q}) \dot{\mathbf{q}} \approx \mathbf{v}_d
-$$
+```
 
 subject to:
 - **Joint position limits**: $\mathbf{q}_{\min} \leq \mathbf{q} + \dot{\mathbf{q}} \Delta t \leq \mathbf{q}_{\max}$
@@ -27,9 +27,9 @@ The challenge is threefold:
 
 The most common approach uses the Moore-Penrose pseudoinverse:
 
-$$
+```math
 \dot{\mathbf{q}} = \mathbf{J}^+ \mathbf{v}_d
-$$
+```
 
 where $\mathbf{J}^+ = \mathbf{J}^T (\mathbf{J} \mathbf{J}^T)^{-1}$ for full row rank, or computed via SVD.
 
@@ -42,9 +42,9 @@ where $\mathbf{J}^+ = \mathbf{J}^T (\mathbf{J} \mathbf{J}^T)^{-1}$ for full row 
 
 A common fix adds regularization:
 
-$$
+```math
 \dot{\mathbf{q}} = \mathbf{J}^T (\mathbf{J} \mathbf{J}^T + \lambda^2 \mathbf{I})^{-1} \mathbf{v}_d
-$$
+```
 
 This bounds joint velocities near singularities. However:
 - The damping $\lambda$ requires careful tuning per robot
@@ -75,13 +75,9 @@ if (condition > hard_stop_threshold) {
 
 We formulate Cartesian control as a box-constrained QP solved at each timestep:
 
-$$
-\min_{\dot{\mathbf{q}}} \quad \frac{1}{2} \| \mathbf{J} \dot{\mathbf{q}} - \mathbf{v}_d \|_{\mathbf{W}}^2 + \frac{\lambda}{2} \| \dot{\mathbf{q}} \|^2
-$$
-
-$$
-\text{s.t.} \quad \boldsymbol{\ell} \leq \dot{\mathbf{q}} \leq \mathbf{u}
-$$
+```math
+\min_{\dot{\mathbf{q}}} \quad \frac{1}{2} \| \mathbf{J} \dot{\mathbf{q}} - \mathbf{v}_d \|_{\mathbf{W}}^2 + \frac{\lambda}{2} \| \dot{\mathbf{q}} \|^2 \quad \text{s.t.} \quad \boldsymbol{\ell} \leq \dot{\mathbf{q}} \leq \mathbf{u}
+```
 
 where:
 - $\mathbf{W}$ is a twist weighting matrix (discussed below)
@@ -94,9 +90,9 @@ A 6D twist contains linear velocity (m/s) and angular velocity (rad/s)—differe
 
 We introduce a **length scale** $L$ (default 0.1m, typical gripper workspace size):
 
-$$
+```math
 \mathbf{W} = \text{diag}(1, 1, 1, L^{-2}, L^{-2}, L^{-2})
-$$
+```
 
 This makes the objective **scale-invariant**: a 0.1 m/s linear error is weighted equally to a 1 rad/s angular error when $L = 0.1$m. The choice of $L$ encodes the characteristic length of your task—smaller values prioritize rotational accuracy.
 
@@ -105,18 +101,20 @@ This makes the objective **scale-invariant**: a 0.1 m/s linear error is weighted
 The key insight is converting position limits to velocity constraints at each timestep.
 
 **From position limits:**
-$$
+
+```math
 \boldsymbol{\ell}_{\text{pos}} = \frac{(\mathbf{q}_{\min} + \boldsymbol{\epsilon}) - \mathbf{q}}{\Delta t}, \quad
 \mathbf{u}_{\text{pos}} = \frac{(\mathbf{q}_{\max} - \boldsymbol{\epsilon}) - \mathbf{q}}{\Delta t}
-$$
+```
 
 where $\boldsymbol{\epsilon}$ is a safety margin (5° by default). This ensures $\mathbf{q} + \dot{\mathbf{q}} \Delta t$ stays within limits.
 
 **Combined with velocity limits:**
-$$
+
+```math
 \boldsymbol{\ell} = \max(-\dot{\mathbf{q}}_{\max}, \boldsymbol{\ell}_{\text{pos}}), \quad
 \mathbf{u} = \min(+\dot{\mathbf{q}}_{\max}, \mathbf{u}_{\text{pos}})
-$$
+```
 
 The `max` and `min` take the **more restrictive** bound. Near a joint limit, the position-derived bound dominates; in the workspace interior, velocity limits dominate.
 
@@ -135,13 +133,13 @@ This allows motion back toward the safe zone without solver failure.
 
 Expanding the objective in standard QP form ($\frac{1}{2} \dot{\mathbf{q}}^T \mathbf{H} \dot{\mathbf{q}} + \mathbf{g}^T \dot{\mathbf{q}}$):
 
-$$
+```math
 \mathbf{H} = \mathbf{J}^T \mathbf{W} \mathbf{J} + \lambda \mathbf{I}
-$$
+```
 
-$$
+```math
 \mathbf{g} = -\mathbf{J}^T \mathbf{W} \mathbf{v}_d
-$$
+```
 
 The matrix $\mathbf{H}$ is symmetric positive-definite (SPD) due to the $\lambda \mathbf{I}$ term, even when $\mathbf{J}$ is rank-deficient. This provides **implicit singularity handling**: near singularities, the regularization term dominates, naturally limiting joint velocities without explicit detection.
 
@@ -158,27 +156,27 @@ We use **projected gradient descent** (PGD), a first-order method ideally suited
 
 Consider the box-constrained QP:
 
-$$
+```math
 \min_{\mathbf{x}} \quad f(\mathbf{x}) = \frac{1}{2} \mathbf{x}^T \mathbf{H} \mathbf{x} + \mathbf{g}^T \mathbf{x} \quad \text{s.t.} \quad \boldsymbol{\ell} \leq \mathbf{x} \leq \mathbf{u}
-$$
+```
 
 The gradient of the objective is:
 
-$$
+```math
 \nabla f(\mathbf{x}) = \mathbf{H} \mathbf{x} + \mathbf{g}
-$$
+```
 
 Standard gradient descent would update $\mathbf{x}^{(k+1)} = \mathbf{x}^{(k)} - \alpha \nabla f(\mathbf{x}^{(k)})$, but this may violate the box constraints. The **projection operator** onto the feasible set $\mathcal{C} = \{\mathbf{x} : \boldsymbol{\ell} \leq \mathbf{x} \leq \mathbf{u}\}$ is simply element-wise clamping:
 
-$$
+```math
 \text{proj}_\mathcal{C}(\mathbf{x}) = \text{clip}(\mathbf{x}, \boldsymbol{\ell}, \mathbf{u}) = \max(\boldsymbol{\ell}, \min(\mathbf{u}, \mathbf{x}))
-$$
+```
 
 The PGD iteration is:
 
-$$
+```math
 \mathbf{x}^{(k+1)} = \text{proj}_\mathcal{C}\left( \mathbf{x}^{(k)} - \alpha \nabla f(\mathbf{x}^{(k)}) \right)
-$$
+```
 
 ### Choosing the Step Size
 
@@ -186,21 +184,21 @@ For convergence, we need $\alpha$ small enough that the objective decreases at e
 
 For our quadratic objective, the smoothness constant is the largest eigenvalue of the Hessian:
 
-$$
+```math
 L = \lambda_{\max}(\mathbf{H}) = \|\mathbf{H}\|_2
-$$
+```
 
 Therefore, the optimal constant step size is:
 
-$$
+```math
 \alpha = \frac{1}{\|\mathbf{H}\|_2}
-$$
+```
 
 For our Hessian $\mathbf{H} = \mathbf{J}^T \mathbf{W} \mathbf{J} + \lambda \mathbf{I}$:
 
-$$
+```math
 \|\mathbf{H}\|_2 \leq \|\mathbf{J}^T \mathbf{W} \mathbf{J}\|_2 + \lambda \leq \|\mathbf{J}\|_2^2 \|\mathbf{W}\|_2 + \lambda
-$$
+```
 
 With typical values ($\|\mathbf{J}\|_2 \approx 1$, $\|\mathbf{W}\|_2 = 1$, $\lambda = 10^{-4}$), we get $\alpha \approx 1$.
 
@@ -208,15 +206,15 @@ With typical values ($\|\mathbf{J}\|_2 \approx 1$, $\|\mathbf{W}\|_2 = 1$, $\lam
 
 For a strongly convex function with parameter $\mu = \lambda_{\min}(\mathbf{H}) \geq \lambda$ (guaranteed by damping), PGD achieves **linear convergence**:
 
-$$
+```math
 \| \mathbf{x}^{(k)} - \mathbf{x}^* \|^2 \leq \left(1 - \frac{\mu}{L}\right)^k \| \mathbf{x}^{(0)} - \mathbf{x}^* \|^2
-$$
+```
 
 The convergence rate depends on the **condition number** $\kappa = L/\mu$:
 
-$$
+```math
 \kappa = \frac{\lambda_{\max}(\mathbf{H})}{\lambda_{\min}(\mathbf{H})} \leq \frac{\|\mathbf{J}\|_2^2 + \lambda}{\lambda}
-$$
+```
 
 With $\lambda = 10^{-4}$, this gives $\kappa \approx 10^4$—seemingly terrible (the contraction factor $1 - 1/\kappa \approx 0.9999$). However, **warm starting** changes everything:
 
@@ -357,9 +355,9 @@ class TwistStepResult:
 
 The `achieved_fraction` is computed by projecting the achieved twist onto the desired:
 
-$$
+```math
 f = \frac{(\mathbf{J}\dot{\mathbf{q}})^T \mathbf{v}_d}{\|\mathbf{v}_d\|^2}
-$$
+```
 
 When $f < 1$, something is limiting motion. The `limiting_factor` distinguishes:
 - **joint_limit**: A joint is near its position bound

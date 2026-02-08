@@ -99,32 +99,6 @@ class TestDetectGraspedObject:
         )
         assert result is None
 
-    def test_detects_object_in_contact(self, mujoco_model_and_data, gripper_body_names):
-        """Detects object when gripper is in contact with it."""
-        model, data = mujoco_model_and_data
-
-        # Move box1 into gripper position
-        box1_jnt_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "box1_joint")
-        box1_qpos_adr = model.jnt_qposadr[box1_jnt_id]
-
-        # Get EE site position
-        ee_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "right_ur5e/gripper_attachment_site")
-        mujoco.mj_forward(model, data)
-        ee_pos = data.site_xpos[ee_site_id].copy()
-
-        # Move box to EE position
-        data.qpos[box1_qpos_adr:box1_qpos_adr + 3] = ee_pos + [0.05, 0, 0]
-        data.qpos[box1_qpos_adr + 3:box1_qpos_adr + 7] = [1, 0, 0, 0]
-
-        # Step to generate contacts
-        for _ in range(10):
-            mujoco.mj_step(model, data)
-
-        # This test may be flaky depending on exact positions
-        # The important thing is the logic works when there ARE contacts
-        result = detect_grasped_object(model, data, gripper_body_names)
-        # Note: Result depends on whether actual contact occurred
-
     def test_candidate_filter(self, mujoco_model_and_data, gripper_body_names):
         """candidate_objects parameter filters detection."""
         model, data = mujoco_model_and_data

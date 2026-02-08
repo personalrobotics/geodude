@@ -1665,7 +1665,7 @@ class Arm:
         """
         from geodude.primitives import pickup
 
-        return pickup(self._robot, target, arm=self, **kwargs)
+        return pickup(self.robot, target, arm=self, **kwargs)
 
     def place(
         self,
@@ -1690,7 +1690,7 @@ class Arm:
         """
         from geodude.primitives import place
 
-        return place(self._robot, destination, arm=self, **kwargs)
+        return place(self.robot, destination, arm=self, **kwargs)
 
     def close_gripper(self, steps: int = 100) -> str | None:
         """Close the gripper and detect grasp.

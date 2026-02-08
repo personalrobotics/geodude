@@ -350,10 +350,6 @@ with robot.sim(physics=True) as ctx:
         ctx.arm("right").grasp("object")
 ```
 
-The controller solves a constrained optimization at each timestep:
-
-$$\min_{\dot{\mathbf{q}}} \| \mathbf{J} \dot{\mathbf{q}} - \mathbf{v}_d \|^2 + \lambda \| \dot{\mathbf{q}} \|^2 \quad \text{s.t.} \quad \boldsymbol{\ell} \leq \dot{\mathbf{q}} \leq \mathbf{u}$$
-
 Key features:
 - **Hard constraint enforcement**: Joint position and velocity limits are never violated
 - **Implicit singularity handling**: Damping prevents large velocities near singular configurations

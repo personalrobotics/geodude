@@ -4,15 +4,15 @@ Real-time Cartesian control is fundamental to manipulation: move the end-effecto
 
 ## The Problem
 
-Given a desired end-effector twist $\mathbf{v}_d \in \mathbb{R}^6$ (linear and angular velocity), find joint velocities $\dot{\mathbf{q}} \in \mathbb{R}^n$ such that:
+Given a desired end-effector twist $\mathbf{v}\_d \in \mathbb{R}^6$ (linear and angular velocity), find joint velocities $\dot{\mathbf{q}} \in \mathbb{R}^n$ such that:
 
 ```math
 \mathbf{J}(\mathbf{q}) \dot{\mathbf{q}} \approx \mathbf{v}_d
 ```
 
 subject to:
-- **Joint position limits**: $\mathbf{q}_{\min} \leq \mathbf{q} + \dot{\mathbf{q}} \Delta t \leq \mathbf{q}_{\max}$
-- **Joint velocity limits**: $|\dot{\mathbf{q}}| \leq \dot{\mathbf{q}}_{\max}$
+- **Joint position limits**: $\mathbf{q}\_{\min} \leq \mathbf{q} + \dot{\mathbf{q}} \Delta t \leq \mathbf{q}\_{\max}$
+- **Joint velocity limits**: $|\dot{\mathbf{q}}| \leq \dot{\mathbf{q}}\_{\max}$
 
 where $\mathbf{J}(\mathbf{q})$ is the $6 \times n$ manipulator Jacobian.
 
@@ -86,7 +86,7 @@ where:
 
 ### Twist Weighting: Making Heterogeneous Units Commensurable
 
-A 6D twist contains linear velocity (m/s) and angular velocity (rad/s)—different physical quantities. Minimizing $\|\mathbf{J}\dot{\mathbf{q}} - \mathbf{v}_d\|^2$ directly couples these arbitrarily based on numerical magnitude.
+A 6D twist contains linear velocity (m/s) and angular velocity (rad/s)—different physical quantities. Minimizing $\|\mathbf{J}\dot{\mathbf{q}} - \mathbf{v}\_d\|^2$ directly couples these arbitrarily based on numerical magnitude.
 
 We introduce a **length scale** $L$ (default 0.1m, typical gripper workspace size):
 
@@ -200,11 +200,11 @@ For our Hessian $\mathbf{H} = \mathbf{J}^T \mathbf{W} \mathbf{J} + \lambda \math
 \|\mathbf{H}\|_2 \leq \|\mathbf{J}^T \mathbf{W} \mathbf{J}\|_2 + \lambda \leq \|\mathbf{J}\|_2^2 \|\mathbf{W}\|_2 + \lambda
 ```
 
-With typical values ($\|\mathbf{J}\|_2 \approx 1$, $\|\mathbf{W}\|_2 = 1$, $\lambda = 10^{-4}$), we get $\alpha \approx 1$.
+With typical values ($\|\mathbf{J}\|\_2 \approx 1$, $\|\mathbf{W}\|\_2 = 1$, $\lambda = 10^{-4}$), we get $\alpha \approx 1$.
 
 ### Convergence Analysis
 
-For a strongly convex function with parameter $\mu = \lambda_{\min}(\mathbf{H}) \geq \lambda$ (guaranteed by damping), PGD achieves **linear convergence**:
+For a strongly convex function with parameter $\mu = \lambda\_{\min}(\mathbf{H}) \geq \lambda$ (guaranteed by damping), PGD achieves **linear convergence**:
 
 ```math
 \| \mathbf{x}^{(k)} - \mathbf{x}^* \|^2 \leq \left(1 - \frac{\mu}{L}\right)^k \| \mathbf{x}^{(0)} - \mathbf{x}^* \|^2

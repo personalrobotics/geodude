@@ -143,6 +143,10 @@ def execute_trajectory_with_recording(robot, trajectory, recorder, skip=3):
             if base:
                 base.set_height(pos[0])
 
+        # Update attached object positions (so grasped objects move with gripper)
+        mujoco.mj_forward(robot.model, robot.data)
+        robot.grasp_manager.update_attached_poses()
+
         recorder.capture(1)
 
     # Capture final position
@@ -152,6 +156,8 @@ def execute_trajectory_with_recording(robot, trajectory, recorder, skip=3):
             side = "left" if "left" in entity else "right"
             arm = robot.left_arm if side == "left" else robot.right_arm
             arm.set_joint_positions(pos)
+        mujoco.mj_forward(robot.model, robot.data)
+        robot.grasp_manager.update_attached_poses()
         recorder.capture(1)
 
 

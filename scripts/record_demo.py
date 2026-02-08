@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Record recycling demo as animated GIF for README.
 
-Captures frames using MuJoCo's offscreen renderer.
+Captures frames during trajectory execution for smooth animation.
 
 Usage:
     uv run mjpython scripts/record_demo.py
 """
 
-import time
 from pathlib import Path
 
 import mujoco
@@ -57,7 +56,7 @@ def sample_can_placement(robot):
 class FrameRecorder:
     """Records frames from MuJoCo simulation."""
 
-    def __init__(self, model, data, width=640, height=480):
+    def __init__(self, model, data, width=480, height=360):
         self.model = model
         self.data = data
         self.renderer = mujoco.Renderer(model, height, width)
@@ -100,33 +99,53 @@ class FrameRecorder:
         print(f"File size: {path.stat().st_size / 1024:.1f} KB", flush=True)
 
 
-def execute_with_recording(ctx, trajectory, recorder, frames_per_waypoint=2):
-    """Execute trajectory while capturing frames."""
+def execute_trajectory_with_recording(robot, trajectory, recorder, skip=3):
+    """Execute trajectory while capturing frames.
+
+    Args:
+        robot: Geodude robot
+        trajectory: Trajectory to execute
+        recorder: FrameRecorder instance
+        skip: Capture every Nth waypoint (lower = more frames)
+    """
     if trajectory is None:
-        return False
+        return
 
-    # Sample waypoints for smooth animation
+    entity = trajectory.entity
     n_waypoints = trajectory.num_waypoints
-    step = max(1, n_waypoints // 30)  # ~30 frames per trajectory
 
-    for i in range(0, n_waypoints, step):
+    for i in range(0, n_waypoints, skip):
         pos = trajectory.positions[i]
 
         # Set joint positions based on entity
-        entity = trajectory.entity
         if entity and "arm" in entity:
             side = "left" if "left" in entity else "right"
-            arm = ctx._robot.left_arm if side == "left" else ctx._robot.right_arm
+            arm = robot.left_arm if side == "left" else robot.right_arm
             arm.set_joint_positions(pos)
         elif entity and "base" in entity:
             side = "left" if "left" in entity else "right"
-            base = getattr(ctx._robot, f"{side}_base")
+            base = getattr(robot, f"{side}_base")
             if base:
                 base.set_height(pos[0])
 
-        recorder.capture(frames_per_waypoint)
+        recorder.capture(1)
 
-    return True
+    # Make sure we capture the final position
+    if n_waypoints > 0:
+        pos = trajectory.positions[-1]
+        if entity and "arm" in entity:
+            side = "left" if "left" in entity else "right"
+            arm = robot.left_arm if side == "left" else robot.right_arm
+            arm.set_joint_positions(pos)
+        recorder.capture(1)
+
+
+def execute_plan_result_with_recording(robot, result, recorder, skip=3):
+    """Execute a PlanResult with frame recording."""
+    if result is None:
+        return
+    for traj in result.trajectories:
+        execute_trajectory_with_recording(robot, traj, recorder, skip)
 
 
 def main():
@@ -134,7 +153,7 @@ def main():
 
     output_path = Path(__file__).parent.parent / "docs" / "images" / "recycle_demo.gif"
     cycles = 3
-    fps = 15
+    fps = 12  # Moderate playback speed
 
     # Create robot
     robot = Geodude(objects={"can": 1, "recycle_bin": 2})
@@ -151,7 +170,7 @@ def main():
     # Create recorder
     recorder = FrameRecorder(robot.model, robot.data)
 
-    # Capture initial frames
+    # Capture initial frames (brief pause at start)
     recorder.capture(fps)  # 1 second at start
 
     with robot.sim(physics=False, viewer=False) as ctx:
@@ -163,18 +182,36 @@ def main():
                 can_pos, can_quat = sample_can_placement(robot)
                 robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
                 mujoco.mj_forward(robot.model, robot.data)
-                recorder.capture(fps // 2)
+                recorder.capture(fps)
                 continue
 
             target = pickable[0]
 
             # === PICKUP ===
             print(f"  Picking up {target}...", flush=True)
+
+            # Use the primitives but capture frames during execution by
+            # temporarily replacing ctx.execute
+            original_execute = ctx.execute
+
+            def recording_execute(item):
+                from geodude.planning import PlanResult
+                from geodude.trajectory import Trajectory
+
+                if isinstance(item, PlanResult):
+                    execute_plan_result_with_recording(robot, item, recorder, skip=15)
+                elif isinstance(item, Trajectory):
+                    execute_trajectory_with_recording(robot, item, recorder, skip=15)
+                return original_execute(item)
+
+            ctx.execute = recording_execute
+
             if not robot.pickup(target):
                 print(f"  Pickup failed!", flush=True)
+                ctx.execute = original_execute
                 break
 
-            # Capture post-pickup state
+            # Pause after grasp
             recorder.capture(fps // 2)
 
             # === PLACE ===
@@ -184,9 +221,13 @@ def main():
             print(f"  Placing in {bin_name}...", flush=True)
             if not robot.place(bin_name):
                 print(f"  Place failed!", flush=True)
+                ctx.execute = original_execute
                 break
 
-            # Capture post-place state
+            # Restore original execute
+            ctx.execute = original_execute
+
+            # Pause after place
             recorder.capture(fps // 2)
 
             # === RETURN TO READY ===
@@ -194,7 +235,8 @@ def main():
             ready_config = np.array(robot.named_poses["ready"][holding_arm.side])
             ready_result = holding_arm.plan_to(ready_config)
             if ready_result is not None:
-                execute_with_recording(ctx, ready_result, recorder)
+                execute_trajectory_with_recording(robot, ready_result, recorder, skip=15)
+                ctx.execute(ready_result)  # Actually apply final positions
 
             recorder.capture(fps // 4)
 

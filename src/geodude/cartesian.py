@@ -608,6 +608,7 @@ def move_until_touch(
     speed: float = 0.02,
     frame: str = "world",
     config: CartesianControlConfig | None = None,
+    check_arm_collision: bool = False,
 ) -> MoveUntilTouchResult:
     """Move gripper in direction until contact or max_distance reached.
 
@@ -632,9 +633,12 @@ def move_until_touch(
         speed: Cartesian velocity in m/s (default 0.02 = 2cm/s)
         frame: "world" or "hand" frame for direction vector
         config: Control configuration (uses defaults if None)
+        check_arm_collision: If True, stop if arm links (not gripper) collide
+            with environment. Default False.
 
     Returns:
-        MoveUntilTouchResult with success status and details
+        MoveUntilTouchResult with success status and details (terminated_by
+        can be "arm_collision" if collision detected)
 
     Raises:
         RuntimeError: If no active SimContext
@@ -712,27 +716,42 @@ def move_until_touch(
                 distance_moved=total_distance,
             )
 
-        # Kinematic mode only: check if next position would cause collision BEFORE moving
-        # This prevents arm from moving into known obstacles.
-        # In physics mode, we can't do this check (it would corrupt physics state),
-        # so we rely on F/T sensor for contact detection.
-        if not physics:
-            contact_geom = check_arm_contact_after_move(model, data, arm, q_new)
-            if contact_geom is not None:
-                logger.debug(
-                    f"move_until_touch: would collide with {contact_geom}, stopping"
-                )
-                return MoveUntilTouchResult(
-                    success=False,
-                    terminated_by="no_progress",
-                    distance_moved=total_distance,
-                    contact_geom=contact_geom,
-                )
-
         # Step through context (handles physics/kinematic, viewer sync, other actuators)
         # Pass velocity for smooth streaming - step_reactive uses control_dt lookahead
         # (not the 0.1s trajectory lookahead) to avoid overshoot while staying smooth.
         ctx.step_cartesian(arm.side, q_new, step_result.joint_velocities)
+
+        # Update distance first (needed for min_distance check)
+        current_pos = data.site_xpos[arm.ee_site_id]
+        total_distance = np.linalg.norm(current_pos - start_pos)
+
+        # Check for arm-to-environment collision (if enabled)
+        if check_arm_collision:
+            collision_checker = arm._get_collision_checker()
+            if collision_checker.is_arm_in_collision():
+                logger.warning(
+                    f"move_until_touch: arm collision detected at {total_distance*100:.1f}cm"
+                )
+                return MoveUntilTouchResult(
+                    success=False,
+                    terminated_by="arm_collision",
+                    distance_moved=total_distance,
+                )
+
+        # Kinematic mode: check for contact AFTER moving
+        # MuJoCo generates contacts when geometries penetrate, which happens after we step
+        if not physics and total_distance >= distance:
+            contact_geom = check_arm_contact_kinematic(model, data, arm)
+            if contact_geom is not None:
+                logger.debug(
+                    f"move_until_touch: contact with {contact_geom} at {total_distance:.3f}m"
+                )
+                return MoveUntilTouchResult(
+                    success=True,
+                    terminated_by="contact",
+                    distance_moved=total_distance,
+                    contact_geom=contact_geom,
+                )
 
         # Check for actual contact after min_distance (physics mode: F/T sensor)
         if total_distance >= distance and physics:
@@ -769,10 +788,6 @@ def move_until_touch(
                             final_torque=torque,
                         )
 
-        # Update distance
-        current_pos = data.site_xpos[arm.ee_site_id]
-        total_distance = np.linalg.norm(current_pos - start_pos)
-
     # Reached max_distance without contact
     logger.debug(f"move_until_touch: max_distance reached ({total_distance:.3f}m)")
 
@@ -801,6 +816,7 @@ def execute_twist(
     max_distance: float | None = None,
     until: Callable[[], bool] | None = None,
     config: CartesianControlConfig | None = None,
+    check_arm_collision: bool = False,
 ) -> TwistExecutionResult:
     """Execute Cartesian twist until a termination condition.
 
@@ -817,9 +833,13 @@ def execute_twist(
         max_distance: Stop after EE moves this far (meters)
         until: Custom termination predicate (returns True to stop)
         config: Control configuration (uses defaults if None)
+        check_arm_collision: If True, stop if arm links (not gripper/grasped object)
+            collide with environment. Allows grasped-object-to-environment
+            contacts (for lifting out of surface). Default False.
 
     Returns:
-        TwistExecutionResult with termination info
+        TwistExecutionResult with termination info (terminated_by can be
+        "arm_collision" if check_arm_collision=True and collision detected)
 
     Raises:
         RuntimeError: If no active SimContext
@@ -945,5 +965,24 @@ def execute_twist(
         # Pass velocity for smooth streaming - step_reactive uses control_dt lookahead
         # (not the 0.1s trajectory lookahead) to avoid overshoot while staying smooth.
         ctx.step_cartesian(arm.side, q_new, step_result.joint_velocities)
+
+        # Check for arm-to-environment collision (if enabled)
+        # This allows grasped-object-to-environment contacts (lifting out of surface)
+        # but stops if arm links hit environment (forearm hitting base, etc.)
+        if check_arm_collision:
+            collision_checker = arm._get_collision_checker()
+            if collision_checker.is_arm_in_collision():
+                current_pos = data.site_xpos[arm.ee_site_id].copy()
+                distance = np.linalg.norm(current_pos - start_pos)
+                final_pose = arm.get_ee_pose()
+                logger.warning(
+                    f"execute_twist: arm collision detected at distance={distance*100:.1f}cm"
+                )
+                return TwistExecutionResult(
+                    terminated_by="arm_collision",
+                    distance_moved=distance,
+                    duration=elapsed,
+                    final_pose=final_pose,
+                )
 
         elapsed += dt

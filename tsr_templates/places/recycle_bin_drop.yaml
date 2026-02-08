@@ -17,12 +17,12 @@ position:
   type: box
   x: [-0.05, 0.05]   # Centered over bin opening
   y: [-0.05, 0.05]
-  z: [0.82, 0.87]    # 2-7cm above bin top (bin top at z≈0.80)
+  z: [0.97, 1.02]    # 17-22cm above bin top (bin top at z≈0.80)
 
 orientation:
   approach: -z
-  roll: [0, 0]
-  pitch: [0, 0]
+  roll: [-10, 10]
+  pitch: [-10, 10]
   yaw: [0, 360]  # Any yaw is fine for dropping
 
 standoff: 0.0  # Position is directly above bin

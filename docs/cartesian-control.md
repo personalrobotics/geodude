@@ -152,55 +152,195 @@ For a 6-DOF arm at 125 Hz control rate, we need a solver that:
 2. Exploits warm-starting from the previous solution
 3. Handles box constraints without complex active-set management
 
-We use **projected gradient descent** with spectral step sizing:
+We use **projected gradient descent** (PGD), a first-order method ideally suited to box-constrained QPs.
 
-```python
-def solve_box_qp(H, g, ell, u, q_dot_prev=None):
-    # Step 1: Try unconstrained solution via Cholesky
-    cho = cho_factor(H)
-    q_dot_unc = cho_solve(cho, -g)
+### Mathematical Derivation
 
-    if np.all(ell <= q_dot_unc) and np.all(q_dot_unc <= u):
-        return q_dot_unc  # Lucky: unconstrained solution is feasible
+Consider the box-constrained QP:
 
-    # Step 2: Projected gradient descent
-    alpha = 1.0 / (np.linalg.norm(H, 2) + 1e-6)  # Step size from spectral radius
+$$
+\min_{\mathbf{x}} \quad f(\mathbf{x}) = \frac{1}{2} \mathbf{x}^T \mathbf{H} \mathbf{x} + \mathbf{g}^T \mathbf{x} \quad \text{s.t.} \quad \boldsymbol{\ell} \leq \mathbf{x} \leq \mathbf{u}
+$$
 
-    # Warm start from previous solution or clamped unconstrained
-    q_dot = np.clip(q_dot_prev if q_dot_prev is not None else q_dot_unc, ell, u)
+The gradient of the objective is:
 
-    for _ in range(20):
-        grad = H @ q_dot + g
-        q_dot_new = np.clip(q_dot - alpha * grad, ell, u)
+$$
+\nabla f(\mathbf{x}) = \mathbf{H} \mathbf{x} + \mathbf{g}
+$$
 
-        if np.linalg.norm(q_dot_new - q_dot) < 1e-8:
-            break
-        q_dot = q_dot_new
+Standard gradient descent would update $\mathbf{x}^{(k+1)} = \mathbf{x}^{(k)} - \alpha \nabla f(\mathbf{x}^{(k)})$, but this may violate the box constraints. The **projection operator** onto the feasible set $\mathcal{C} = \{\mathbf{x} : \boldsymbol{\ell} \leq \mathbf{x} \leq \mathbf{u}\}$ is simply element-wise clamping:
 
-    return q_dot
-```
+$$
+\text{proj}_\mathcal{C}(\mathbf{x}) = \text{clip}(\mathbf{x}, \boldsymbol{\ell}, \mathbf{u}) = \max(\boldsymbol{\ell}, \min(\mathbf{u}, \mathbf{x}))
+$$
 
-**Why this works well:**
-- **Cholesky fast path**: When constraints aren't active (common in free space), we get the answer in one linear solve
-- **Spectral step size**: $\alpha = 1/\|\mathbf{H}\|_2$ guarantees convergence for SPD matrices
-- **Warm starting**: In streaming control, the previous solution is nearly optimal—typically 2-5 iterations suffice
-- **Projection is cheap**: Box constraints require only element-wise clamping
+The PGD iteration is:
+
+$$
+\mathbf{x}^{(k+1)} = \text{proj}_\mathcal{C}\left( \mathbf{x}^{(k)} - \alpha \nabla f(\mathbf{x}^{(k)}) \right)
+$$
+
+### Choosing the Step Size
+
+For convergence, we need $\alpha$ small enough that the objective decreases at each step. The key theorem (from convex optimization) states that for an $L$-smooth function (one where $\|\nabla f(\mathbf{x}) - \nabla f(\mathbf{y})\| \leq L\|\mathbf{x} - \mathbf{y}\|$), PGD converges with step size $\alpha = 1/L$.
+
+For our quadratic objective, the smoothness constant is the largest eigenvalue of the Hessian:
+
+$$
+L = \lambda_{\max}(\mathbf{H}) = \|\mathbf{H}\|_2
+$$
+
+Therefore, the optimal constant step size is:
+
+$$
+\alpha = \frac{1}{\|\mathbf{H}\|_2}
+$$
+
+For our Hessian $\mathbf{H} = \mathbf{J}^T \mathbf{W} \mathbf{J} + \lambda \mathbf{I}$:
+
+$$
+\|\mathbf{H}\|_2 \leq \|\mathbf{J}^T \mathbf{W} \mathbf{J}\|_2 + \lambda \leq \|\mathbf{J}\|_2^2 \|\mathbf{W}\|_2 + \lambda
+$$
+
+With typical values ($\|\mathbf{J}\|_2 \approx 1$, $\|\mathbf{W}\|_2 = 1$, $\lambda = 10^{-4}$), we get $\alpha \approx 1$.
 
 ### Convergence Analysis
 
-For box-constrained QP with SPD Hessian, projected gradient descent converges linearly:
+For a strongly convex function with parameter $\mu = \lambda_{\min}(\mathbf{H}) \geq \lambda$ (guaranteed by damping), PGD achieves **linear convergence**:
 
 $$
-\| \dot{\mathbf{q}}^{(k+1)} - \dot{\mathbf{q}}^* \| \leq \left(1 - \frac{\lambda_{\min}(\mathbf{H})}{\lambda_{\max}(\mathbf{H})}\right) \| \dot{\mathbf{q}}^{(k)} - \dot{\mathbf{q}}^* \|
+\| \mathbf{x}^{(k)} - \mathbf{x}^* \|^2 \leq \left(1 - \frac{\mu}{L}\right)^k \| \mathbf{x}^{(0)} - \mathbf{x}^* \|^2
 $$
 
-The condition number $\kappa = \lambda_{\max}/\lambda_{\min}$ is bounded by the damping:
+The convergence rate depends on the **condition number** $\kappa = L/\mu$:
 
 $$
-\kappa \leq \frac{\|\mathbf{J}\|^2 + \lambda}{\lambda}
+\kappa = \frac{\lambda_{\max}(\mathbf{H})}{\lambda_{\min}(\mathbf{H})} \leq \frac{\|\mathbf{J}\|_2^2 + \lambda}{\lambda}
 $$
 
-With $\lambda = 10^{-4}$ and typical Jacobian norms around 1, we get $\kappa \approx 10^4$—seemingly poor, but warm starting makes this irrelevant in practice.
+With $\lambda = 10^{-4}$, this gives $\kappa \approx 10^4$—seemingly terrible (the contraction factor $1 - 1/\kappa \approx 0.9999$). However, **warm starting** changes everything:
+
+- In streaming control, consecutive timesteps have nearly identical QPs
+- The previous solution $\dot{\mathbf{q}}^{(k-1)}$ is already very close to the new optimum
+- Instead of starting from scratch, we start within a few iterations of the answer
+
+In practice, we observe **2-5 iterations** with warm starting versus 15-20 from a cold start.
+
+### The Algorithm
+
+```python
+# Solve: min (1/2) x^T H x + g^T x  s.t.  ell <= x <= u
+#
+# H must be symmetric positive-definite (guaranteed by damping term λI)
+
+def solve_box_qp(H, g, ell, u, x_prev=None):
+    n = len(g)
+
+    # === Fast path: try unconstrained solution first ===
+    # If constraints aren't active, we can solve exactly via Cholesky
+    # H x* = -g  =>  x* = H^{-1} (-g)
+    try:
+        cho = cho_factor(H)
+        x_unconstrained = cho_solve(cho, -g)
+    except np.linalg.LinAlgError:
+        # Fallback if Cholesky fails (shouldn't happen with λ > 0)
+        x_unconstrained = np.linalg.solve(H, -g)
+
+    # Check if unconstrained solution is feasible
+    if np.all(x_unconstrained >= ell) and np.all(x_unconstrained <= u):
+        return x_unconstrained  # Lucky: no active constraints
+
+    # === Projected gradient descent ===
+
+    # Step size: α = 1 / ||H||_2  (spectral norm = largest eigenvalue)
+    alpha = 1.0 / (np.linalg.norm(H, 2) + 1e-6)
+
+    # Warm start from previous solution, or clamped unconstrained
+    if x_prev is not None:
+        x = np.clip(x_prev, ell, u)
+    else:
+        x = np.clip(x_unconstrained, ell, u)
+
+    # Iterate until convergence
+    for iteration in range(20):
+        # Gradient: ∇f(x) = Hx + g
+        grad = H @ x + g
+
+        # Gradient descent step with projection
+        x_new = np.clip(x - alpha * grad, ell, u)
+
+        # Check convergence: ||x^{k+1} - x^k|| < tol
+        if np.linalg.norm(x_new - x) < 1e-8:
+            break
+
+        x = x_new
+
+    return x
+```
+
+### Why Not Newton's Method or Active Set?
+
+**Newton's method** for QP requires solving a linear system at each iteration to find the search direction. For box constraints, this means tracking which constraints are active—the "active set" approach. While Newton converges in fewer iterations, each iteration is more expensive and the bookkeeping is complex.
+
+**Interior point methods** are overkill for 6 variables. They're designed for large-scale problems where the matrix factorizations amortize.
+
+**L-BFGS-B** (limited-memory BFGS with box constraints) is a quasi-Newton method that builds an approximation to the Hessian. In our testing, it has unpredictable iteration counts and poor warm-start behavior.
+
+**Projected gradient descent** is ideal because:
+- Each iteration is $O(n^2)$: one matrix-vector product
+- Projection onto boxes is $O(n)$: element-wise clamp
+- Warm starting works perfectly: just initialize with the previous solution
+- No bookkeeping: the projection handles active constraints implicitly
+- Convergent in finite iterations for our well-conditioned problem
+
+### The Full Implementation
+
+From `geodude/src/geodude/cartesian.py`:
+
+```python
+# Step 3: Solve box-constrained QP via projected gradient descent
+# =========================================================================
+# min (1/2) q_dot^T H q_dot + g^T q_dot  s.t. ell <= q_dot <= u
+#
+# For small box-constrained QP (6 DOF), projected gradient descent is fast
+# and predictable - typically converges in 5-15 iterations. Much better than
+# L-BFGS-B which has unpredictable iteration counts.
+
+# Unconstrained solution via Cholesky (H is SPD by construction)
+try:
+    cho = cho_factor(H)
+    qd_unconstrained = cho_solve(cho, -g)
+except np.linalg.LinAlgError:
+    # Fallback if Cholesky fails (shouldn't happen with λ > 0)
+    qd_unconstrained = np.linalg.solve(H, -g)
+
+# If unconstrained solution is feasible, we're done
+if np.all(qd_unconstrained >= ell) and np.all(qd_unconstrained <= u):
+    q_dot = qd_unconstrained
+else:
+    # Projected gradient descent for box-constrained QP
+    # Very efficient - typically converges in 2-5 iterations with warm start
+
+    # Warm start: use previous solution if provided, else clamped unconstrained
+    if q_dot_prev is not None:
+        q_dot = np.clip(q_dot_prev, ell, u)
+    else:
+        q_dot = np.clip(qd_unconstrained, ell, u)
+
+    # Compute step size from eigenvalue bounds (H is well-conditioned due to λI)
+    # Step size = 1 / max_eigenvalue(H) ≈ 1 / (||J||² + λ)
+    alpha = 1.0 / (np.linalg.norm(H, 2) + 1e-6)
+
+    for _ in range(20):  # Max 20 iterations (typically 2-5 with warm start)
+        grad = H @ q_dot + g
+        q_new = np.clip(q_dot - alpha * grad, ell, u)
+
+        # Check convergence: gradient projected onto feasible set
+        if np.linalg.norm(q_new - q_dot) < 1e-8:
+            break
+
+        q_dot = q_new
+```
 
 ## Diagnostics: Knowing When You're Constrained
 

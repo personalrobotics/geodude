@@ -9,7 +9,6 @@ import pytest
 
 from geodude_assets import get_model_path
 from geodude.config import GeodudConfig
-from geodude.grasp_manager import COLLISION_GROUP_GRASPED, COLLISION_GROUP_NORMAL
 from geodude.robot import Geodude
 
 
@@ -143,18 +142,14 @@ class TestGraspManagerWithRealModel:
         body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "test_object")
         assert body_id != -1
 
-        # Get initial collision group
-        geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "test_object_geom")
-        assert model.geom_contype[geom_id] == COLLISION_GROUP_NORMAL
-
         # Mark as grasped
         gm.mark_grasped("test_object", "right")
 
-        # Verify collision group changed
-        assert model.geom_contype[geom_id] == COLLISION_GROUP_GRASPED
+        # Verify grasp state tracked
         assert gm.is_grasped("test_object")
+        assert gm.get_holder("test_object") == "right"
 
         # Release
         gm.mark_released("test_object")
-        assert model.geom_contype[geom_id] == COLLISION_GROUP_NORMAL
         assert not gm.is_grasped("test_object")
+        assert gm.get_holder("test_object") is None

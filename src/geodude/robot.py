@@ -812,7 +812,12 @@ class Geodude:
         mujoco.mju_mat2Quat(quat, mat.flatten())
         return quat
 
-    def sim(self, physics: bool = True, viewer=None) -> "SimContext":
+    def sim(
+        self,
+        physics: bool = True,
+        viewer=None,
+        viewer_fps: float = 30.0,
+    ) -> "SimContext":
         """Create simulation execution context.
 
         Returns a context manager that provides a unified interface for
@@ -824,6 +829,9 @@ class Geodude:
                     tracking, no dynamics).
             viewer: Optional MuJoCo viewer. If None, a viewer is created
                    when entering the context.
+            viewer_fps: Target viewer refresh rate in Hz (default 30).
+                       Higher values = smoother but slower execution.
+                       Set to 0 for unlimited (sync every physics step).
 
         Returns:
             SimContext that can be used as a context manager.
@@ -845,7 +853,7 @@ class Geodude:
         """
         from geodude.execution import SimContext
 
-        return SimContext(self, viewer=viewer, physics=physics)
+        return SimContext(self, viewer=viewer, physics=physics, viewer_fps=viewer_fps)
 
     def _create_temp_scene_config(self, objects: dict[str, int]) -> str:
         """Create temporary scene_config.yaml from objects dict.

@@ -47,3 +47,13 @@ Never make changes directly on `main`.
    ```
 2. **Inline math**: Escape underscores with backslash: `$\mathbf{q}\_{\min}$` not `$\mathbf{q}_{\min}$`
 3. GitHub's markdown parser processes `_` as italic markers before LaTeX renders, so unescaped underscores in inline math get stripped.
+
+---
+
+## 2026-02-08: Review code for attribute name consistency
+
+**Failure mode**: `Arm.pickup()` and `Arm.place()` used `self._robot` but the attribute was stored as `self.robot`. Would have caused `AttributeError` at runtime.
+
+**Detection signal**: Code review during pre-1.0 cleanup caught the inconsistency.
+
+**Prevention rule**: When referencing instance attributes, verify the exact name used in `__init__`. Python convention: `self._name` = private, `self.name` = public. Don't mix them for the same attribute.

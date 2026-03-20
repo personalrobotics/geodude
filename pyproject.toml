@@ -23,10 +23,11 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-geodude-assets = { path = "../geodude_assets", editable = true }
-prl-assets = { path = "../prl_assets", editable = true }
-tsr = { path = "../tsr", editable = true }
-pycbirrt = { path = "../pycbirrt", editable = true }
+mj-environment = { workspace = true }
+geodude-assets = { workspace = true }
+prl-assets = { workspace = true }
+tsr = { workspace = true }
+pycbirrt = { workspace = true }
 
 [project.optional-dependencies]
 dev = [

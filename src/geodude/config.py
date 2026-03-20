@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
-import yaml
 
 # Try to import geodude_assets for model paths, fall back to None if not installed
 try:
@@ -16,152 +16,29 @@ except ImportError:
     get_model_path = None
 
 
-@dataclass
-class TrackingThresholds:
-    """Error thresholds for trajectory execution.
-
-    Execution aborts if any single joint exceeds the max_error threshold.
-    Per-joint thresholds may be added in the future.
-    """
-    max_error: float = np.deg2rad(10.0)  # Abort if any joint error exceeds this
-
-    @classmethod
-    def default(cls) -> "TrackingThresholds":
-        """Default thresholds."""
-        return cls()
+# ---------------------------------------------------------------------------
+# Arm specification (Geodude-specific, used to create mj_manipulator Arms)
+# ---------------------------------------------------------------------------
 
 
 @dataclass
-class KinematicLimits:
-    """Velocity and acceleration limits for trajectory planning.
+class GeodudeArmSpec:
+    """Specification for one Geodude arm.
 
-    These limits come from the robot manufacturer's specifications (UR5e datasheet)
-    and are used by TOPP-RA for trajectory retiming. They are NOT physics parameters
-    in MuJoCo - the simulation doesn't enforce them, but planners must respect them
-    to ensure trajectories are executable on real hardware.
-
-    Note: Position limits are in the MuJoCo model XML (joint range attributes)
-    and can be read via model.jnt_range. Velocity/acceleration limits are not
-    supported by MuJoCo XML, so we define them here.
-
-    Recommended speed scales:
-    - 10%: Conservative for initial simulation testing
-    - 50%: Standard for real robot operation (safe and efficient) - DEFAULT
-    - 75-100%: High-speed operation
-    """
-    velocity: np.ndarray  # rad/s per joint
-    acceleration: np.ndarray  # rad/s² per joint
-
-    @classmethod
-    def ur5e_default(cls, vel_scale: float = 0.5, acc_scale: float = 0.5) -> "KinematicLimits":
-        """Create default UR5e limits from datasheet.
-
-        Args:
-            vel_scale: Safety scaling factor for velocity (default 50% of max)
-            acc_scale: Safety scaling factor for acceleration (default 50% of max)
-
-        Returns:
-            KinematicLimits with scaled UR5e specifications
-        """
-        # UR5e official velocity limits from datasheet
-        base_vel = np.array([
-            3.14,  # shoulder_pan: ±180°/s
-            3.14,  # shoulder_lift: ±180°/s
-            3.14,  # elbow: ±180°/s
-            6.28,  # wrist_1: ±360°/s
-            6.28,  # wrist_2: ±360°/s
-            6.28,  # wrist_3: ±360°/s
-        ])
-
-        # UR5e acceleration limits (conservative defaults)
-        base_acc = np.array([
-            2.5, 2.5, 2.5,  # shoulder/elbow
-            5.0, 5.0, 5.0,  # wrist joints (can accelerate faster)
-        ])
-
-        return cls(
-            velocity=base_vel * vel_scale,
-            acceleration=base_acc * acc_scale,
-        )
-
-
-@dataclass
-class PlanningDefaults:
-    """Default parameters for motion planning.
-
-    These values are used by CBiRRT and the unified planning API.
-    Adjust for your specific use case:
-    - Increase timeout for complex scenes
-    - Reduce max_iterations for faster failure detection
-    - Adjust step_size based on obstacle density
+    Stores the Geodude-specific naming/prefixes needed to create an
+    mj_manipulator Arm with the correct joint names, end-effector site,
+    and gripper configuration.
     """
 
-    # Planning timeout (seconds)
-    timeout: float = 30.0
-
-    # CBiRRT parameters
-    max_iterations: int = 5000
-    step_size: float = 0.1  # RRT step size in radians
-    goal_bias: float = 0.1  # Probability of sampling goal vs random
-    smoothing_iterations: int = 100  # Path smoothing passes
-
-    @classmethod
-    def default(cls) -> "PlanningDefaults":
-        """Default planning parameters."""
-        return cls()
-
-    @classmethod
-    def fast(cls) -> "PlanningDefaults":
-        """Fast planning with shorter timeout and fewer iterations."""
-        return cls(
-            timeout=10.0,
-            max_iterations=2000,
-            smoothing_iterations=50,
-        )
-
-    @classmethod
-    def thorough(cls) -> "PlanningDefaults":
-        """Thorough planning with longer timeout for difficult problems."""
-        return cls(
-            timeout=60.0,
-            max_iterations=10000,
-            smoothing_iterations=200,
-        )
+    prefix: str  # e.g., "left_ur5e" or "right_ur5e"
+    ee_site: str = ""  # MuJoCo site name for end-effector
+    gripper_prefix: str = ""  # e.g., "left_ur5e/gripper/"
+    hand_type: str = "robotiq_2f_140"  # For affordance matching
 
 
-@dataclass
-class EntityConfig:
-    """Base configuration for a controllable entity.
-
-    An entity is anything that can be controlled independently:
-    - Arms (6-DOF UR5e manipulators)
-    - Bases (1-DOF Vention linear actuators)
-    - Grippers (1-DOF Robotiq grippers)
-
-    This base class provides the common interface for hardware deployment,
-    where each entity's trajectory needs to know which joints to command.
-    """
-
-    name: str  # Unique identifier: "left_arm", "right_base", etc.
-    entity_type: str  # Category: "arm", "base", "gripper"
-    joint_names: list[str]  # MuJoCo joint names this entity controls
-
-
-@dataclass
-class ArmConfig(EntityConfig):
-    """Configuration for a single arm."""
-
-    ee_site: str = ""
-    gripper_actuator: str = ""
-    gripper_bodies: list[str] = field(default_factory=list)  # Bodies for collision filtering
-    hand_type: str = ""  # Gripper type for affordance matching (e.g., "robotiq_2f_140")
-    kinematic_limits: KinematicLimits = field(default_factory=KinematicLimits.ur5e_default)
-    tracking_thresholds: TrackingThresholds = field(default_factory=TrackingThresholds.default)
-    planning_defaults: PlanningDefaults = field(default_factory=PlanningDefaults.default)
-
-    def __post_init__(self):
-        """Set entity_type to arm."""
-        object.__setattr__(self, "entity_type", "arm")
+# ---------------------------------------------------------------------------
+# Vention base (Geodude hardware)
+# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -172,36 +49,23 @@ class VentionKinematicLimits:
     - Motor: NEMA 34 stepper servo with 7.2Nm torque
     - Actuator: Enclosed lead screw (50mm/s default safe limit)
     - Range: 0-0.5m (500mm)
-
-    These limits are used for trajectory generation to ensure simulation
-    matches real hardware timing. Hardware can operate at 50mm/s conservatively,
-    but shorter actuators can safely go faster (100mm/s).
     """
 
-    velocity: float  # m/s (max safe velocity)
-    acceleration: float  # m/s² (max acceleration)
+    velocity: float  # m/s
+    acceleration: float  # m/s²
 
     @classmethod
-    def default(cls) -> "VentionKinematicLimits":
-        """Default limits for responsive motion.
-
-        Returns:
-            Limits set to 2x conservative hardware defaults:
-            - 100 mm/s max velocity (0.1 m/s)
-            - 200 mm/s² acceleration (0.2 m/s²)
-
-        This provides full-range (0.5m) movement in ~5.5 seconds.
-        """
-        return cls(
-            velocity=0.1,  # 100 mm/s - responsive yet safe
-            acceleration=0.2,  # 200 mm/s² - smooth acceleration
-        )
+    def default(cls) -> VentionKinematicLimits:
+        """Default limits: 100 mm/s velocity, 200 mm/s² acceleration."""
+        return cls(velocity=0.1, acceleration=0.2)
 
 
 @dataclass
-class VentionBaseConfig(EntityConfig):
+class VentionBaseConfig:
     """Configuration for a Vention linear actuator."""
 
+    name: str  # e.g., "left_base"
+    joint_name: str  # MuJoCo joint name
     actuator_name: str = ""  # MuJoCo actuator name
     height_range: tuple[float, float] = (0.0, 0.5)  # meters (min, max)
     collision_check_resolution: float = 0.01  # meters between collision checks
@@ -209,275 +73,68 @@ class VentionBaseConfig(EntityConfig):
         default_factory=VentionKinematicLimits.default
     )
 
-    def __post_init__(self):
-        """Set entity_type to base."""
-        object.__setattr__(self, "entity_type", "base")
 
-    @property
-    def joint_name(self) -> str:
-        """MuJoCo joint name (alias for single-joint entity)."""
-        return self.joint_names[0] if self.joint_names else ""
-
-
-@dataclass
-class PhysicsExecutionConfig:
-    """Parameters for physics-based trajectory execution.
-
-    These control how the RobotPhysicsController tracks trajectories
-    and determines when motions have converged.
-    """
-
-    # Control loop timing
-    control_dt: float = 0.008  # 125 Hz to match UR5e servo rate
-    lookahead_time: float = 0.1  # Velocity feedforward gain (seconds)
-
-    # Convergence thresholds for settling after trajectory
-    position_tolerance: float = 0.1  # ~5.7 degrees - acceptable for grasping
-    velocity_tolerance: float = 0.1  # rad/s
-    convergence_timeout_steps: int = 500  # ~1 second at 500Hz physics
-
-    # Base settling (simpler than arm convergence)
-    base_settling_steps: int = 50
-
-    @classmethod
-    def default(cls) -> "PhysicsExecutionConfig":
-        """Default physics execution parameters."""
-        return cls()
-
-    @classmethod
-    def tight(cls) -> "PhysicsExecutionConfig":
-        """Tighter convergence for precision tasks."""
-        return cls(
-            position_tolerance=0.02,  # ~1 degree
-            velocity_tolerance=0.05,
-            convergence_timeout_steps=1000,
-        )
-
-
-@dataclass
-class GripperPhysicsConfig:
-    """Parameters for physics-based gripper control.
-
-    Controls gripper closing/opening behavior and grasp detection
-    in physics simulation mode.
-    """
-
-    # Motion steps (at control_dt rate)
-    close_steps: int = 200  # Steps to fully close
-    open_steps: int = 100  # Steps to fully open
-    firm_grip_steps: int = 50  # Extra steps after contact for firm grip
-    pre_open_steps: int = 20  # Steps to open before closing (clean start)
-
-    # Contact detection
-    contact_check_interval: int = 10  # Check contacts every N steps during close
-
-    # Lost grasp detection
-    fully_closed_threshold: float = 0.98  # Gripper position above this = no object
-
-    # Logging
-    debug: bool = False  # Enable detailed grasp detection logging
-
-    @classmethod
-    def default(cls) -> "GripperPhysicsConfig":
-        """Default gripper physics parameters."""
-        return cls()
-
-
-@dataclass
-class RecoveryConfig:
-    """Parameters for failure recovery motions.
-
-    When planning fails (e.g., after a failed grasp), these parameters
-    control the forced recovery motion to return the arm to a safe pose.
-    """
-
-    # Retract motion (first recovery attempt)
-    retract_height: float = 0.15  # Lift 15cm before re-planning
-
-    # Forced recovery interpolation (when planning fails entirely)
-    interpolation_steps: int = 1000  # Steps per phase (~2 seconds at 500Hz)
-
-    # Safe lift configuration (joint angles in radians)
-    # These move the arm up to clear the workspace before going to ready
-    lift_shoulder_angle: float = -1.57  # shoulder_lift to -90° (arm up)
-    lift_elbow_angle: float = 1.57  # elbow to 90° (forearm up)
-
-    @classmethod
-    def default(cls) -> "RecoveryConfig":
-        """Default recovery parameters."""
-        return cls()
-
-
-@dataclass
-class PhysicsConfig:
-    """Combined physics simulation configuration.
-
-    Groups all physics-related parameters for easy access.
-    """
-
-    execution: PhysicsExecutionConfig = field(
-        default_factory=PhysicsExecutionConfig.default
-    )
-    gripper: GripperPhysicsConfig = field(
-        default_factory=GripperPhysicsConfig.default
-    )
-    recovery: RecoveryConfig = field(
-        default_factory=RecoveryConfig.default
-    )
-
-    @classmethod
-    def default(cls) -> "PhysicsConfig":
-        """Default physics configuration."""
-        return cls()
+# ---------------------------------------------------------------------------
+# Debug logging
+# ---------------------------------------------------------------------------
 
 
 @dataclass
 class DebugConfig:
     """Debug logging configuration.
 
-    Controls which subsystems emit debug-level log messages. Uses Python's
-    logging framework with geodude.* logger hierarchy.
-
-    Subsystems:
-        - executor: Trajectory execution, convergence, physics stepping
-        - gripper: Gripper open/close, contact detection, grasp detection
-        - planning: Motion planning, collision checking, IK
-        - primitives: High-level pickup/place operations
-        - grasp_manager: Object attachment, collision group updates
-        - affordances: TSR template loading, affordance matching
-
-    Example:
-        # Enable all debug logging
-        robot.config.debug.enable_all()
-
-        # Enable specific subsystems
-        robot.config.debug.executor = True
-        robot.config.debug.gripper = True
-        robot.apply_debug_config()  # Apply changes
-
-        # Or via environment variable
-        GEODUDE_DEBUG=executor,gripper python script.py
+    Controls which subsystems emit debug-level log messages.
+    Use GEODUDE_DEBUG=subsystem1,subsystem2 or GEODUDE_DEBUG=all.
     """
 
-    # Per-subsystem debug flags (maps to geodude.<name> logger)
-    executor: bool = False
-    gripper: bool = False
     planning: bool = False
     primitives: bool = False
-    grasp_manager: bool = False
     affordances: bool = False
 
-    # Log format settings
     show_timestamps: bool = True
     show_module: bool = True
 
     def enable_all(self) -> None:
-        """Enable debug logging for all subsystems."""
-        self.executor = True
-        self.gripper = True
         self.planning = True
         self.primitives = True
-        self.grasp_manager = True
         self.affordances = True
 
-    def disable_all(self) -> None:
-        """Disable debug logging for all subsystems."""
-        self.executor = False
-        self.gripper = False
-        self.planning = False
-        self.primitives = False
-        self.grasp_manager = False
-        self.affordances = False
-
-    def enable(self, *subsystems: str) -> None:
-        """Enable debug logging for specific subsystems.
-
-        Args:
-            *subsystems: Names of subsystems to enable (e.g., "executor", "gripper")
-        """
-        for name in subsystems:
-            if hasattr(self, name):
-                setattr(self, name, True)
-            else:
-                raise ValueError(f"Unknown subsystem: {name}")
-
     def get_enabled_subsystems(self) -> list[str]:
-        """Get list of enabled subsystems."""
-        subsystems = ["executor", "gripper", "planning", "primitives",
-                      "grasp_manager", "affordances"]
-        return [s for s in subsystems if getattr(self, s)]
+        return [s for s in ("planning", "primitives", "affordances") if getattr(self, s)]
 
     @classmethod
-    def from_env(cls) -> "DebugConfig":
-        """Create config from GEODUDE_DEBUG environment variable.
-
-        Format: GEODUDE_DEBUG=subsystem1,subsystem2 or GEODUDE_DEBUG=all
-        """
-        import os
+    def from_env(cls) -> DebugConfig:
+        """Create config from GEODUDE_DEBUG environment variable."""
         config = cls()
         debug_env = os.environ.get("GEODUDE_DEBUG", "")
         if debug_env:
             if debug_env.lower() == "all":
                 config.enable_all()
             else:
-                subsystems = [s.strip() for s in debug_env.split(",")]
-                for s in subsystems:
+                for s in debug_env.split(","):
+                    s = s.strip()
                     if s and hasattr(config, s):
                         setattr(config, s, True)
         return config
 
-    @classmethod
-    def default(cls) -> "DebugConfig":
-        """Default debug configuration (all disabled)."""
-        return cls()
 
-
-# Mapping from subsystem name to logger name
 _SUBSYSTEM_LOGGERS = {
-    "executor": "geodude.executor",
-    "gripper": "geodude.executor",  # Gripper is part of executor module
-    "planning": "geodude.arm",  # Planning is in arm module
+    "planning": "geodude.robot",
     "primitives": "geodude.primitives",
-    "grasp_manager": "geodude.grasp_manager",
     "affordances": "geodude.affordances",
 }
 
 
 def setup_logging(config: DebugConfig | None = None) -> None:
-    """Configure geodude loggers based on debug config.
-
-    Sets up the logging hierarchy for geodude modules. By default, all
-    geodude loggers are set to WARNING level. When a subsystem is enabled
-    in DebugConfig, its logger is set to DEBUG level.
-
-    Args:
-        config: Debug configuration. If None, uses DebugConfig.from_env()
-
-    Example:
-        from geodude.config import setup_logging, DebugConfig
-
-        # From environment variable
-        setup_logging()
-
-        # Programmatic
-        config = DebugConfig()
-        config.enable("executor", "gripper")
-        setup_logging(config)
-    """
+    """Configure geodude loggers based on debug config."""
     if config is None:
         config = DebugConfig.from_env()
 
-    # Configure root geodude logger
     root_logger = logging.getLogger("geodude")
-
-    # Prevent propagation to root logger (avoids duplicate output)
     root_logger.propagate = False
 
-    # Only add handler if none exists (avoid duplicate handlers)
     if not root_logger.handlers:
         handler = logging.StreamHandler()
-
-        # Build format string based on config
         fmt_parts = []
         if config.show_timestamps:
             fmt_parts.append("%(asctime)s")
@@ -485,25 +142,30 @@ def setup_logging(config: DebugConfig | None = None) -> None:
         if config.show_module:
             fmt_parts.append("[%(name)s]")
         fmt_parts.append("%(message)s")
-
-        formatter = logging.Formatter(" - ".join(fmt_parts))
-        handler.setFormatter(formatter)
+        handler.setFormatter(logging.Formatter(" - ".join(fmt_parts)))
         root_logger.addHandler(handler)
 
-    # Set root to WARNING by default (so DEBUG/INFO are suppressed unless enabled)
     root_logger.setLevel(logging.WARNING)
 
-    # Enable DEBUG for specific subsystems
-    enabled = config.get_enabled_subsystems()
-    enabled_loggers = set()
-    for subsystem in enabled:
+    for subsystem in config.get_enabled_subsystems():
         logger_name = _SUBSYSTEM_LOGGERS.get(subsystem)
         if logger_name:
-            enabled_loggers.add(logger_name)
+            logging.getLogger(logger_name).setLevel(logging.DEBUG)
 
-    for logger_name in enabled_loggers:
-        logger = logging.getLogger(logger_name)
-        logger.setLevel(logging.DEBUG)
+
+# ---------------------------------------------------------------------------
+# Top-level Geodude configuration
+# ---------------------------------------------------------------------------
+
+# UR5e joint name suffixes (combined with arm prefix)
+_UR5E_JOINT_SUFFIXES = [
+    "shoulder_pan_joint",
+    "shoulder_lift_joint",
+    "elbow_joint",
+    "wrist_1_joint",
+    "wrist_2_joint",
+    "wrist_3_joint",
+]
 
 
 @dataclass
@@ -511,169 +173,69 @@ class GeodudConfig:
     """Full robot configuration."""
 
     model_path: Path
-    left_arm: ArmConfig
-    right_arm: ArmConfig
+    left_arm: GeodudeArmSpec
+    right_arm: GeodudeArmSpec
     left_base: VentionBaseConfig | None = None
     right_base: VentionBaseConfig | None = None
     named_poses: dict[str, dict[str, list[float]]] = field(default_factory=dict)
-    physics: PhysicsConfig = field(default_factory=PhysicsConfig.default)
     debug: DebugConfig = field(default_factory=DebugConfig.from_env)
 
-    @classmethod
-    def default(cls) -> "GeodudConfig":
-        """Create default configuration for Geodude with Robotiq grippers.
+    def joint_names(self, arm_spec: GeodudeArmSpec) -> list[str]:
+        """Get prefixed UR5e joint names for an arm spec."""
+        return [f"{arm_spec.prefix}/{j}" for j in _UR5E_JOINT_SUFFIXES]
 
-        Requires geodude_assets package to be installed:
-            uv add geodude_assets
-        Or install from local clone:
-            uv pip install -e path/to/geodude_assets
-        """
+    @classmethod
+    def default(cls) -> GeodudConfig:
+        """Create default configuration for Geodude with Robotiq grippers."""
         if get_model_path is None:
             raise ImportError(
                 "geodude_assets package not found. Install it with:\n"
-                "  uv add geodude_assets\n"
-                "Or from a local clone:\n"
-                "  uv pip install -e /path/to/geodude_assets"
+                "  uv add geodude_assets"
             )
         return cls(
             model_path=get_model_path(),
-            left_arm=ArmConfig(
-                name="left_arm",
-                entity_type="arm",
-                joint_names=[
-                    "left_ur5e/shoulder_pan_joint",
-                    "left_ur5e/shoulder_lift_joint",
-                    "left_ur5e/elbow_joint",
-                    "left_ur5e/wrist_1_joint",
-                    "left_ur5e/wrist_2_joint",
-                    "left_ur5e/wrist_3_joint",
-                ],
+            left_arm=GeodudeArmSpec(
+                prefix="left_ur5e",
                 ee_site="left_ur5e/gripper_attachment_site",
-                gripper_actuator="left_ur5e/gripper/fingers_actuator",
-                gripper_bodies=[
-                    # All gripper bodies for contact detection
-                    "left_ur5e/gripper/base_mount",
-                    "left_ur5e/gripper/base",
-                    "left_ur5e/gripper/right_driver",
-                    "left_ur5e/gripper/right_coupler",
-                    "left_ur5e/gripper/right_spring_link",
-                    "left_ur5e/gripper/right_follower",
-                    "left_ur5e/gripper/right_pad",
-                    "left_ur5e/gripper/left_driver",
-                    "left_ur5e/gripper/left_coupler",
-                    "left_ur5e/gripper/left_spring_link",
-                    "left_ur5e/gripper/left_follower",
-                    "left_ur5e/gripper/left_pad",
-                ],
-                hand_type="robotiq_2f_140",
+                gripper_prefix="left_ur5e/gripper/",
             ),
-            right_arm=ArmConfig(
-                name="right_arm",
-                entity_type="arm",
-                joint_names=[
-                    "right_ur5e/shoulder_pan_joint",
-                    "right_ur5e/shoulder_lift_joint",
-                    "right_ur5e/elbow_joint",
-                    "right_ur5e/wrist_1_joint",
-                    "right_ur5e/wrist_2_joint",
-                    "right_ur5e/wrist_3_joint",
-                ],
+            right_arm=GeodudeArmSpec(
+                prefix="right_ur5e",
                 ee_site="right_ur5e/gripper_attachment_site",
-                gripper_actuator="right_ur5e/gripper/fingers_actuator",
-                gripper_bodies=[
-                    # All gripper bodies for contact detection
-                    "right_ur5e/gripper/base_mount",
-                    "right_ur5e/gripper/base",
-                    "right_ur5e/gripper/right_driver",
-                    "right_ur5e/gripper/right_coupler",
-                    "right_ur5e/gripper/right_spring_link",
-                    "right_ur5e/gripper/right_follower",
-                    "right_ur5e/gripper/right_pad",
-                    "right_ur5e/gripper/left_driver",
-                    "right_ur5e/gripper/left_coupler",
-                    "right_ur5e/gripper/left_spring_link",
-                    "right_ur5e/gripper/left_follower",
-                    "right_ur5e/gripper/left_pad",
-                ],
-                hand_type="robotiq_2f_140",
+                gripper_prefix="right_ur5e/gripper/",
             ),
             left_base=VentionBaseConfig(
                 name="left_base",
-                entity_type="base",
-                joint_names=["left_arm_linear_vention"],
+                joint_name="left_arm_linear_vention",
                 actuator_name="left_linear_actuator",
             ),
             right_base=VentionBaseConfig(
                 name="right_base",
-                entity_type="base",
-                joint_names=["right_arm_linear_vention"],
+                joint_name="right_arm_linear_vention",
                 actuator_name="right_linear_actuator",
             ),
-            # Named poses are loaded from MuJoCo keyframes in the model XML.
-            # To add custom poses here, use format:
-            #   named_poses={
-            #       "pose_name": {
-            #           "left": [shoulder_pan, shoulder_lift, elbow, wrist1, wrist2, wrist3],
-            #           "right": [shoulder_pan, shoulder_lift, elbow, wrist1, wrist2, wrist3],
-            #       },
-            #   }
-            named_poses={},
         )
 
     @classmethod
-    def from_yaml(cls, path: Path) -> "GeodudConfig":
+    def from_yaml(cls, path: Path) -> GeodudConfig:
         """Load configuration from YAML file."""
+        import yaml
+
         with open(path) as f:
             data = yaml.safe_load(f)
 
-        def parse_arm_config(arm_data: dict, default_name: str) -> ArmConfig:
-            """Parse arm config with optional kinematic limits and tracking thresholds."""
-            arm_data = arm_data.copy()  # Don't mutate original
-            kinematic_limits = KinematicLimits.ur5e_default()
-            if "kinematic_limits" in arm_data:
-                limits_data = arm_data.pop("kinematic_limits")
-                kinematic_limits = KinematicLimits(
-                    velocity=np.array(limits_data["velocity"]),
-                    acceleration=np.array(limits_data["acceleration"]),
-                )
-            tracking_thresholds = TrackingThresholds.default()
-            if "tracking_thresholds" in arm_data:
-                thresh_data = arm_data.pop("tracking_thresholds")
-                tracking_thresholds = TrackingThresholds(
-                    max_error=np.deg2rad(thresh_data.get("max_error_deg", 10.0)),
-                )
-            # Ensure entity fields are present
-            arm_data.setdefault("name", default_name)
-            arm_data.setdefault("entity_type", "arm")
-            return ArmConfig(
-                **arm_data,
-                kinematic_limits=kinematic_limits,
-                tracking_thresholds=tracking_thresholds,
-            )
-
-        def parse_base_config(base_data: dict, default_name: str) -> VentionBaseConfig:
-            """Parse base config, converting joint_name to joint_names if needed."""
-            base_data = base_data.copy()  # Don't mutate original
-            # Handle legacy joint_name field
-            if "joint_name" in base_data and "joint_names" not in base_data:
-                base_data["joint_names"] = [base_data.pop("joint_name")]
-            # Ensure entity fields are present
-            base_data.setdefault("name", default_name)
-            base_data.setdefault("entity_type", "base")
-            return VentionBaseConfig(**base_data)
-
         left_base = None
         if "left_base" in data:
-            left_base = parse_base_config(data["left_base"], "left_base")
+            left_base = VentionBaseConfig(**data["left_base"])
 
         right_base = None
         if "right_base" in data:
-            right_base = parse_base_config(data["right_base"], "right_base")
+            right_base = VentionBaseConfig(**data["right_base"])
 
         return cls(
             model_path=Path(data["model_path"]),
-            left_arm=parse_arm_config(data["left_arm"], "left_arm"),
-            right_arm=parse_arm_config(data["right_arm"], "right_arm"),
+            left_arm=GeodudeArmSpec(**data["left_arm"]),
+            right_arm=GeodudeArmSpec(**data["right_arm"]),
             left_base=left_base,
             right_base=right_base,
             named_poses=data.get("named_poses", {}),

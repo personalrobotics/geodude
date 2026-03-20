@@ -1,189 +1,219 @@
 #!/usr/bin/env python3
-"""Recycling Demo - Pick up objects and place them in bins.
+"""Recycling demo — bimanual pick and place with Geodude.
 
-Demonstrates the high-level manipulation primitives API:
-- robot.pickup() with automatic affordance discovery
-- robot.place() with automatic destination planning
-- robot.get_pickable_objects() to find what can be picked up
-- Same code works in simulation and hardware
+Demonstrates the full stack:
+  prl_assets      — can + recycle bin models with geometry metadata
+  asset_manager   — reads geometric_properties for TSR generation
+  tsr.hands       — Robotiq2F140 grasp templates from cylinder geometry
+  mj_manipulator  — Arm, SimContext, CartesianController, GraspManager
+  geodude         — bimanual orchestration, VentionBase, primitives
 
-For the lower-level manual approach, see recycle_manual.py.
+The robot picks up soda cans from the worktop and drops them into
+floor-standing recycle bins. Grasp TSRs are generated programmatically
+from the can's physical dimensions; the drop zone TSR is constructed
+from the bin's opening geometry.
 
 Usage:
-    uv run mjpython examples/recycle.py            # Kinematic mode (default)
-    uv run mjpython examples/recycle.py --physics  # Physics simulation
+    uv run mjpython examples/recycle.py
+    uv run mjpython examples/recycle.py --physics
+    uv run mjpython examples/recycle.py --cycles 3 --headless
 """
+
+from __future__ import annotations
 
 import argparse
 import logging
-from pathlib import Path
+import random
 
+import mujoco
 import numpy as np
+from asset_manager import AssetManager
+from prl_assets import OBJECTS_DIR
+from tsr import TSR
+from tsr.hands import Robotiq2F140
 
 from geodude import Geodude
+from geodude.primitives import _return_to_ready
 
-# Configure logging to see pickup/place introspection
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(name)s: %(message)s",
-)
-from tsr import TSR
-from tsr.core.tsr_primitive import load_template_file
+logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
+logging.getLogger("toppra").setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
 
-TSR_DIR = Path(__file__).parent.parent / "tsr_templates"
+# ---------------------------------------------------------------------------
+# Object geometry from prl_assets
+# ---------------------------------------------------------------------------
 
-# Bin positions (floor-standing, 0.80m tall bins)
-# x=±0.85 to clear table collision (table extends to x=±0.65, bins are 0.25m wide)
-# Small z offset (0.01m) to avoid interpenetration with floor at startup
-RIGHT_BIN_POS = [0.85, -0.35, 0.01]
-LEFT_BIN_POS = [-0.85, -0.35, 0.01]
+_ASSETS = AssetManager(str(OBJECTS_DIR))
+_CAN = _ASSETS.get("can")["geometric_properties"]  # type=cylinder, radius, height
+_BIN = _ASSETS.get("recycle_bin")
+
+_BIN_GP = _BIN["geometric_properties"]  # type=open_box, outer_dimensions, wall_thickness
+_BIN_POLICY = _BIN.get("policy", {}).get("placement", {})
+
+_HAND = Robotiq2F140()
+
+# Bin positions: floor-standing, one per side for bimanual reach
+RIGHT_BIN_POS = np.array([0.85, -0.35, 0.01])
+LEFT_BIN_POS = np.array([-0.85, -0.35, 0.01])
 
 
-def sample_can_placement(robot):
-    """Sample random can placement on worktop."""
-    import mujoco
-    import random
+# ---------------------------------------------------------------------------
+# TSR generation
+# ---------------------------------------------------------------------------
 
-    templates = [
-        load_template_file(str(TSR_DIR / "places" / "can_on_table_upright.yaml")),
-        load_template_file(str(TSR_DIR / "places" / "can_on_table_flipped.yaml")),
-    ]
-    template = random.choice(templates)
 
-    worktop_id = mujoco.mj_name2id(robot.model, mujoco.mjtObj.mjOBJ_SITE, "worktop")
-    worktop_pos = robot.data.site_xpos[worktop_id].copy()
+def make_grasp_tsrs(can_pose: np.ndarray) -> list[TSR]:
+    """Generate grasp TSRs for a can from its geometry.
 
-    Bw = template.Bw.copy()
-    Bw[0, :] = [-0.3, 0.3]
-    Bw[1, :] = [-0.15, 0.15]
+    TSR convention: reference frame at the can's bottom centre, z up.
+    can_pose is the MuJoCo body pose (geometric centre); shift down to
+    bottom face before instantiating.
+    """
+    T_bottom = can_pose.copy()
+    T_bottom[2, 3] -= _CAN["height"] / 2
+    templates = _HAND.grasp_cylinder(_CAN["radius"], _CAN["height"])
+    return [t.instantiate(T_bottom) for t in templates]
 
-    tsr = TSR(Bw=Bw)
-    xyzrpy = tsr.sample_xyzrpy()
-    pos = worktop_pos + xyzrpy[:3]
 
-    rot = TSR.rpy_to_rot(xyzrpy[3:6])
-    quat = np.zeros(4)
-    mujoco.mju_mat2Quat(quat, rot.flatten())
+def make_drop_tsrs(bin_pos: np.ndarray) -> list[TSR]:
+    """Generate drop-zone TSRs above the recycle bin opening.
 
-    return pos, quat
+    The TSR defines a region above the bin where the gripper can release:
+    - XY: within the bin opening (with margin)
+    - Z: fixed height above the rim (clearance for the held object)
+    - Orientation: palm-down (z pointing down)
+    """
+    outer = _BIN_GP["outer_dimensions"]
+    wall = _BIN_GP["wall_thickness"]
+    margin = _BIN_POLICY.get("drop_zone_margin", 0.05)
+
+    # Inner half-extents minus safety margin
+    hx = (outer[0] / 2) - wall - margin
+    hy = (outer[1] / 2) - wall - margin
+
+    # Drop height: above the rim + clearance for can
+    bin_height = outer[2]
+    clearance = 0.10  # 10cm above rim
+    drop_z = bin_pos[2] + bin_height + clearance
+
+    # Palm-down orientation (gripper z points down)
+    T0_w = np.array([
+        [1,  0,  0, bin_pos[0]],
+        [0, -1,  0, bin_pos[1]],
+        [0,  0, -1, drop_z],
+        [0,  0,  0, 1],
+    ], dtype=float)
+
+    # Bounds: allow XY sliding within opening, small Z range,
+    # free rotation about vertical (yaw)
+    Bw = np.zeros((6, 2))
+    Bw[0, :] = [-hx, hx]  # x
+    Bw[1, :] = [-hy, hy]  # y
+    Bw[2, :] = [-0.02, 0.05]  # z (small range around drop height)
+    Bw[5, :] = [-np.pi, np.pi]  # yaw (free rotation)
+
+    return [TSR(T0_w=T0_w, Bw=Bw)]
+
+
+def sample_can_position(worktop_pos: np.ndarray) -> np.ndarray:
+    """Random position on the worktop for spawning a can."""
+    x = worktop_pos[0] + random.uniform(-0.25, 0.25)
+    y = worktop_pos[1] + random.uniform(-0.12, 0.12)
+    z = worktop_pos[2] + _CAN["height"] / 2 + 0.001  # rest on surface
+    return np.array([x, y, z])
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 
 def main():
-    import mujoco
-    import traceback
-
-    parser = argparse.ArgumentParser(description="Recycling demo with manipulation primitives")
+    parser = argparse.ArgumentParser(description="Geodude recycling demo")
     parser.add_argument("--physics", action="store_true", help="Enable physics simulation")
-    parser.add_argument("--headless", action="store_true", help="Run without visualization")
-    parser.add_argument("--cycles", type=int, default=5, help="Number of cycles to run")
-    parser.add_argument("--debug", action="store_true", help="Enable DEBUG level logging")
+    parser.add_argument("--headless", action="store_true", help="Run without viewer")
+    parser.add_argument("--cycles", type=int, default=5, help="Number of pick-place cycles")
+    parser.add_argument("--debug", action="store_true", help="Enable DEBUG logging")
     args = parser.parse_args()
 
-    # Set logging level based on --debug flag
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
-        logging.getLogger("geodude").setLevel(logging.DEBUG)
 
     mode = "Physics" if args.physics else "Kinematic"
-    print(f"Recycling Demo (Primitives API) - {mode} Mode", flush=True)
-    print("=" * 50, flush=True)
+    print(f"\n{'='*60}")
+    print(f"  Geodude Recycling Demo — {mode} Mode")
+    print(f"{'='*60}\n")
 
-    try:
-        # Create robot with objects
-        robot = Geodude(objects={"can": 1, "recycle_bin": 2})
+    # Create robot with objects from prl_assets
+    robot = Geodude(objects={"can": 1, "recycle_bin": 2})
 
-        # Place can and bins
-        can_pos, can_quat = sample_can_placement(robot)
-        print(f"Can at {can_pos.round(3)}", flush=True)
-        robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
-        robot.env.registry.activate("recycle_bin", pos=RIGHT_BIN_POS)
-        robot.env.registry.activate("recycle_bin", pos=LEFT_BIN_POS)
+    # Get worktop position for can placement
+    worktop_id = mujoco.mj_name2id(robot.model, mujoco.mjtObj.mjOBJ_SITE, "worktop")
+    worktop_pos = robot.data.site_xpos[worktop_id].copy()
 
-        # Set initial arm positions
-        # In kinematic mode: positions are set directly via go_to
-        # In physics mode: the controller initializes qpos to ready positions
-        # (so this is mainly for kinematic mode, physics mode handles it internally)
-        robot.go_to("ready")
-        mujoco.mj_forward(robot.model, robot.data)
+    # Place bins
+    robot.env.registry.activate("recycle_bin", pos=list(RIGHT_BIN_POS))
+    robot.env.registry.activate("recycle_bin", pos=list(LEFT_BIN_POS))
 
-        # viewer=False means headless mode (no viewer created)
-        # viewer=None means auto-create viewer
-        viewer = False if args.headless else None
-        with robot.sim(physics=args.physics, viewer=viewer) as ctx:
+    # Place first can
+    can_pos = sample_can_position(worktop_pos)
+    robot.env.registry.activate("can", pos=list(can_pos))
+    mujoco.mj_forward(robot.model, robot.data)
+
+    with robot.sim(physics=args.physics, headless=args.headless) as ctx:
+        for cycle in range(1, args.cycles + 1):
+            if not ctx.is_running():
+                break
+
+            print(f"\n--- Cycle {cycle} ---")
+
+            # Get can pose
+            can_pose = robot.get_object_pose("can_0")
+            print(f"  Can at: {can_pose[:3, 3].round(3)}")
+
+            # Generate grasp TSRs from can geometry
+            grasp_tsrs = make_grasp_tsrs(can_pose)
+            print(f"  Generated {len(grasp_tsrs)} grasp TSRs")
+
+            # Pick up
+            if not robot.pickup("can_0", grasp_tsrs):
+                print("  Pickup FAILED")
+                break
+            print("  Picked up can")
+
+            # Choose bin on same side as the arm that picked up
+            for side in ("left", "right"):
+                if robot.grasp_manager.get_grasped_by(side):
+                    holding_side = side
+                    break
+            bin_pos = RIGHT_BIN_POS if holding_side == "right" else LEFT_BIN_POS
+
+            # Generate drop zone TSRs from bin geometry
+            drop_tsrs = make_drop_tsrs(bin_pos)
+
+            # Place
+            if not robot.place(drop_tsrs):
+                print("  Place FAILED")
+                break
+            print(f"  Dropped can into {holding_side} bin")
+
+            # Hide can (kinematic mode) or let it fall (physics mode)
+            if not args.physics:
+                robot.env.registry.hide("can_0")
+
+            # Return holding arm to ready
+            arm = robot.left_arm if holding_side == "left" else robot.right_arm
+            _return_to_ready(robot, arm)
             ctx.sync()
 
-            cycle = 0
-            max_cycles = args.cycles
-            while ctx.is_running() and cycle < max_cycles:
-                cycle += 1
-                print(f"\n{'='*40}\nCycle {cycle}\n{'='*40}", flush=True)
+            # Respawn can for next cycle
+            if cycle < args.cycles:
+                can_pos = sample_can_position(worktop_pos)
+                robot.env.registry.activate("can", pos=list(can_pos))
+                mujoco.mj_forward(robot.model, robot.data)
+                print(f"  Spawned new can at {can_pos.round(3)}")
 
-                # Check what's pickable
-                pickable = robot.get_pickable_objects()
-                print(f"Pickable objects: {pickable}", flush=True)
-
-                if not pickable:
-                    print("No pickable objects, spawning new can...", flush=True)
-                    can_pos, can_quat = sample_can_placement(robot)
-                    robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
-                    ctx.sync()
-                    continue
-
-                # ============================================================
-                # THE MAGIC: pickup + place with automatic affordance discovery
-                # ============================================================
-
-                # 1. Pick up any pickable object (auto-discovers grasp TSRs)
-                target = pickable[0]
-                print(f"\n1. Picking up {target}...", flush=True)
-                if not robot.pickup(target):
-                    print("   Pickup failed!", flush=True)
-                    break
-
-                print("   Pickup succeeded!", flush=True)
-
-                # 2. Place in recycle bin (auto-discovers place TSRs)
-                # Choose bin based on which arm picked up (same side for easier reach)
-                from geodude.primitives import _find_arm_holding_object
-                holding_arm = _find_arm_holding_object(robot)
-                # recycle_bin_0 is at x=0.85 (right), recycle_bin_1 is at x=-0.85 (left)
-                bin_name = "recycle_bin_0" if holding_arm.side == "right" else "recycle_bin_1"
-
-                print(f"\n2. Placing in {bin_name}...", flush=True)
-                if not robot.place(bin_name):
-                    print("   Place failed!", flush=True)
-                    break
-
-                print("   Place succeeded!", flush=True)
-
-                # 3. Hide object and return to ready
-                robot.env.registry.hide(target)
-
-                print("\n3. Returning to ready...", flush=True)
-                ready_config = np.array(robot.named_poses["ready"][holding_arm.side])
-                ready_result = holding_arm.plan_to(ready_config)
-                if ready_result is not None:
-                    ctx.execute(ready_result)
-                ctx.sync()
-
-                print(f"\nCycle {cycle} complete!", flush=True)
-
-                if not ctx.is_running():
-                    break
-
-                # Spawn new can
-                print("\nSpawning new can...", flush=True)
-                can_pos, can_quat = sample_can_placement(robot)
-                print(f"Can at {can_pos.round(3)}", flush=True)
-                robot.env.registry.activate("can", pos=can_pos, quat=can_quat)
-                ctx.sync()
-
-            print(f"\nCompleted {cycle} cycles.", flush=True)
-
-    except Exception as e:
-        print(f"\n\nERROR: {e}", flush=True)
-        traceback.print_exc()
-        raise
+        print(f"\nCompleted {cycle} cycles.")
 
 
 if __name__ == "__main__":

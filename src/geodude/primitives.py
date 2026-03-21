@@ -20,6 +20,7 @@ Example::
 from __future__ import annotations
 
 import logging
+import random
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -118,8 +119,9 @@ def pickup(
     if base_heights is None:
         base_heights = [0.2, 0.0, 0.4]
 
-    # Try each arm
+    # Try each arm (randomize order for bimanual fairness)
     arms = robot._resolve_arms(arm)
+    random.shuffle(arms)
     for a in arms:
         side = a.config.name
         logger.info("Trying %s arm for %s...", side, object_name)
@@ -140,19 +142,6 @@ def pickup(
             _return_to_ready(robot, a)
             continue
 
-        # Move forward until contact
-        gripper = a.gripper
-        if gripper is not None:
-            ctrl = CartesianController.from_arm(a)
-            touch_result = ctrl.move_until_contact(
-                np.array([0.0, 0.0, 0.03, 0.0, 0.0, 0.0]),  # 3cm/s in hand Z
-                dt=0.008,
-                gripper_body_names=gripper.gripper_body_names,
-                max_distance=0.10,
-            )
-            if touch_result.success:
-                logger.info("Contact at %.1fcm", touch_result.distance_moved * 100)
-
         # Grasp
         logger.info("Closing gripper on %s...", object_name)
         grasped = ctx.arm(side).grasp(object_name)
@@ -161,18 +150,16 @@ def pickup(
             ctx.arm(side).release()
             _return_to_ready(robot, a)
             continue
-        logger.info("Grasped %s, gripper at %.2f", object_name,
-                     a.gripper.get_actual_position() if a.gripper else 0)
+        ctx.sync()
 
         # Lift
         if lift_height > 0:
             ctrl = CartesianController.from_arm(a)
-            lift_result = ctrl.move(
+            ctrl.move(
                 np.array([0.0, 0.0, 0.10, 0.0, 0.0, 0.0]),
                 dt=0.008, max_distance=lift_height,
             )
-            logger.info("Lifted %.1fcm", lift_result.distance_moved * 100)
-        ctx.sync()
+            ctx.sync()
 
         logger.info("Picked up %s with %s arm", object_name, side)
         return True
@@ -247,6 +234,5 @@ def place(
 
     # Release
     ctx.arm(side).release(held_object)
-    _return_to_ready(robot, a)
     logger.info("Placed %s", held_object)
     return True

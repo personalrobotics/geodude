@@ -40,19 +40,17 @@ logging.getLogger("toppra").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Object geometry from prl_assets
+# Object geometry (read once from prl_assets metadata)
 # ---------------------------------------------------------------------------
 
 _ASSETS = AssetManager(str(OBJECTS_DIR))
-_CAN = _ASSETS.get("can")["geometric_properties"]  # type=cylinder, radius, height
-_BIN = _ASSETS.get("recycle_bin")
-
-_BIN_GP = _BIN["geometric_properties"]  # type=open_box, outer_dimensions, wall_thickness
-_BIN_POLICY = _BIN.get("policy", {}).get("placement", {})
-
+_CAN_GP = _ASSETS.get("can")["geometric_properties"]
+_BIN_META = _ASSETS.get("recycle_bin")
+_BIN_GP = _BIN_META["geometric_properties"]
+_BIN_POLICY = _BIN_META.get("policy", {}).get("placement", {})
 _HAND = Robotiq2F140()
 
-# Bin positions: floor-standing, one per side for bimanual reach
+# Bin positions: floor-standing, one per side
 RIGHT_BIN_POS = np.array([0.85, -0.35, 0.01])
 LEFT_BIN_POS = np.array([-0.85, -0.35, 0.01])
 
@@ -63,40 +61,34 @@ LEFT_BIN_POS = np.array([-0.85, -0.35, 0.01])
 
 
 def make_grasp_tsrs(can_pose: np.ndarray) -> list[TSR]:
-    """Generate grasp TSRs for a can from its geometry.
+    """Side-grasp TSRs for a soda can, generated from prl_assets geometry.
 
-    TSR convention: reference frame at the can's bottom centre, z up.
-    can_pose is the MuJoCo body pose (geometric centre); shift down to
-    bottom face before instantiating.
+    TSR convention: reference at the can bottom centre, z up.
+    can_pose is the MuJoCo body pose (geometric centre); we shift to
+    the bottom face before calling instantiate().
     """
     T_bottom = can_pose.copy()
-    T_bottom[2, 3] -= _CAN["height"] / 2
-    templates = _HAND.grasp_cylinder_side(_CAN["radius"], _CAN["height"])
+    T_bottom[2, 3] -= _CAN_GP["height"] / 2
+    templates = _HAND.grasp_cylinder_side(_CAN_GP["radius"], _CAN_GP["height"])
     return [t.instantiate(T_bottom) for t in templates]
 
 
 def make_drop_tsrs(bin_pos: np.ndarray) -> list[TSR]:
-    """Generate drop-zone TSRs above the recycle bin opening.
+    """Drop-zone TSR above the recycle bin opening.
 
-    The TSR defines a region above the bin where the gripper can release:
-    - XY: within the bin opening (with margin)
-    - Z: fixed height above the rim (clearance for the held object)
-    - Orientation: palm-down (z pointing down)
+    Defines a region where the gripper can release:
+    - XY within the bin opening (with safety margin)
+    - Z above the rim (clearance for held object)
+    - Palm-down, free yaw rotation
     """
     outer = _BIN_GP["outer_dimensions"]
     wall = _BIN_GP["wall_thickness"]
     margin = _BIN_POLICY.get("drop_zone_margin", 0.05)
 
-    # Inner half-extents minus safety margin
     hx = (outer[0] / 2) - wall - margin
     hy = (outer[1] / 2) - wall - margin
+    drop_z = bin_pos[2] + outer[2] + 0.10  # 10cm above rim
 
-    # Drop height: above the rim + clearance for can
-    bin_height = outer[2]
-    clearance = 0.10  # 10cm above rim
-    drop_z = bin_pos[2] + bin_height + clearance
-
-    # Palm-down orientation (gripper z points down)
     T0_w = np.array([
         [1,  0,  0, bin_pos[0]],
         [0, -1,  0, bin_pos[1]],
@@ -104,23 +96,22 @@ def make_drop_tsrs(bin_pos: np.ndarray) -> list[TSR]:
         [0,  0,  0, 1],
     ], dtype=float)
 
-    # Bounds: allow XY sliding within opening, small Z range,
-    # free rotation about vertical (yaw)
     Bw = np.zeros((6, 2))
-    Bw[0, :] = [-hx, hx]  # x
-    Bw[1, :] = [-hy, hy]  # y
-    Bw[2, :] = [-0.02, 0.05]  # z (small range around drop height)
-    Bw[5, :] = [-np.pi, np.pi]  # yaw (free rotation)
+    Bw[0, :] = [-hx, hx]
+    Bw[1, :] = [-hy, hy]
+    Bw[2, :] = [-0.02, 0.05]
+    Bw[5, :] = [-np.pi, np.pi]
 
     return [TSR(T0_w=T0_w, Bw=Bw)]
 
 
 def sample_can_position(worktop_pos: np.ndarray) -> np.ndarray:
-    """Random position on the worktop for spawning a can."""
-    x = worktop_pos[0] + random.uniform(-0.15, 0.15)
-    y = worktop_pos[1] + random.uniform(-0.08, 0.08)
-    z = worktop_pos[2] + _CAN["height"] / 2 + 0.005  # rest on surface
-    return np.array([x, y, z])
+    """Random position on the worktop surface."""
+    return np.array([
+        worktop_pos[0] + random.uniform(-0.15, 0.15),
+        worktop_pos[1] + random.uniform(-0.08, 0.08),
+        worktop_pos[2] + _CAN_GP["height"] / 2 + 0.005,
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -130,10 +121,10 @@ def sample_can_position(worktop_pos: np.ndarray) -> np.ndarray:
 
 def main():
     parser = argparse.ArgumentParser(description="Geodude recycling demo")
-    parser.add_argument("--physics", action="store_true", help="Enable physics simulation")
-    parser.add_argument("--headless", action="store_true", help="Run without viewer")
-    parser.add_argument("--cycles", type=int, default=5, help="Number of pick-place cycles")
-    parser.add_argument("--debug", action="store_true", help="Enable DEBUG logging")
+    parser.add_argument("--physics", action="store_true", help="Physics simulation")
+    parser.add_argument("--headless", action="store_true", help="No viewer")
+    parser.add_argument("--cycles", type=int, default=5, help="Pick-place cycles")
+    parser.add_argument("--debug", action="store_true", help="DEBUG logging")
     args = parser.parse_args()
 
     if args.debug:
@@ -144,25 +135,21 @@ def main():
     print(f"  Geodude Recycling Demo — {mode} Mode")
     print(f"{'='*60}\n")
 
-    # Create robot with objects from prl_assets
     robot = Geodude(objects={"can": 1, "recycle_bin": 2})
 
-    # Get worktop position for can placement
+    # Worktop position for can spawning
     worktop_id = mujoco.mj_name2id(robot.model, mujoco.mjtObj.mjOBJ_SITE, "worktop")
     worktop_pos = robot.data.site_xpos[worktop_id].copy()
 
-    # Place bins
+    # Place bins and set arms to ready
     robot.env.registry.activate("recycle_bin", pos=list(RIGHT_BIN_POS))
     robot.env.registry.activate("recycle_bin", pos=list(LEFT_BIN_POS))
-
-    # Set arms to ready pose before starting
     for side, arm in [("left", robot.left_arm), ("right", robot.right_arm)]:
         q = np.array(robot.named_poses["ready"][side])
         for i, idx in enumerate(arm.joint_qpos_indices):
             robot.data.qpos[idx] = q[i]
-    mujoco.mj_forward(robot.model, robot.data)
 
-    # Place first can
+    # Spawn first can
     can_pos = sample_can_position(worktop_pos)
     robot.env.registry.activate("can", pos=list(can_pos))
     mujoco.mj_forward(robot.model, robot.data)
@@ -173,52 +160,46 @@ def main():
                 break
 
             print(f"\n--- Cycle {cycle} ---")
-
-            # Get can pose
             can_pose = robot.get_object_pose("can_0")
-            print(f"  Can at: {can_pose[:3, 3].round(3)}")
+            print(f"  Can at {can_pose[:3, 3].round(3)}")
 
-            # Generate grasp TSRs from can geometry
+            # --- Pick up ---
             grasp_tsrs = make_grasp_tsrs(can_pose)
-            print(f"  Generated {len(grasp_tsrs)} grasp TSRs")
-
-            # Pick up
             if not robot.pickup("can_0", grasp_tsrs):
                 print("  Pickup FAILED")
                 break
-            print("  Picked up can")
 
-            # Choose bin on same side as the arm that picked up
+            # Determine which arm picked up
+            holding_side = None
             for side in ("left", "right"):
                 if robot.grasp_manager.get_grasped_by(side):
                     holding_side = side
                     break
+            print(f"  Picked up with {holding_side} arm")
+
+            # --- Place in bin on same side ---
             bin_pos = RIGHT_BIN_POS if holding_side == "right" else LEFT_BIN_POS
-
-            # Generate drop zone TSRs from bin geometry
             drop_tsrs = make_drop_tsrs(bin_pos)
-
-            # Place
             if not robot.place(drop_tsrs):
                 print("  Place FAILED")
                 break
-            print(f"  Dropped can into {holding_side} bin")
 
-            # Hide can (kinematic mode) or let it fall (physics mode)
+            # Hide can immediately after release, then return arm to ready
             if not args.physics:
                 robot.env.registry.hide("can_0")
+                mujoco.mj_forward(robot.model, robot.data)
+            ctx.sync()
+            print(f"  Dropped into {holding_side} bin")
 
-            # Return holding arm to ready
             arm = robot.left_arm if holding_side == "left" else robot.right_arm
             _return_to_ready(robot, arm)
             ctx.sync()
 
-            # Respawn can for next cycle
+            # Spawn next can
             if cycle < args.cycles:
                 can_pos = sample_can_position(worktop_pos)
                 robot.env.registry.activate("can", pos=list(can_pos))
                 mujoco.mj_forward(robot.model, robot.data)
-                print(f"  Spawned new can at {can_pos.round(3)}")
 
         print(f"\nCompleted {cycle} cycles.")
 

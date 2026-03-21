@@ -71,7 +71,7 @@ def make_grasp_tsrs(can_pose: np.ndarray) -> list[TSR]:
     """
     T_bottom = can_pose.copy()
     T_bottom[2, 3] -= _CAN["height"] / 2
-    templates = _HAND.grasp_cylinder(_CAN["radius"], _CAN["height"])
+    templates = _HAND.grasp_cylinder_side(_CAN["radius"], _CAN["height"])
     return [t.instantiate(T_bottom) for t in templates]
 
 

@@ -1,107 +1,76 @@
 # Geodude
 
-A Python library for bimanual robot manipulation with collision-free motion planning.
-
-**[▶️ Watch the demo video](docs/images/recycle_demo.mp4)** — Pick and place with automatic grasp discovery
-
-## Motivation
-
-Robot manipulation research needs a clean abstraction layer between high-level task logic and low-level execution. When you write `robot.pickup("can")`, you shouldn't need to think about inverse kinematics, collision checking, trajectory timing, or whether you're running in simulation or on hardware.
-
-Geodude provides this abstraction for bimanual manipulation:
-
-- **Task-level primitives** like `pickup()` and `place()` that handle the complexity
-- **Automatic grasp discovery** so objects just work when you add them to the scene
-- **Same code for sim and hardware** through an execution context abstraction
-- **Grasp-aware collision checking** so held objects don't cause false collisions
+Bimanual manipulation with the Geodude robot, built on [mj_manipulator](https://github.com/siddhss5/mj_manipulator).
 
 ## The Robot
 
-Geodude controls a bimanual manipulation platform:
-
 ```
-                    ┌─────────────────────────────────────┐
-                    │           Vention Frame             │
-                    └─────────────────────────────────────┘
-                         │                       │
-                    ┌────┴────┐             ┌────┴────┐
-                    │ Linear  │             │ Linear  │
-                    │ Rail    │             │ Rail    │
-                    │ (0-50cm)│             │ (0-50cm)│
-                    └────┬────┘             └────┬────┘
-                         │                       │
-                    ┌────┴────┐             ┌────┴────┐
-                    │  UR5e   │             │  UR5e   │
-                    │  Left   │             │  Right  │
-                    └────┬────┘             └────┬────┘
-                         │                       │
-                    ┌────┴────┐             ┌────┴────┐
-                    │ Robotiq │             │ Robotiq │
-                    │ 2F-140  │             │ 2F-140  │
-                    └─────────┘             └─────────┘
+                ┌─────────────────────────────────────┐
+                │           Vention Frame             │
+                └─────────────────────────────────────┘
+                     │                       │
+                ┌────┴────┐             ┌────┴────┐
+                │ Linear  │             │ Linear  │
+                │ Rail    │             │ Rail    │
+                │ (0-50cm)│             │ (0-50cm)│
+                └────┬────┘             └────┬────┘
+                     │                       │
+                ┌────┴────┐             ┌────┴────┐
+                │  UR5e   │             │  UR5e   │
+                │  Left   │             │  Right  │
+                └────┬────┘             └────┬────┘
+                     │                       │
+                ┌────┴────┐             ┌────┴────┐
+                │ Robotiq │             │ Robotiq │
+                │ 2F-140  │             │ 2F-140  │
+                └─────────┘             └─────────┘
 ```
 
-**Components:**
-- **2× UR5e arms** — 6-DOF industrial manipulators
-- **2× Vention linear actuators** — Height-adjustable bases (0-50cm range)
-- **2× Robotiq 2F-140 grippers** — Parallel-jaw grippers with 140mm stroke
-
-The height-adjustable bases expand the workspace significantly. An object unreachable at one height may be easily grasped at another.
+- **2× UR5e arms** — 6-DOF manipulators (from mj_manipulator)
+- **2× Vention linear actuators** — Height-adjustable bases (0–50cm)
+- **2× Robotiq 2F-140 grippers** — Parallel-jaw, 140mm stroke (from mj_manipulator)
 
 ## Architecture
 
-The core design principle is **separation of planning from execution**:
+Geodude is a thin bimanual orchestration layer (~1,300 LOC) on top of [mj_manipulator](https://github.com/siddhss5/mj_manipulator), which provides all generic manipulation:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Your Code                            │
-│   robot.pickup("can")  →  robot.place("bin")               │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     Planning Layer                          │
-│  • Motion planning (CBiRRT)                                │
-│  • Inverse kinematics (EAIK)                               │
-│  • Collision checking (grasp-aware)                        │
-│  • TSR-based goal specification                            │
-│  • Affordance discovery                                     │
-│                                                             │
-│  Output: Trajectory (time-parameterized joint positions)   │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Execution Context                        │
-│                                                             │
-│  ┌─────────────────┐              ┌─────────────────┐      │
-│  │  SimContext     │              │  HardwareContext│      │
-│  │  (physics=True) │              │  (future)       │      │
-│  │  (physics=False)│              │                 │      │
-│  └─────────────────┘              └─────────────────┘      │
-│                                                             │
-│  • Trajectory execution                                     │
-│  • Gripper control                                          │
-│  • State synchronization                                    │
-│  • Error recovery                                           │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Planning** is stateless with respect to execution—it produces trajectories without knowing whether they'll run in simulation or on hardware. This keeps planning logic portable and testable.
-
-**Execution contexts** handle the messy reality: timing, physics simulation, hardware communication. Different contexts implement the same interface, so your task code doesn't change.
-
-```python
-# Same code works in kinematic sim, physics sim, or hardware
-with robot.sim(physics=True) as ctx:
-    trajectory = robot.right_arm.plan_to(goal)  # Planning
-    ctx.execute(trajectory)                      # Execution
+┌──────────────────────────────────────────────────────┐
+│  Your code / Demo scripts                            │
+│  robot.pickup("can_0", grasp_tsrs)                   │
+│  robot.place(drop_tsrs)                              │
+└──────────────────────┬───────────────────────────────┘
+                       │
+┌──────────────────────┴───────────────────────────────┐
+│  geodude  (this package)                             │
+│  • Geodude class — compose two Arms + VentionBases   │
+│  • Bimanual planning — arm/height interleaving       │
+│  • Primitives — pickup/place with explicit TSRs      │
+│  • VentionBase — linear actuator with collision check│
+└──────────────────────┬───────────────────────────────┘
+                       │
+┌──────────────────────┴───────────────────────────────┐
+│  mj_manipulator  (generic manipulation)              │
+│  • Arm, SimContext, ExecutionContext protocol         │
+│  • CBiRRT planning, EAIK inverse kinematics          │
+│  • CartesianController, GraspManager                 │
+│  • RobotiqGripper, FrankaGripper                     │
+│  • Trajectory retiming (TOPP-RA)                     │
+└──────────────────────┬───────────────────────────────┘
+                       │
+┌──────────────────────┴───────────────────────────────┐
+│  tsr + prl_assets  (objects + geometry)               │
+│  • TSR templates generated from object geometry       │
+│  • tsr.hands.Robotiq2F140.grasp_cylinder(r, h)       │
+│  • prl_assets: can, recycle_bin, ... with meta.yaml   │
+└──────────────────────────────────────────────────────┘
 ```
 
 ## Installation
 
 ```bash
-uv add geodude geodude_assets
+# In the robot-code workspace
+git clone https://github.com/siddhss5/robot-code && ./setup.sh
 ```
 
 ## Quick Start
@@ -109,375 +78,109 @@ uv add geodude geodude_assets
 ```python
 from geodude import Geodude
 
-# Initialize robot (loads MuJoCo model)
 robot = Geodude()
 
-# Run in simulation context
-with robot.sim() as ctx:
-    robot.go_to("ready")
-    ctx.sync()
-
-    # Plan a motion (returns Trajectory)
-    import numpy as np
-    goal = np.array([-1.0, -1.5, 1.5, -1.5, -1.5, 0])
-    trajectory = robot.right_arm.plan_to(goal)
-
-    # Execute via context
-    ctx.execute(trajectory)
-
-    # Gripper control via context
-    ctx.arm("right").grasp("object_name")
-    ctx.arm("right").release("object_name")
-```
-
-## Manipulation Primitives
-
-High-level `pickup()` and `place()` automatically discover how to manipulate objects:
-
-```python
-robot = Geodude(objects={"can": 1, "recycle_bin": 2})
-
-# Activate objects in scene
-robot.env.registry.activate("can", pos=[0.4, -0.3, 0.82])
-robot.env.registry.activate("recycle_bin", pos=[0.75, -0.35, 0.0])  # Floor-standing
-
-with robot.sim() as ctx:
-    robot.go_to("ready")
-
-    # Pick up any pickable object (discovers grasp TSRs automatically)
-    robot.pickup("can_0")
-
-    # Place in bin (discovers place TSRs automatically)
-    robot.place("recycle_bin_0")
-```
-
-The primitives:
-- **Randomize arm selection** for variety
-- **Batch all compatible TSRs** and let CBiRRT find the best path
-- **Handle grasp management** (attach/detach objects)
-- **Lift after grasp** to clear the table
-
-### Adding New Objects
-
-To make an object pickable/placeable, add TSR templates in `tsr_templates/`:
-
-**1. Grasp TSR** (`tsr_templates/grasps/bottle_side_grasp.yaml`):
-```yaml
-name: Bottle Side Grasp
-task: grasp
-subject: robotiq_2f140      # Which gripper this works with
-reference: bottle           # Object type (matches asset name)
-
-position:
-  type: shell
-  axis: z
-  radius: [0.0, 0.05]
-  height: [-0.03, 0.03]
-  angle: [0, 360]
-
-orientation:
-  approach: radial
-  roll: [-15, 15]
-  pitch: [-15, 15]
-
-standoff: 0.19
-```
-
-**2. Place TSR** (`tsr_templates/places/recycle_bin_drop.yaml`):
-```yaml
-name: Recycle Bin Drop
-task: recycle               # Task type (recycle, place, drop all work)
-subject: robotiq_2f140
-reference: recycle_bin      # Destination type
-
-position:
-  type: box
-  x: [-0.05, 0.05]
-  y: [-0.05, 0.05]
-  z: [0.97, 1.02]           # ~20cm above bin rim
-
-orientation:
-  approach: -z              # Palm down
-  roll: [-10, 10]           # Allow slight tilt
-  pitch: [-10, 10]
-  yaw: [0, 360]
-
-standoff: 0.0
-```
-
-**3. Load the object** from `prl_assets`:
-```python
-robot = Geodude(objects={"bottle": 1, "recycle_bin": 1})
-```
-
-That's it! The affordance registry auto-discovers TSRs by matching `reference` (object type) and `subject` (gripper type).
-
-## Execution Context
-
-The execution context provides a unified interface for simulation and hardware:
-
-```python
-# Simulation (kinematic - instant, perfect tracking)
 with robot.sim(physics=False) as ctx:
-    trajectory = robot.right_arm.plan_to(goal)
-    ctx.execute(trajectory)
-    ctx.sync()  # Sync viewer
+    # Plan and execute a joint-space motion
+    path = robot.right_arm.plan_to_configuration(goal_q)
+    traj = robot.right_arm.retime(path)
+    ctx.execute(traj)
 
-# Simulation (physics - realistic dynamics)
-with robot.sim(physics=True) as ctx:
-    trajectory = robot.right_arm.plan_to(goal)
-    ctx.execute(trajectory)
+    # Gripper control
+    ctx.arm("right").grasp("object_name")
+    ctx.arm("right").release()
 ```
 
-The context handles:
-- **Trajectory execution**: `ctx.execute(trajectory)` or `ctx.execute(plan_result)`
-- **Gripper operations**: `ctx.arm("right").grasp("can")`, `ctx.arm("left").release("box")`
-- **Viewer sync**: `ctx.sync()` updates the MuJoCo viewer
-- **Run loop**: `while ctx.is_running():` continues until viewer is closed
+## Recycling Demo
 
-## TSR-Based Planning
-
-Plan to grasp regions instead of fixed poses using Task Space Regions:
-
-```python
-from geodude.tsr_utils import create_side_grasp_tsr
-
-# Get object pose
-obj_pose = robot.get_object_pose("can")
-
-# Create grasp TSR (allows rotation around object axis)
-grasp_tsr = create_side_grasp_tsr(obj_pose, object_height=0.12)
-
-# Plan to any valid grasp (returns Trajectory)
-with robot.sim() as ctx:
-    trajectory = robot.right_arm.plan_to_tsr(grasp_tsr)
-    ctx.execute(trajectory)
-    ctx.arm("right").grasp("can")
-```
-
-## Unified Planning API
-
-The `plan_to_tsr()` method handles arm selection and base height search automatically:
-
-```python
-with robot.sim() as ctx:
-    # Plan with both arms at multiple base heights
-    # Default: randomly picks first arm, interleaves at each height level
-    result = robot.plan_to_tsr(
-        grasp_tsr,
-        base_heights=[0.2, 0.0, 0.4],  # Middle height first (most versatile)
-    )
-
-    if result:
-        print(f"Success: {result.arm.side} @ {result.base_height}m")
-        ctx.execute(result)  # Executes base + arm trajectories
-```
-
-For explicit control over the search order:
-
-```python
-# Explicit (arm, height) sequence
-result = robot.plan_to_tsr(
-    grasp_tsr,
-    sequence=[
-        ("right", 0.2),
-        ("left", 0.2),
-        ("right", 0.0),
-        ("left", 0.0),
-    ],
-)
-```
-
-Single-arm planning with height search:
-
-```python
-# Plan with one arm at multiple heights
-result = robot.right_arm.plan_to_tsr(
-    grasp_tsr,
-    base_heights=[0.2, 0.0, 0.4],
-)
-# Returns PlanResult with arm_trajectory and base_trajectory
-```
-
-## Grasp Management
-
-When you grasp an object, collision checking updates automatically:
-
-```python
-with robot.sim() as ctx:
-    # Grasp via context (recommended)
-    ctx.arm("right").grasp("can")
-
-    # Now planning treats the can as part of the robot
-    # (won't report false collisions with the arm)
-    place_traj = robot.right_arm.plan_to_tsr(place_tsr)
-    ctx.execute(place_traj)
-
-    # Release via context
-    ctx.arm("right").release("can")
-```
-
-> **Deep Dive**: See [Grasp-Aware Collision Detection](docs/grasp-aware-collision.md) for a detailed explanation of how Geodude filters contacts during manipulation.
-
-For manual control:
-
-```python
-# Mark object as grasped
-robot.grasp_manager.mark_grasped("can", "right")
-robot.grasp_manager.attach_object("can", "right_ur5e/gripper/right_follower")
-
-# Release
-robot.grasp_manager.mark_released("can")
-robot.grasp_manager.detach_object("can")
-```
-
-## Cartesian Velocity Control
-
-For contact-based manipulation, Geodude provides real-time Cartesian velocity control with hard joint limit enforcement:
-
-```python
-with robot.sim(physics=True) as ctx:
-    # Move toward object until contact detected
-    contact = robot.right_arm.move_until_touch(
-        direction=[0, 0, -1],    # Move down (world frame)
-        distance=0.02,           # Ignore first 2cm (clear table surface)
-        max_distance=0.15,       # Safety limit
-        max_force=5.0,           # Stop at 5N contact force
-        speed=0.02,              # 2 cm/s approach
-    )
-
-    if contact:
-        ctx.arm("right").grasp("object")
-```
-
-Key features:
-- **Hard constraint enforcement**: Joint position and velocity limits are never violated
-- **Implicit singularity handling**: Damping prevents large velocities near singular configurations
-- **Real-time**: Warm-started QP solver converges in 2-5 iterations at 125 Hz
-- **Contact detection**: F/T sensor (physics) or collision detection (kinematic)
-
-> **Deep Dive**: See [Cartesian Velocity Control](docs/cartesian-control.md) for the mathematical derivation, comparison with MoveIt Servo, and implementation details.
-
-## Component Overview
-
-```
-Geodude
-├── left_arm / right_arm (Arm)
-│   ├── Planning (CBiRRT + EAIK)
-│   ├── plan_to(), plan_to_tsr(), plan_to_pose()
-│   └── Gripper control
-├── left_base / right_base (VentionBase)
-│   └── Height adjustment with collision checking
-├── GraspManager
-│   └── Tracks grasped objects, updates collision groups
-├── AffordanceRegistry
-│   └── Auto-discovers grasp/place TSRs from templates
-├── SimContext (via robot.sim())
-│   └── Unified execution for simulation
-└── Collision checkers
-    └── Grasp-aware collision checking
-```
-
-## Design Principles
-
-The architecture is designed for **multi-robot reusability**:
-
-1. **Robots implement interfaces, not inheritance** — Different robots (Geodude, HERB, Fetch) can implement the same planning/execution interfaces without sharing a base class.
-
-2. **TSRs live with objects, not robots** — Grasp and place TSRs are stored in `prl_assets` alongside object models. Any robot with a compatible hand can use them.
-
-3. **Hand compatibility, not robot compatibility** — TSRs declare which hands they work with (`robotiq_2f_140`, `wsg_50`). The robot queries its hand type to find compatible TSRs.
-
-4. **Context abstracts deployment** — The same manipulation code runs in kinematic sim, physics sim, or hardware by changing only the context.
-
-This separation allows:
-- Reusable manipulation primitives that work across robots
-- Objects that "just work" when added to the asset manager
-- Easy testing (kinematic sim) before deployment (hardware)
-
-## Examples
+The full pick-and-place demo generates TSRs programmatically from object geometry in [prl_assets](https://github.com/personalrobotics/prl_assets):
 
 ```bash
-# Recycling demo - pick up objects and place in bins (kinematic mode)
 uv run mjpython examples/recycle.py
-
-# Recycling demo with physics simulation
 uv run mjpython examples/recycle.py --physics
-
-# Same demo with manual TSR loading (educational)
-uv run mjpython examples/recycle_manual.py
-
-# Cartesian velocity control demo
-uv run mjpython examples/cartesian_demo.py
-
-# Planning API demo with base height search
-uv run mjpython examples/arm_planning.py
+uv run mjpython examples/recycle.py --headless --cycles 5
 ```
-
-### Recycling Demo
-
-The `recycle.py` demo shows the power of affordance-based manipulation:
 
 ```python
-# Core loop is just 3 lines:
-target = robot.get_pickable_objects()[0]  # Find what to pick
-robot.pickup(target)                       # Pick it up
-robot.place("recycle_bin_0")              # Place in bin
+from tsr.hands import Robotiq2F140
+from asset_manager import AssetManager
+from prl_assets import OBJECTS_DIR
+
+# Read object geometry from prl_assets metadata
+assets = AssetManager(str(OBJECTS_DIR))
+can_gp = assets.get("can")["geometric_properties"]  # radius, height
+
+# Generate grasp TSRs from geometry (no YAML templates needed)
+hand = Robotiq2F140()
+templates = hand.grasp_cylinder_side(can_gp["radius"], can_gp["height"])
+grasp_tsrs = [t.instantiate(can_bottom_pose) for t in templates]
+
+# Pick and place
+with robot.sim() as ctx:
+    robot.pickup("can_0", grasp_tsrs)
+    robot.place(drop_tsrs)
 ```
 
-The demo:
-- Works with **any object** that has grasp/place TSRs defined
-- **Randomizes** which arm picks up for variety
-- **Auto-discovers** all compatible grasps and sends them to the planner
-- Uses **same-side placement** (right arm → right bin) for reliability
+## Bimanual Planning
+
+The robot-level planner tries both arms with optional base height search:
+
+```python
+# Try both arms, interleaved at each height (randomized order)
+result = robot.plan_to_tsrs(
+    grasp_tsrs,
+    base_heights=[0.2, 0.0, 0.4],
+)
+
+# Or specify a single arm
+result = robot.plan_to_tsrs(grasp_tsrs, arm="right")
+
+if result is not None:
+    ctx.execute(result)
+```
+
+## Vention Base
+
+Height-adjustable bases expand the workspace. Collision checking ensures the arm won't collide at the target height:
+
+```python
+# Direct height set (no animation)
+robot.left_base.set_height(0.3)
+
+# Plan base trajectory with collision checking
+traj = robot.left_base.plan_to(0.3)
+```
+
+## Package Structure
+
+```
+src/geodude/
+├── robot.py          # Geodude class — bimanual composition on mj_manipulator
+├── config.py         # GeodudeArmSpec, VentionBaseConfig, DebugConfig
+├── vention_base.py   # Linear actuator planning + collision checking
+├── primitives.py     # pickup() / place() with explicit TSRs
+└── __init__.py       # Public API + mj_manipulator re-exports
+```
 
 ## Testing
 
 ```bash
-uv run pytest
+uv run pytest tests/ -v
 ```
-
-## Debug Logging
-
-Enable debug output for specific subsystems via environment variable or programmatically:
-
-```bash
-# Via environment variable
-GEODUDE_DEBUG=gripper,executor uv run mjpython examples/recycle.py --physics
-
-# Or enable all subsystems
-GEODUDE_DEBUG=all uv run mjpython examples/recycle.py --physics
-```
-
-```python
-# Programmatically
-robot.config.debug.enable("gripper", "executor")
-robot.apply_debug_config()
-
-# Or enable all
-robot.config.debug.enable_all()
-robot.apply_debug_config()
-```
-
-Available subsystems: `executor`, `gripper`, `planning`, `primitives`, `grasp_manager`, `affordances`
 
 ## Dependencies
 
-Core libraries developed by our lab:
+**Workspace packages:**
 
-- [**pycbirrt**](https://github.com/siddhss5/pycbirrt): CBiRRT motion planner with TSR constraints
-- [**tsr**](https://github.com/personalrobotics/tsr): Task Space Region definitions
-- [**geodude_assets**](https://github.com/personalrobotics/geodude_assets): Robot models and meshes for Geodude (UR5e + Robotiq)
-- [**prl_assets**](https://github.com/personalrobotics/prl_assets): Reusable object models (cans, bins, etc.)
-- [**mj_environment**](https://github.com/personalrobotics/mj_environment): MuJoCo environment wrapper with object registry
-- [**asset_manager**](https://github.com/personalrobotics/asset_manager): Loads objects from meta.yaml files
+- [mj_manipulator](https://github.com/siddhss5/mj_manipulator) — Generic arm control, planning, execution, grasping
+- [geodude_assets](https://github.com/personalrobotics/geodude_assets) — MuJoCo models for Geodude (UR5e + Robotiq)
+- [prl_assets](https://github.com/personalrobotics/prl_assets) — Object models with geometry metadata
+- [tsr](https://github.com/personalrobotics/tsr) — Task Space Regions + grasp/place generation
+- [pycbirrt](https://github.com/personalrobotics/pycbirrt) — CBiRRT motion planner
+- [mj_environment](https://github.com/personalrobotics/mj_environment) — MuJoCo environment wrapper
+- [asset_manager](https://github.com/personalrobotics/asset_manager) — Object metadata loader
 
-External dependencies:
+**External:**
 
-- [**eaik**](https://github.com/Verdant-Robotics/eaik): Analytical inverse kinematics for UR robots
-- [**toppra**](https://github.com/hungpham2511/toppra): Time-optimal path parameterization
-- [**mujoco**](https://github.com/google-deepmind/mujoco): Physics simulation
-
-## License
-
-MIT
+- [eaik](https://github.com/Verdant-Robotics/eaik) — Analytical IK for UR robots
+- [mujoco](https://github.com/google-deepmind/mujoco) — Physics simulation

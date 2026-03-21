@@ -161,6 +161,8 @@ def pickup(
             ctx.arm(side).release()
             _return_to_ready(robot, a)
             continue
+        logger.info("Grasped %s, gripper at %.2f", object_name,
+                     a.gripper.get_actual_position() if a.gripper else 0)
 
         # Lift
         if lift_height > 0:
@@ -170,6 +172,7 @@ def pickup(
                 dt=0.008, max_distance=lift_height,
             )
             logger.info("Lifted %.1fcm", lift_result.distance_moved * 100)
+        ctx.sync()
 
         logger.info("Picked up %s with %s arm", object_name, side)
         return True

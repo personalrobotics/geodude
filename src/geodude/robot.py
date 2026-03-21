@@ -34,6 +34,23 @@ from geodude.vention_base import VentionBase
 logger = logging.getLogger(__name__)
 
 
+class _GeodudeSimContext:
+    """Wrapper that sets robot._active_context on enter/exit."""
+
+    def __init__(self, inner: SimContext, robot: "Geodude"):
+        self._inner = inner
+        self._robot = robot
+
+    def __enter__(self):
+        ctx = self._inner.__enter__()
+        self._robot._active_context = ctx
+        return ctx
+
+    def __exit__(self, *args):
+        self._robot._active_context = None
+        return self._inner.__exit__(*args)
+
+
 class Geodude:
     """High-level interface for the Geodude bimanual robot.
 
@@ -240,16 +257,19 @@ class Geodude:
 
     # -- Simulation context --------------------------------------------------
 
+    # (see _GeodudeSimContext below)
+
     def sim(
         self,
         physics: bool = True,
         viewer=None,
         viewer_fps: float = 30.0,
         headless: bool = False,
-    ) -> SimContext:
+    ) -> _GeodudeSimContext:
         """Create simulation execution context.
 
         Returns a context manager for executing trajectories in MuJoCo.
+        Sets robot._active_context on enter, clears on exit.
 
         Example::
 
@@ -260,11 +280,12 @@ class Geodude:
                 ctx.arm("left").grasp("can_0")
         """
         arms = {"left": self._left_arm, "right": self._right_arm}
-        return SimContext(
+        inner = SimContext(
             self.model, self.data, arms,
             physics=physics, headless=headless,
             viewer=viewer, viewer_fps=viewer_fps,
         )
+        return _GeodudeSimContext(inner, self)
 
     # -- Named poses ---------------------------------------------------------
 
@@ -401,17 +422,24 @@ class Geodude:
         timeout: float = 30.0,
         seed: int | None = None,
     ) -> PlanResult | None:
-        """Plan with a single arm at a specific base height."""
+        """Plan with a single arm at a specific base height.
+
+        Moves the base directly (kinematic set_height) before planning
+        the arm, so the planner sees the correct workspace. If planning
+        fails, restores the original base height.
+        """
         base = self._get_base_for_arm(arm)
+        original_height = None
 
         # Move base if requested
-        base_traj = None
         if height is not None and base is not None:
             current_height = base.get_height()
             if abs(current_height - height) > 0.001:
-                base_traj = base.plan_to(height, arm)
-                if base_traj is None:
-                    return None  # Base move would cause collision
+                # Check collision before moving
+                if not base._is_path_collision_free(current_height, height):
+                    return None
+                original_height = current_height
+                base.set_height(height)
 
         # Plan arm motion
         try:
@@ -423,9 +451,12 @@ class Geodude:
             else:
                 raise ValueError("Must provide goal_tsrs or pose")
         except Exception:
-            return None
+            path = None
 
         if path is None:
+            # Restore base height on failure
+            if original_height is not None:
+                base.set_height(original_height)
             return None
 
         arm_traj = arm.retime(path)
@@ -433,7 +464,6 @@ class Geodude:
         return PlanResult(
             arm_name=arm.config.name,
             arm_trajectory=arm_traj,
-            base_trajectory=base_traj,
         )
 
     # -- Primitives (delegate to primitives module) --------------------------

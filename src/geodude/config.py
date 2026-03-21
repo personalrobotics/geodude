@@ -196,12 +196,12 @@ class GeodudConfig:
             model_path=get_model_path(),
             left_arm=GeodudeArmSpec(
                 prefix="left_ur5e",
-                ee_site="left_ur5e/gripper_attachment_site",
+                ee_site="left_ur5e/gripper/grasp_site",
                 gripper_prefix="left_ur5e/gripper/",
             ),
             right_arm=GeodudeArmSpec(
                 prefix="right_ur5e",
-                ee_site="right_ur5e/gripper_attachment_site",
+                ee_site="right_ur5e/gripper/grasp_site",
                 gripper_prefix="right_ur5e/gripper/",
             ),
             left_base=VentionBaseConfig(

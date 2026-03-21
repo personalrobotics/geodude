@@ -65,7 +65,11 @@ def _return_to_ready(robot: Geodude, arm: Arm) -> bool:
 
     ready_config = np.array(robot.named_poses["ready"][side])
 
-    path = arm.plan_to_configuration(ready_config)
+    try:
+        path = arm.plan_to_configuration(ready_config)
+    except Exception:
+        path = None
+
     if path is not None:
         traj = arm.retime(path)
         return ctx.execute(traj)
@@ -78,7 +82,11 @@ def _return_to_ready(robot: Geodude, arm: Arm) -> bool:
         dt=0.008, max_distance=0.15, step_fn=_make_step_fn(robot),
     )
 
-    path = arm.plan_to_configuration(ready_config)
+    try:
+        path = arm.plan_to_configuration(ready_config)
+    except Exception:
+        path = None
+
     if path is not None:
         traj = arm.retime(path)
         return ctx.execute(traj)

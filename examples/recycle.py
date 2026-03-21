@@ -117,9 +117,9 @@ def make_drop_tsrs(bin_pos: np.ndarray) -> list[TSR]:
 
 def sample_can_position(worktop_pos: np.ndarray) -> np.ndarray:
     """Random position on the worktop for spawning a can."""
-    x = worktop_pos[0] + random.uniform(-0.25, 0.25)
-    y = worktop_pos[1] + random.uniform(-0.12, 0.12)
-    z = worktop_pos[2] + _CAN["height"] / 2 + 0.001  # rest on surface
+    x = worktop_pos[0] + random.uniform(-0.15, 0.15)
+    y = worktop_pos[1] + random.uniform(-0.08, 0.08)
+    z = worktop_pos[2] + _CAN["height"] / 2 + 0.005  # rest on surface
     return np.array([x, y, z])
 
 
@@ -154,6 +154,13 @@ def main():
     # Place bins
     robot.env.registry.activate("recycle_bin", pos=list(RIGHT_BIN_POS))
     robot.env.registry.activate("recycle_bin", pos=list(LEFT_BIN_POS))
+
+    # Set arms to ready pose before starting
+    for side, arm in [("left", robot.left_arm), ("right", robot.right_arm)]:
+        q = np.array(robot.named_poses["ready"][side])
+        for i, idx in enumerate(arm.joint_qpos_indices):
+            robot.data.qpos[idx] = q[i]
+    mujoco.mj_forward(robot.model, robot.data)
 
     # Place first can
     can_pos = sample_can_position(worktop_pos)

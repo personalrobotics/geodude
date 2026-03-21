@@ -87,7 +87,7 @@ def make_drop_tsrs(bin_pos: np.ndarray) -> list[TSR]:
 
     hx = (outer[0] / 2) - wall - margin
     hy = (outer[1] / 2) - wall - margin
-    drop_z = bin_pos[2] + outer[2] + 0.10  # 10cm above rim
+    drop_z = bin_pos[2] + outer[2] + 0.15  # 15cm above rim
 
     T0_w = np.array([
         [1,  0,  0, bin_pos[0]],

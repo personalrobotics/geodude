@@ -22,7 +22,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-import mujoco
 import numpy as np
 
 from mj_manipulator import Arm, PlanResult
@@ -37,19 +36,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_step_fn(robot: Geodude):
-    """Create a step function for Cartesian control."""
-    ctx = robot._active_context
-    if ctx is not None and hasattr(ctx, '_controller') and ctx._controller is not None:
-        def step_fn():
-            ctx.step()
-        return step_fn
-
-    def step_fn():
-        mujoco.mj_forward(robot.model, robot.data)
-    return step_fn
 
 
 def _return_to_ready(robot: Geodude, arm: Arm) -> bool:
@@ -79,7 +65,7 @@ def _return_to_ready(robot: Geodude, arm: Arm) -> bool:
     ctrl = CartesianController.from_arm(arm)
     ctrl.move(
         np.array([0.0, 0.0, 0.10, 0.0, 0.0, 0.0]),
-        dt=0.008, max_distance=0.15, step_fn=_make_step_fn(robot),
+        dt=0.008, max_distance=0.15,
     )
 
     try:
@@ -163,7 +149,6 @@ def pickup(
                 dt=0.008,
                 gripper_body_names=gripper.gripper_body_names,
                 max_distance=0.10,
-                step_fn=_make_step_fn(robot),
             )
             if touch_result.success:
                 logger.info("Contact at %.1fcm", touch_result.distance_moved * 100)
@@ -179,18 +164,10 @@ def pickup(
 
         # Lift
         if lift_height > 0:
-            gm = robot.grasp_manager
-            base_step = _make_step_fn(robot)
-
-            def lift_step():
-                gm.update_attached_poses()
-                base_step()
-
             ctrl = CartesianController.from_arm(a)
             lift_result = ctrl.move(
-                np.array([0.0, 0.0, 0.20, 0.0, 0.0, 0.0]),
+                np.array([0.0, 0.0, 0.10, 0.0, 0.0, 0.0]),
                 dt=0.008, max_distance=lift_height,
-                step_fn=lift_step,
             )
             logger.info("Lifted %.1fcm", lift_result.distance_moved * 100)
 

@@ -184,10 +184,9 @@ def main():
                 print("  Place FAILED")
                 break
 
-            # Hide can immediately after release, then return arm to ready
-            if not args.physics:
-                robot.env.registry.hide("can_0")
-                mujoco.mj_forward(robot.model, robot.data)
+            # Hide can after release so the pool is free for next cycle
+            robot.env.registry.hide("can_0")
+            mujoco.mj_forward(robot.model, robot.data)
             ctx.sync()
             print(f"  Dropped into {holding_side} bin")
 

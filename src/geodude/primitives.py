@@ -179,13 +179,19 @@ def pickup(
 
         # Lift
         if lift_height > 0:
+            gm = robot.grasp_manager
+            base_step = _make_step_fn(robot)
+
+            def lift_step():
+                gm.update_attached_poses()
+                base_step()
+
             ctrl = CartesianController.from_arm(a)
             lift_result = ctrl.move(
                 np.array([0.0, 0.0, 0.20, 0.0, 0.0, 0.0]),
                 dt=0.008, max_distance=lift_height,
-                step_fn=_make_step_fn(robot),
+                step_fn=lift_step,
             )
-            robot.grasp_manager.update_attached_poses()
             logger.info("Lifted %.1fcm", lift_result.distance_moved * 100)
 
         logger.info("Picked up %s with %s arm", object_name, side)

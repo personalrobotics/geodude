@@ -12,22 +12,20 @@ dependencies = [
     "numpy",
     "mujoco",
     "pyyaml",
-    "scipy",
-    "toppra>=0.6.3",
+    "mj-manipulator",
     "mj_environment @ git+https://github.com/personalrobotics/mj_environment.git",
     "geodude-assets",
     "prl-assets",
     "tsr",
-    "pycbirrt",
     "eaik",
 ]
 
 [tool.uv.sources]
+mj-manipulator = { workspace = true }
 mj-environment = { workspace = true }
 geodude-assets = { workspace = true }
 prl-assets = { workspace = true }
 tsr = { workspace = true }
-pycbirrt = { workspace = true }
 
 [project.optional-dependencies]
 dev = [

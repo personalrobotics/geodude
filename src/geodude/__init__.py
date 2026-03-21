@@ -1,99 +1,61 @@
-"""Geodude: High-level API for bimanual robot manipulation."""
+"""Geodude: High-level API for bimanual robot manipulation.
 
-__version__ = "0.1.0"
+Built on mj_manipulator for generic arm control, planning, and execution.
+"""
 
-# Lazy imports to avoid circular dependencies during testing
+__version__ = "0.2.0"
+
+
+# Lazy imports to avoid circular dependencies
 def __getattr__(name):
+    # Geodude-specific
     if name == "Geodude":
         from geodude.robot import Geodude
         return Geodude
+    if name == "GeodudConfig":
+        from geodude.config import GeodudConfig
+        return GeodudConfig
     if name == "VentionBase":
         from geodude.vention_base import VentionBase
         return VentionBase
     if name == "VentionBaseConfig":
         from geodude.config import VentionBaseConfig
         return VentionBaseConfig
-    # TSR utilities
-    if name in (
-        "create_top_grasp_tsr",
-        "create_side_grasp_tsr",
-        "create_place_tsr",
-        "create_lift_tsr",
-        "create_retract_tsr",
-        "create_approach_tsr",
-    ):
-        from geodude import tsr_utils
-        return getattr(tsr_utils, name)
-    # Parallel planning utilities
-    if name in ("plan_first_success", "plan_best_of_all", "plan_with_base_heights"):
-        from geodude import parallel
-        return getattr(parallel, name)
-    # Planning result types
-    if name == "PlanResult":
-        from geodude.planning import PlanResult
-        return PlanResult
-    # Trajectory
-    if name == "Trajectory":
-        from geodude.trajectory import Trajectory
-        return Trajectory
-    # Entity config
-    if name == "EntityConfig":
-        from geodude.config import EntityConfig
-        return EntityConfig
-    # Planning defaults
-    if name == "PlanningDefaults":
-        from geodude.config import PlanningDefaults
-        return PlanningDefaults
-    # Physics config classes
-    if name == "PhysicsConfig":
-        from geodude.config import PhysicsConfig
-        return PhysicsConfig
-    if name == "PhysicsExecutionConfig":
-        from geodude.config import PhysicsExecutionConfig
-        return PhysicsExecutionConfig
-    if name == "GripperPhysicsConfig":
-        from geodude.config import GripperPhysicsConfig
-        return GripperPhysicsConfig
-    if name == "RecoveryConfig":
-        from geodude.config import RecoveryConfig
-        return RecoveryConfig
-    # Debug logging
     if name == "DebugConfig":
         from geodude.config import DebugConfig
         return DebugConfig
     if name == "setup_logging":
         from geodude.config import setup_logging
         return setup_logging
-    # Execution context
-    if name == "SimContext":
-        from geodude.execution import SimContext
-        return SimContext
+    # Re-exports from mj_manipulator (convenience)
+    _MJ_REEXPORTS = {
+        "Arm": ("mj_manipulator", "Arm"),
+        "Trajectory": ("mj_manipulator", "Trajectory"),
+        "PlanResult": ("mj_manipulator", "PlanResult"),
+        "SimContext": ("mj_manipulator", "SimContext"),
+        "GraspManager": ("mj_manipulator", "GraspManager"),
+    }
+    if name in _MJ_REEXPORTS:
+        mod, attr = _MJ_REEXPORTS[name]
+        import importlib
+        m = importlib.import_module(mod)
+        return getattr(m, attr)
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
+
 __all__ = [
+    # Geodude-specific
     "Geodude",
+    "GeodudConfig",
     "VentionBase",
     "VentionBaseConfig",
-    "EntityConfig",
-    "PlanningDefaults",
-    "PhysicsConfig",
-    "PhysicsExecutionConfig",
-    "GripperPhysicsConfig",
-    "RecoveryConfig",
     "DebugConfig",
     "setup_logging",
+    # Re-exports from mj_manipulator
+    "Arm",
     "Trajectory",
     "PlanResult",
     "SimContext",
-    # TSR utilities
-    "create_top_grasp_tsr",
-    "create_side_grasp_tsr",
-    "create_place_tsr",
-    "create_lift_tsr",
-    "create_retract_tsr",
-    "create_approach_tsr",
-    # Parallel planning utilities
-    "plan_first_success",
-    "plan_best_of_all",
-    "plan_with_base_heights",
+    "GraspManager",
 ]

@@ -468,15 +468,34 @@ class Geodude:
 
     # -- Primitives (delegate to primitives module) --------------------------
 
-    def pickup(self, object_name: str, grasp_tsrs: list, **kwargs) -> bool:
-        """Pick up an object using caller-provided grasp TSRs."""
-        from geodude.primitives import pickup
-        return pickup(self, object_name, grasp_tsrs, **kwargs)
+    def pickup(self, object_name: str, **kwargs) -> bool:
+        """Pick up an object by name.
 
-    def place(self, place_tsrs: list, **kwargs) -> bool:
-        """Place held object using caller-provided place TSRs."""
+        Automatically generates grasp TSRs from object geometry in prl_assets.
+
+        Args:
+            object_name: MuJoCo body name (e.g., "can_0").
+            arm: "left", "right", or None (try both).
+        """
+        from geodude.primitives import pickup
+        return pickup(self, object_name, **kwargs)
+
+    def place(self, destination: str, **kwargs) -> bool:
+        """Place held object at a destination.
+
+        Automatically generates drop-zone TSRs from destination geometry.
+
+        Args:
+            destination: MuJoCo body name (e.g., "recycle_bin_0").
+            arm: "left", "right", or None (auto-detect).
+        """
         from geodude.primitives import place
-        return place(self, place_tsrs, **kwargs)
+        return place(self, destination, **kwargs)
+
+    def go_home(self) -> bool:
+        """Return all arms to ready configuration."""
+        from geodude.primitives import go_home
+        return go_home(self)
 
     # -- State management ----------------------------------------------------
 

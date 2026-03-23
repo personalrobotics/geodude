@@ -85,22 +85,29 @@ class DebugConfig:
 
     Controls which subsystems emit debug-level log messages.
     Use GEODUDE_DEBUG=subsystem1,subsystem2 or GEODUDE_DEBUG=all.
+
+    ``verbose`` enables behavior tree visualization after each
+    primitive (pickup, place, go_home), showing which nodes
+    succeeded/failed. Can also be overridden per-call::
+
+        robot.pickup("can_0", verbose=True)  # override for one call
+        robot.config.debug.verbose = True    # enable globally
     """
 
+    verbose: bool = False  # show BT tree status after each primitive
     planning: bool = False
     primitives: bool = False
-    affordances: bool = False
 
     show_timestamps: bool = True
     show_module: bool = True
 
     def enable_all(self) -> None:
+        self.verbose = True
         self.planning = True
         self.primitives = True
-        self.affordances = True
 
     def get_enabled_subsystems(self) -> list[str]:
-        return [s for s in ("planning", "primitives", "affordances") if getattr(self, s)]
+        return [s for s in ("planning", "primitives") if getattr(self, s)]
 
     @classmethod
     def from_env(cls) -> DebugConfig:

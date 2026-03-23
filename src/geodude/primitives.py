@@ -67,17 +67,21 @@ def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
     return bb
 
 
-def _tick_tree(root: py_trees.behaviour.Behaviour) -> bool:
+def _tick_tree(root: py_trees.behaviour.Behaviour, verbose: bool = False) -> bool:
     """Reset and tick a tree to completion. Returns True if SUCCESS."""
     for node in root.iterate():
         node.status = Status.INVALID
     tree = py_trees.trees.BehaviourTree(root=root)
     tree.tick()
+
+    if verbose:
+        print(py_trees.display.ascii_tree(root, show_status=True))
+
     if root.status != Status.SUCCESS:
-        # Find the deepest failed node and log its feedback
         tip = root.tip()
         if tip is not None and tip.feedback_message:
             logger.warning("%s: %s", tip.name, tip.feedback_message)
+
     return root.status == Status.SUCCESS
 
 
@@ -86,6 +90,7 @@ def pickup(
     object_name: str,
     *,
     arm: str | None = None,
+    verbose: bool | None = None,
 ) -> bool:
     """Pick up an object by name.
 
@@ -96,6 +101,7 @@ def pickup(
         robot: Geodude instance with active execution context.
         object_name: MuJoCo body name (e.g., "can_0").
         arm: "left", "right", or None (try both).
+        verbose: Show BT tree status. None = use robot.config.debug.verbose.
 
     Returns:
         True if pickup succeeded.
@@ -104,14 +110,15 @@ def pickup(
     if ctx is None:
         raise RuntimeError("No active execution context. Use 'with robot.sim() as ctx:'")
 
+    if verbose is None:
+        verbose = robot.config.debug.verbose
+
     if arm is not None:
-        # Single arm
         ns = f"/{arm}"
         bb = _setup_blackboard(robot, ns)
         bb.set(f"{ns}/object_name", object_name)
-        return _tick_tree(geodude_pickup(ns))
+        return _tick_tree(geodude_pickup(ns), verbose=verbose)
 
-    # Try both arms (random order)
     import random
     sides = ["right", "left"]
     random.shuffle(sides)
@@ -119,7 +126,7 @@ def pickup(
         ns = f"/{side}"
         bb = _setup_blackboard(robot, ns)
         bb.set(f"{ns}/object_name", object_name)
-        if _tick_tree(geodude_pickup(ns)):
+        if _tick_tree(geodude_pickup(ns), verbose=verbose):
             return True
 
     return False
@@ -130,6 +137,7 @@ def place(
     destination: str,
     *,
     arm: str | None = None,
+    verbose: bool | None = None,
 ) -> bool:
     """Place the held object at a destination.
 
@@ -140,6 +148,7 @@ def place(
         robot: Geodude instance with active execution context.
         destination: MuJoCo body name (e.g., "recycle_bin_0").
         arm: "left", "right", or None (auto-detect holding arm).
+        verbose: Show BT tree status. None = use robot.config.debug.verbose.
 
     Returns:
         True if place succeeded.
@@ -158,13 +167,16 @@ def place(
             logger.warning("No arm is holding an object")
             return False
 
+    if verbose is None:
+        verbose = robot.config.debug.verbose
+
     ns = f"/{arm}"
     bb = _setup_blackboard(robot, ns)
     bb.set(f"{ns}/destination", destination)
-    return _tick_tree(geodude_place(ns))
+    return _tick_tree(geodude_place(ns), verbose=verbose)
 
 
-def go_home(robot: Geodude) -> bool:
+def go_home(robot: Geodude, *, verbose: bool | None = None) -> bool:
     """Return all arms to ready configuration.
 
     Args:
@@ -176,6 +188,9 @@ def go_home(robot: Geodude) -> bool:
     ctx = robot._active_context
     if ctx is None:
         raise RuntimeError("No active execution context. Use 'with robot.sim() as ctx:'")
+
+    if verbose is None:
+        verbose = robot.config.debug.verbose
 
     from mj_manipulator.cartesian import CartesianController
 
@@ -205,6 +220,8 @@ def go_home(robot: Geodude) -> bool:
             traj = arm_obj.retime(path)
             ctx.execute(traj)
         else:
+            if verbose:
+                print(f"  go_home: {side} arm FAILED to plan")
             logger.warning("Could not plan %s arm to ready", side)
             success = False
     ctx.sync()

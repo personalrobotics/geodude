@@ -48,6 +48,7 @@ class GenerateGrasps(py_trees.behaviour.Behaviour):
         try:
             obj_pose = robot.get_object_pose(object_name)
         except ValueError:
+            self.feedback_message = f"Object '{object_name}' not found in scene"
             return Status.FAILURE
 
         # Extract object type from instance name (strip trailing _N)
@@ -59,6 +60,7 @@ class GenerateGrasps(py_trees.behaviour.Behaviour):
         try:
             gp = assets.get(obj_type)["geometric_properties"]
         except (KeyError, TypeError):
+            self.feedback_message = f"No geometry in prl_assets for '{obj_type}'"
             return Status.FAILURE
 
         # Generate TSRs based on geometry type
@@ -69,7 +71,8 @@ class GenerateGrasps(py_trees.behaviour.Behaviour):
             templates = hand.grasp_cylinder_side(gp["radius"], gp["height"])
             tsrs = [t.instantiate(T_bottom) for t in templates]
         else:
-            return Status.FAILURE  # unsupported geometry
+            self.feedback_message = f"Unsupported geometry type '{gp.get('type')}' for '{obj_type}'"
+            return Status.FAILURE
 
         self.bb.set(f"{self.ns}/grasp_tsrs", tsrs)
         return Status.SUCCESS
@@ -104,6 +107,7 @@ class GenerateDropZone(py_trees.behaviour.Behaviour):
         try:
             dest_pose = robot.get_object_pose(destination)
         except ValueError:
+            self.feedback_message = f"Destination '{destination}' not found in scene"
             return Status.FAILURE
 
         # Extract type
@@ -116,9 +120,11 @@ class GenerateDropZone(py_trees.behaviour.Behaviour):
             gp = meta["geometric_properties"]
             policy = meta.get("policy", {}).get("placement", {})
         except (KeyError, TypeError):
+            self.feedback_message = f"No geometry in prl_assets for '{dest_type}'"
             return Status.FAILURE
 
         if gp.get("type") not in ("open_box", "tote"):
+            self.feedback_message = f"Unsupported destination type '{gp.get('type')}' for '{dest_type}'"
             return Status.FAILURE
 
         outer = gp["outer_dimensions"]

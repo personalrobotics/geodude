@@ -73,6 +73,11 @@ def _tick_tree(root: py_trees.behaviour.Behaviour) -> bool:
         node.status = Status.INVALID
     tree = py_trees.trees.BehaviourTree(root=root)
     tree.tick()
+    if root.status != Status.SUCCESS:
+        # Find the deepest failed node and log its feedback
+        tip = root.tip()
+        if tip is not None and tip.feedback_message:
+            logger.warning("%s: %s", tip.name, tip.feedback_message)
     return root.status == Status.SUCCESS
 
 

@@ -472,26 +472,24 @@ class Geodude:
 
     # -- Primitives (delegate to primitives module) --------------------------
 
-    def pickup(self, object_name: str, **kwargs) -> bool:
-        """Pick up an object by name.
-
-        Automatically generates grasp TSRs from object geometry in prl_assets.
+    def pickup(self, target: str | None = None, **kwargs) -> bool:
+        """Pick up an object.
 
         Args:
-            object_name: MuJoCo body name (e.g., "can_0").
+            target: "can_0" (specific), "can" (any can), None (anything).
             arm: "left", "right", or None (try both).
+            verbose: Show BT tree status.
         """
         from geodude.primitives import pickup
-        return pickup(self, object_name, **kwargs)
+        return pickup(self, target, **kwargs)
 
-    def place(self, destination: str, **kwargs) -> bool:
+    def place(self, destination: str | None = None, **kwargs) -> bool:
         """Place held object at a destination.
 
-        Automatically generates drop-zone TSRs from destination geometry.
-
         Args:
-            destination: MuJoCo body name (e.g., "recycle_bin_0").
+            destination: "recycle_bin_0" (specific), "recycle_bin" (any), None (any).
             arm: "left", "right", or None (auto-detect).
+            verbose: Show BT tree status.
         """
         from geodude.primitives import place
         return place(self, destination, **kwargs)

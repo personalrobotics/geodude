@@ -169,6 +169,15 @@ _UR5E_JOINT_SUFFIXES = [
 
 
 @dataclass
+class PlanningConfig:
+    """Planning parameters — single source of truth for timeouts etc."""
+
+    timeout: float = 30.0  # seconds per planning attempt
+    base_heights: list[float] = field(default_factory=lambda: [0.2, 0.0, 0.4])
+    lift_height: float = 0.05  # meters to lift after grasping
+
+
+@dataclass
 class GeodudConfig:
     """Full robot configuration."""
 
@@ -178,6 +187,7 @@ class GeodudConfig:
     left_base: VentionBaseConfig | None = None
     right_base: VentionBaseConfig | None = None
     named_poses: dict[str, dict[str, list[float]]] = field(default_factory=dict)
+    planning: PlanningConfig = field(default_factory=PlanningConfig)
     debug: DebugConfig = field(default_factory=DebugConfig.from_env)
 
     def joint_names(self, arm_spec: GeodudeArmSpec) -> list[str]:

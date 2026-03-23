@@ -329,7 +329,7 @@ class Geodude:
         arm: Arm | str | None = None,
         base_heights: list[float] | None = None,
         strategy: str = "first",
-        timeout: float = 30.0,
+        timeout: float | None = None,
         seed: int | None = None,
     ) -> PlanResult | None:
         """Plan to TSR goals with arm/height interleaving.
@@ -357,7 +357,7 @@ class Geodude:
         arm: Arm | str | None = None,
         base_heights: list[float] | None = None,
         strategy: str = "first",
-        timeout: float = 30.0,
+        timeout: float | None = None,
         seed: int | None = None,
     ) -> PlanResult | None:
         """Plan to an EE pose with arm/height interleaving."""
@@ -378,7 +378,7 @@ class Geodude:
         arm: Arm | str | None = None,
         base_heights: list[float] | None = None,
         strategy: str = "first",
-        timeout: float = 30.0,
+        timeout: float | None = None,
         seed: int | None = None,
     ) -> PlanResult | None:
         """Core planning: try arm/height combinations, return first or best."""
@@ -419,7 +419,7 @@ class Geodude:
         *,
         goal_tsrs=None,
         pose: np.ndarray | None = None,
-        timeout: float = 30.0,
+        timeout: float | None = None,
         seed: int | None = None,
     ) -> PlanResult | None:
         """Plan with a single arm at a specific base height.
@@ -440,6 +440,10 @@ class Geodude:
                     return None
                 original_height = current_height
                 base.set_height(height)
+
+        # Resolve timeout from config if not specified
+        if timeout is None:
+            timeout = self.config.planning.timeout
 
         # Plan arm motion
         try:

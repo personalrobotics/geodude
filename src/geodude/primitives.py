@@ -56,7 +56,7 @@ def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
     bb.set(f"{ns}/robot", robot)
     bb.set(f"{ns}/arm", arm)
     bb.set(f"{ns}/arm_name", arm.config.name)
-    bb.set(f"{ns}/timeout", 30.0)
+    bb.set(f"{ns}/timeout", robot.config.planning.timeout)
     bb.set(f"{ns}/step_fn", step_fn)
 
     # Home config for recovery

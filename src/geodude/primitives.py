@@ -180,14 +180,16 @@ def place(
     return _tick_tree(geodude_place(ns), verbose=verbose)
 
 
-def go_home(robot: Geodude, *, verbose: bool | None = None) -> bool:
-    """Return all arms to ready configuration.
+def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = None) -> bool:
+    """Return arms to ready configuration.
 
     Args:
         robot: Geodude instance with active execution context.
+        arm: "left", "right", or None (both arms).
+        verbose: Show debug info.
 
     Returns:
-        True if all arms returned to ready.
+        True if all specified arms returned to ready.
     """
     ctx = robot._active_context
     if ctx is None:
@@ -198,8 +200,13 @@ def go_home(robot: Geodude, *, verbose: bool | None = None) -> bool:
 
     from mj_manipulator.cartesian import CartesianController
 
+    if arm is not None:
+        arms = [(arm, robot._resolve_arm(arm))]
+    else:
+        arms = [("left", robot.left_arm), ("right", robot.right_arm)]
+
     success = True
-    for side, arm_obj in [("left", robot.left_arm), ("right", robot.right_arm)]:
+    for side, arm_obj in arms:
         if "ready" not in robot.named_poses or side not in robot.named_poses["ready"]:
             continue
         ready = np.array(robot.named_poses["ready"][side])

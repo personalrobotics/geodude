@@ -51,6 +51,36 @@ class _GeodudeSimContext:
         return self._inner.__exit__(*args)
 
 
+class _ArmScope:
+    """Arm-scoped primitives wrapper.
+
+    Returned by ``robot.right`` / ``robot.left``. Delegates to the robot's
+    primitives with a fixed ``arm`` parameter::
+
+        robot.right.pickup("can")   # same as robot.pickup("can", arm="right")
+        robot.left.place("bin")     # same as robot.place("bin", arm="left")
+    """
+
+    def __init__(self, robot: "Geodude", side: str):
+        self._robot = robot
+        self._side = side
+
+    def pickup(self, target: str | None = None, **kwargs) -> bool:
+        return self._robot.pickup(target, arm=self._side, **kwargs)
+
+    def place(self, destination: str | None = None, **kwargs) -> bool:
+        return self._robot.place(destination, arm=self._side, **kwargs)
+
+    def go_home(self, **kwargs) -> bool:
+        from geodude.primitives import go_home
+        return go_home(self._robot, arm=self._side, **kwargs)
+
+    @property
+    def arm(self) -> Arm:
+        """The underlying mj_manipulator Arm."""
+        return self._robot._resolve_arm(self._side)
+
+
 class Geodude:
     """High-level interface for the Geodude bimanual robot.
 
@@ -177,6 +207,16 @@ class Geodude:
         )
 
     # -- Properties ----------------------------------------------------------
+
+    @property
+    def left(self) -> _ArmScope:
+        """Left arm primitives: ``robot.left.pickup("can")``."""
+        return _ArmScope(self, "left")
+
+    @property
+    def right(self) -> _ArmScope:
+        """Right arm primitives: ``robot.right.pickup("can")``."""
+        return _ArmScope(self, "right")
 
     @property
     def left_arm(self) -> Arm:

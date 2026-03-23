@@ -67,7 +67,11 @@ def _spawn_objects(robot, worktop_pos, object_specs: list[tuple[str, int]]):
         worktop_pos: [x, y, z] of worktop surface center.
         object_specs: list of (object_type, count) e.g. [("can", 3), ("potted_meat_can", 1)]
     """
-    table_hx, table_hy = 0.15, 0.08
+    # Use actual worktop extents (from site size) with margin for object radii
+    wt_id = mujoco.mj_name2id(robot.model, mujoco.mjtObj.mjOBJ_SITE, "worktop")
+    wt_size = robot.model.site_size[wt_id]
+    table_hx = wt_size[0] - 0.05  # 5cm margin from edges
+    table_hy = wt_size[1] - 0.05
     placer = TablePlacer(table_hx, table_hy)
 
     table_surface = np.eye(4)

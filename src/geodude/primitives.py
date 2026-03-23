@@ -87,19 +87,21 @@ def _tick_tree(root: py_trees.behaviour.Behaviour, verbose: bool = False) -> boo
 
 def pickup(
     robot: Geodude,
-    object_name: str,
+    target: str | None = None,
     *,
     arm: str | None = None,
     verbose: bool | None = None,
 ) -> bool:
-    """Pick up an object by name.
+    """Pick up an object.
 
-    Automatically generates grasp TSRs from the object's geometry in
-    prl_assets. Tries the specified arm, or both arms if not specified.
+    Automatically generates grasp TSRs from object geometry in prl_assets.
 
     Args:
         robot: Geodude instance with active execution context.
-        object_name: MuJoCo body name (e.g., "can_0").
+        target: What to pick up:
+            - "can_0" — specific instance
+            - "can" — any can in the scene
+            - None — anything graspable
         arm: "left", "right", or None (try both).
         verbose: Show BT tree status. None = use robot.config.debug.verbose.
 
@@ -116,7 +118,7 @@ def pickup(
     if arm is not None:
         ns = f"/{arm}"
         bb = _setup_blackboard(robot, ns)
-        bb.set(f"{ns}/object_name", object_name)
+        bb.set(f"{ns}/object_name", target)
         return _tick_tree(geodude_pickup(ns), verbose=verbose)
 
     import random
@@ -125,7 +127,7 @@ def pickup(
     for side in sides:
         ns = f"/{side}"
         bb = _setup_blackboard(robot, ns)
-        bb.set(f"{ns}/object_name", object_name)
+        bb.set(f"{ns}/object_name", target)
         if _tick_tree(geodude_pickup(ns), verbose=verbose):
             return True
 
@@ -134,19 +136,21 @@ def pickup(
 
 def place(
     robot: Geodude,
-    destination: str,
+    destination: str | None = None,
     *,
     arm: str | None = None,
     verbose: bool | None = None,
 ) -> bool:
     """Place the held object at a destination.
 
-    Automatically generates drop-zone TSRs from the destination's
-    geometry in prl_assets. Auto-detects which arm is holding.
+    Automatically generates drop-zone TSRs from destination geometry in prl_assets.
 
     Args:
         robot: Geodude instance with active execution context.
-        destination: MuJoCo body name (e.g., "recycle_bin_0").
+        destination: Where to place:
+            - "recycle_bin_0" — specific instance
+            - "recycle_bin" — any recycle bin in scene
+            - None — any valid destination
         arm: "left", "right", or None (auto-detect holding arm).
         verbose: Show BT tree status. None = use robot.config.debug.verbose.
 

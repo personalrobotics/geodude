@@ -115,6 +115,12 @@ def pickup(
     if verbose is None:
         verbose = robot.config.debug.verbose
 
+    # Quick check: are there any matching objects?
+    from geodude.bt.nodes import _find_scene_objects
+    if not _find_scene_objects(robot, target):
+        logger.info("No objects found for '%s'", target)
+        return False
+
     if arm is not None:
         ns = f"/{arm}"
         bb = _setup_blackboard(robot, ns)

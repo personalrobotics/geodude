@@ -66,9 +66,12 @@ def main():
     worktop_id = mujoco.mj_name2id(robot.model, mujoco.mjtObj.mjOBJ_SITE, "worktop")
     worktop_pos = robot.data.site_xpos[worktop_id].copy()
 
-    # Place bins and set arms to ready
+    # Place bins, raise bases to midpoint, set arms to ready
     robot.env.registry.activate("recycle_bin", pos=RIGHT_BIN_POS)
     robot.env.registry.activate("recycle_bin", pos=LEFT_BIN_POS)
+    for base in [robot.left_base, robot.right_base]:
+        if base is not None:
+            base.set_height(0.25)  # midpoint of 0–0.5m range
     for side, arm in [("left", robot.left_arm), ("right", robot.right_arm)]:
         q = np.array(robot.named_poses["ready"][side])
         for i, idx in enumerate(arm.joint_qpos_indices):

@@ -60,7 +60,7 @@ def main():
     print(f"  {args.cans} cans, up to {args.cycles} cycles")
     print(f"{'='*60}\n")
 
-    robot = Geodude(objects={"can": args.cans, "recycle_bin": 2})
+    robot = Geodude(objects={"can": args.cans, "potted_meat_can": 1, "recycle_bin": 2})
 
     # Worktop position for spawning
     worktop_id = mujoco.mj_name2id(robot.model, mujoco.mjtObj.mjOBJ_SITE, "worktop")
@@ -74,9 +74,11 @@ def main():
         for i, idx in enumerate(arm.joint_qpos_indices):
             robot.data.qpos[idx] = q[i]
 
-    # Spawn all cans
+    # Spawn objects on worktop
     for _ in range(args.cans):
         robot.env.registry.activate("can", pos=random_worktop_pos(worktop_pos))
+    robot.env.registry.activate("potted_meat_can",
+                                 pos=random_worktop_pos(worktop_pos))
     mujoco.mj_forward(robot.model, robot.data)
 
     with robot.sim(physics=args.physics, headless=args.headless) as ctx:
@@ -90,9 +92,9 @@ def main():
             # THE STUDENT API
             # ====================================
 
-            # Pick up any can (planner picks the easiest one)
-            if not robot.pickup("can"):
-                print("  No more cans to pick up")
+            # Pick up anything on the table
+            if not robot.pickup():
+                print("  Nothing left to pick up")
                 break
 
             # Which arm grabbed what?

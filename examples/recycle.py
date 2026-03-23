@@ -113,7 +113,7 @@ def main():
     mode = "Physics" if args.physics else "Kinematic"
     print(f"\n{'='*60}")
     print(f"  Geodude Recycling Demo — {mode} Mode")
-    print(f"  {args.cans} cans, up to {args.cycles} cycles")
+    print(f"  {args.cans} cans + 1 potted meat can, up to {args.cycles} cycles")
     print(f"{'='*60}\n")
 
     robot = Geodude(objects={"can": args.cans, "potted_meat_can": 1, "recycle_bin": 2})
@@ -170,6 +170,10 @@ def main():
             bin_type = "recycle_bin_0" if holding_side == "right" else "recycle_bin_1"
             if not robot.place(bin_type):
                 print("  Place FAILED")
+                # In kinematic mode, the released object is floating — hide it
+                if not args.physics:
+                    robot.env.registry.hide(held_object)
+                    mujoco.mj_forward(robot.model, robot.data)
                 robot.go_home()
                 continue
 

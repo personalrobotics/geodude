@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import argparse
 import logging
-import random
 
 import mujoco
 import numpy as np
+from asset_manager import AssetManager
+from prl_assets import OBJECTS_DIR
+from tsr.placement import TablePlacer
 
 from geodude import Geodude
 
@@ -33,24 +35,51 @@ logging.getLogger("toppra").setLevel(logging.WARNING)
 RIGHT_BIN_POS = [0.85, -0.35, 0.01]
 LEFT_BIN_POS = [-0.85, -0.35, 0.01]
 
-# Can half-height for spawning on worktop surface
-CAN_HALF_HEIGHT = 0.123 / 2
+# Object geometry from prl_assets
+_ASSETS = AssetManager(str(OBJECTS_DIR))
+_CAN_GP = _ASSETS.get("can")["geometric_properties"]
+_SPAM_GP = _ASSETS.get("potted_meat_can")["geometric_properties"]
 
 
-def random_worktop_pos(worktop_pos, half_height, existing_positions=None, min_sep=0.10):
-    """Random non-overlapping position on the worktop surface."""
-    if existing_positions is None:
-        existing_positions = []
-    for _ in range(50):
-        pos = [
-            worktop_pos[0] + random.uniform(-0.15, 0.15),
-            worktop_pos[1] + random.uniform(-0.08, 0.08),
-            worktop_pos[2] + half_height + 0.005,
-        ]
-        if all(np.sqrt((pos[0]-p[0])**2 + (pos[1]-p[1])**2) > min_sep
-               for p in existing_positions):
-            return pos
-    return pos  # fallback after 50 attempts
+def _sample_placements(worktop_pos, objects, min_sep=0.10):
+    """Sample non-overlapping placements on the worktop using TSR.
+
+    Args:
+        worktop_pos: [x, y, z] of worktop surface center.
+        objects: list of (count, geometric_properties) tuples.
+        min_sep: minimum XY separation between objects.
+
+    Returns:
+        List of (pos, half_height) tuples.
+    """
+    table_hx, table_hy = 0.15, 0.08
+    placer = TablePlacer(table_hx, table_hy)
+
+    table_surface = np.eye(4)
+    table_surface[:3, 3] = worktop_pos
+
+    placements = []
+    for count, gp in objects:
+        if gp["type"] == "cylinder":
+            templates = placer.place_cylinder(gp["radius"], gp["height"])
+            half_h = gp["height"] / 2
+        elif gp["type"] == "box":
+            templates = placer.place_box(gp["size"][0], gp["size"][1], gp["size"][2])
+            half_h = gp["size"][2] / 2
+        else:
+            continue
+
+        for _ in range(count):
+            tsr = templates[0].instantiate(table_surface)
+            for _attempt in range(50):
+                pose = tsr.sample()
+                pos = pose[:3, 3]
+                if all(np.linalg.norm(pos[:2] - np.array(p[:2])) > min_sep
+                       for p, _ in placements):
+                    break
+            placements.append((list(pos), half_h))
+
+    return placements
 
 
 def main():
@@ -84,15 +113,20 @@ def main():
         for i, idx in enumerate(arm.joint_qpos_indices):
             robot.data.qpos[idx] = q[i]
 
-    # Spawn objects on worktop (non-overlapping)
-    placed = []
-    for _ in range(args.cans):
-        pos = random_worktop_pos(worktop_pos, CAN_HALF_HEIGHT, placed)
-        robot.env.registry.activate("can", pos=pos)
-        placed.append(pos)
-    pos = random_worktop_pos(worktop_pos, 0.084 / 2, placed)
-    robot.env.registry.activate("potted_meat_can", pos=pos)
-    placed.append(pos)
+    # Spawn objects on worktop using TSR placement (non-overlapping)
+    placements = _sample_placements(worktop_pos, [
+        (args.cans, _CAN_GP),
+        (1, _SPAM_GP),
+    ])
+    can_idx = 0
+    spam_idx = 0
+    for pos, _ in placements:
+        if can_idx < args.cans:
+            robot.env.registry.activate("can", pos=pos)
+            can_idx += 1
+        else:
+            robot.env.registry.activate("potted_meat_can", pos=pos)
+            spam_idx += 1
     mujoco.mj_forward(robot.model, robot.data)
 
     with robot.sim(physics=args.physics, headless=args.headless) as ctx:

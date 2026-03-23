@@ -111,8 +111,11 @@ def _generate_tsrs_for_object(robot, body_name: str, obj_type: str) -> list:
         templates = hand.grasp_cylinder_side(gp["radius"], gp["height"])
         return [t.instantiate(T_bottom) for t in templates]
     elif gp.get("type") == "box":
-        # TODO: support box grasps
-        return []
+        size = gp["size"]  # [x, y, z]
+        T_bottom = obj_pose.copy()
+        T_bottom[2, 3] -= size[2] / 2
+        templates = hand.grasp_box(size[0], size[1], size[2])
+        return [t.instantiate(T_bottom) for t in templates]
 
     return []
 

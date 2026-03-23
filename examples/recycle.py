@@ -37,20 +37,35 @@ LEFT_BIN_POS = [-0.85, -0.35, 0.01]
 
 # Object geometry from prl_assets
 _ASSETS = AssetManager(str(OBJECTS_DIR))
-_CAN_GP = _ASSETS.get("can")["geometric_properties"]
-_SPAM_GP = _ASSETS.get("potted_meat_can")["geometric_properties"]
 
 
-def _sample_placements(worktop_pos, objects, min_sep=0.10):
-    """Sample non-overlapping placements on the worktop using TSR.
+def _has_object_collision(model, data, body_name: str) -> bool:
+    """Check if a body is in contact with any other object (not floor)."""
+    body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+    if body_id < 0:
+        return False
+    for i in range(data.ncon):
+        c = data.contact[i]
+        b1 = model.geom_bodyid[c.geom1]
+        b2 = model.geom_bodyid[c.geom2]
+        if (b1 == body_id or b2 == body_id) and c.dist < 0:
+            other = b2 if b1 == body_id else b1
+            other_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, other)
+            if other_name and other_name != "world":
+                return True
+    return False
+
+
+def _spawn_objects(robot, worktop_pos, object_specs: list[tuple[str, int]]):
+    """Spawn objects on the worktop, resampling if in collision.
+
+    Uses MuJoCo's collision checker — place object, mj_forward, check
+    contacts, resample if colliding.
 
     Args:
+        robot: Geodude instance.
         worktop_pos: [x, y, z] of worktop surface center.
-        objects: list of (count, geometric_properties) tuples.
-        min_sep: minimum XY separation between objects.
-
-    Returns:
-        List of (pos, half_height) tuples.
+        object_specs: list of (object_type, count) e.g. [("can", 3), ("potted_meat_can", 1)]
     """
     table_hx, table_hy = 0.15, 0.08
     placer = TablePlacer(table_hx, table_hy)
@@ -58,28 +73,33 @@ def _sample_placements(worktop_pos, objects, min_sep=0.10):
     table_surface = np.eye(4)
     table_surface[:3, 3] = worktop_pos
 
-    placements = []
-    for count, gp in objects:
+    for obj_type, count in object_specs:
+        gp = _ASSETS.get(obj_type)["geometric_properties"]
+
         if gp["type"] == "cylinder":
             templates = placer.place_cylinder(gp["radius"], gp["height"])
-            half_h = gp["height"] / 2
         elif gp["type"] == "box":
             templates = placer.place_box(gp["size"][0], gp["size"][1], gp["size"][2])
-            half_h = gp["size"][2] / 2
         else:
             continue
 
         for _ in range(count):
             tsr = templates[0].instantiate(table_surface)
-            for _attempt in range(50):
-                pose = tsr.sample()
-                pos = pose[:3, 3]
-                if all(np.linalg.norm(pos[:2] - np.array(p[:2])) > min_sep
-                       for p, _ in placements):
-                    break
-            placements.append((list(pos), half_h))
+            # Activate at a temporary position, then resample until collision-free
+            pos = tsr.sample()[:3, 3]
+            instance_name = robot.env.registry.activate(obj_type, pos=list(pos))
+            mujoco.mj_forward(robot.model, robot.data)
 
-    return placements
+            for _attempt in range(50):
+                if not _has_object_collision(robot.model, robot.data, instance_name):
+                    break
+                # Resample position via freejoint qpos
+                pos = tsr.sample()[:3, 3]
+                body_id = mujoco.mj_name2id(robot.model, mujoco.mjtObj.mjOBJ_BODY, instance_name)
+                jnt_id = robot.model.body_jntadr[body_id]
+                qpos_adr = robot.model.jnt_qposadr[jnt_id]
+                robot.data.qpos[qpos_adr:qpos_adr + 3] = pos
+                mujoco.mj_forward(robot.model, robot.data)
 
 
 def main():
@@ -113,20 +133,11 @@ def main():
         for i, idx in enumerate(arm.joint_qpos_indices):
             robot.data.qpos[idx] = q[i]
 
-    # Spawn objects on worktop using TSR placement (non-overlapping)
-    placements = _sample_placements(worktop_pos, [
-        (args.cans, _CAN_GP),
-        (1, _SPAM_GP),
+    # Spawn objects on worktop (non-overlapping, TSR-sampled)
+    _spawn_objects(robot, worktop_pos, [
+        ("can", args.cans),
+        ("potted_meat_can", 1),
     ])
-    can_idx = 0
-    spam_idx = 0
-    for pos, _ in placements:
-        if can_idx < args.cans:
-            robot.env.registry.activate("can", pos=pos)
-            can_idx += 1
-        else:
-            robot.env.registry.activate("potted_meat_can", pos=pos)
-            spam_idx += 1
     mujoco.mj_forward(robot.model, robot.data)
 
     with robot.sim(physics=args.physics, headless=args.headless) as ctx:

@@ -38,12 +38,21 @@ def _find_scene_objects(robot, target: str | None) -> list[tuple[str, str]]:
     model = robot.model
     gm = robot.grasp_manager
 
-    # Collect all body names in the scene
+    # Collect all visible body names in the scene
+    registry = robot.env.registry if hasattr(robot.env, 'registry') else None
     all_bodies = []
     for i in range(model.nbody):
         name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, i)
-        if name:
-            all_bodies.append(name)
+        if not name:
+            continue
+        # Skip hidden/inactive objects
+        if registry is not None:
+            try:
+                if not registry.is_active(name):
+                    continue
+            except Exception:
+                pass  # not a registry-managed object
+        all_bodies.append(name)
 
     if target is not None:
         # Check if it's a specific instance (has _N suffix)

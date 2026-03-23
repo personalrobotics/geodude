@@ -172,6 +172,8 @@ def go_home(robot: Geodude) -> bool:
     if ctx is None:
         raise RuntimeError("No active execution context. Use 'with robot.sim() as ctx:'")
 
+    from mj_manipulator.cartesian import CartesianController
+
     success = True
     for side, arm_obj in [("left", robot.left_arm), ("right", robot.right_arm)]:
         if "ready" not in robot.named_poses or side not in robot.named_poses["ready"]:
@@ -181,10 +183,24 @@ def go_home(robot: Geodude) -> bool:
             path = arm_obj.plan_to_configuration(ready)
         except Exception:
             path = None
+
+        if path is None:
+            # Retract up first, then retry
+            ctrl = CartesianController.from_arm(arm_obj)
+            ctrl.move(
+                np.array([0.0, 0.0, 0.10, 0.0, 0.0, 0.0]),
+                dt=0.008, max_distance=0.10,
+            )
+            try:
+                path = arm_obj.plan_to_configuration(ready)
+            except Exception:
+                path = None
+
         if path is not None:
             traj = arm_obj.retime(path)
             ctx.execute(traj)
         else:
+            logger.warning("Could not plan %s arm to ready", side)
             success = False
     ctx.sync()
     return success

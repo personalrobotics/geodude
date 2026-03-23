@@ -37,13 +37,20 @@ LEFT_BIN_POS = [-0.85, -0.35, 0.01]
 CAN_HALF_HEIGHT = 0.123 / 2
 
 
-def random_worktop_pos(worktop_pos):
-    """Random position on the worktop surface for a can."""
-    return [
-        worktop_pos[0] + random.uniform(-0.15, 0.15),
-        worktop_pos[1] + random.uniform(-0.08, 0.08),
-        worktop_pos[2] + CAN_HALF_HEIGHT + 0.005,
-    ]
+def random_worktop_pos(worktop_pos, half_height, existing_positions=None, min_sep=0.10):
+    """Random non-overlapping position on the worktop surface."""
+    if existing_positions is None:
+        existing_positions = []
+    for _ in range(50):
+        pos = [
+            worktop_pos[0] + random.uniform(-0.15, 0.15),
+            worktop_pos[1] + random.uniform(-0.08, 0.08),
+            worktop_pos[2] + half_height + 0.005,
+        ]
+        if all(np.sqrt((pos[0]-p[0])**2 + (pos[1]-p[1])**2) > min_sep
+               for p in existing_positions):
+            return pos
+    return pos  # fallback after 50 attempts
 
 
 def main():
@@ -77,11 +84,15 @@ def main():
         for i, idx in enumerate(arm.joint_qpos_indices):
             robot.data.qpos[idx] = q[i]
 
-    # Spawn objects on worktop
+    # Spawn objects on worktop (non-overlapping)
+    placed = []
     for _ in range(args.cans):
-        robot.env.registry.activate("can", pos=random_worktop_pos(worktop_pos))
-    robot.env.registry.activate("potted_meat_can",
-                                 pos=random_worktop_pos(worktop_pos))
+        pos = random_worktop_pos(worktop_pos, CAN_HALF_HEIGHT, placed)
+        robot.env.registry.activate("can", pos=pos)
+        placed.append(pos)
+    pos = random_worktop_pos(worktop_pos, 0.084 / 2, placed)
+    robot.env.registry.activate("potted_meat_can", pos=pos)
+    placed.append(pos)
     mujoco.mj_forward(robot.model, robot.data)
 
     with robot.sim(physics=args.physics, headless=args.headless) as ctx:

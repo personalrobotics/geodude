@@ -35,31 +35,59 @@ Bimanual manipulation with the Geodude robot, built on [mj_manipulator](https://
 ```python
 from geodude import Geodude
 
-robot = Geodude(objects={"can": 1, "recycle_bin": 2})
+robot = Geodude(objects={"can": 3, "recycle_bin": 2})
 
 with robot.sim() as ctx:
-    robot.pickup("can_0")
-    robot.place("recycle_bin_0")
+    robot.pickup("can")           # pick up any can
+    robot.place("recycle_bin")    # place in any bin
     robot.go_home()
 ```
 
-That's it. TSR generation, planning, execution, grasp detection, and recovery are all automatic.
+That's it. Object discovery, TSR generation, planning, execution, grasp detection, and recovery are all automatic.
+
+## Smart Object Resolution
+
+Primitives accept instance names, type names, or nothing:
+
+```python
+robot.pickup("can_0")         # specific instance
+robot.pickup("can")           # any can in the scene
+robot.pickup()                # anything graspable
+
+robot.place("recycle_bin_0")  # specific bin
+robot.place("recycle_bin")    # any bin
+robot.place()                 # any valid destination
+```
+
+All matching objects' TSRs are combined and sent to the planner — it picks whichever is easiest to reach.
+
+## Arm Selection
+
+By default, both arms are tried (random order). Specify an arm explicitly:
+
+```python
+robot.right.pickup("can")        # right arm only
+robot.left.place("recycle_bin")   # left arm only
+robot.right.go_home()             # right arm only
+
+robot.pickup("can", arm="right")  # equivalent to above
+```
 
 ## Architecture
 
 ```
 ┌──────────────────────────────────────────────────────┐
 │  Your code                                           │
-│  robot.pickup("can_0")                               │
-│  robot.place("recycle_bin_0")                        │
+│  robot.pickup("can")                                 │
+│  robot.right.place("recycle_bin")                    │
 │  robot.go_home()                                     │
 └──────────────────────┬───────────────────────────────┘
                        │
 ┌──────────────────────┴───────────────────────────────┐
 │  geodude  (this package)                             │
-│  • Geodude class — compose two Arms + VentionBases   │
-│  • py_trees behavior trees — pickup/place with       │
-│    automatic recovery, bimanual arm selection         │
+│  • Smart object resolution (instance/type/any)       │
+│  • py_trees behavior trees with automatic recovery   │
+│  • Bimanual arm selection + arm-scoped primitives    │
 │  • Auto TSR generation from prl_assets geometry      │
 │  • VentionBase — linear actuator with collision check│
 └──────────────────────┬───────────────────────────────┘
@@ -93,7 +121,7 @@ uv run mjpython examples/recycle.py --headless --cycles 5
 Pass `verbose=True` to see the behavior tree status after execution:
 
 ```python
-robot.pickup("can_0", verbose=True)
+robot.pickup("can", verbose=True)
 ```
 
 ```
@@ -119,20 +147,9 @@ robot.config.debug.verbose = True  # all primitives show tree status
 robot.config.debug.enable_all()    # verbose + all debug logging
 ```
 
-## Bimanual Planning
-
-The robot-level planner tries both arms with optional base height search:
-
-```python
-result = robot.plan_to_tsrs(grasp_tsrs, base_heights=[0.2, 0.0, 0.4])
-if result is not None:
-    ctx.execute(result)
-```
-
 ## Configuration
 
 ```python
-# Planning parameters (single source of truth)
 robot.config.planning.timeout = 60.0        # seconds per planning attempt
 robot.config.planning.base_heights = [0.2]  # heights to search
 robot.config.planning.lift_height = 0.10    # meters to lift after grasping
@@ -142,11 +159,11 @@ robot.config.planning.lift_height = 0.10    # meters to lift after grasping
 
 ```
 src/geodude/
-├── robot.py          # Geodude class — bimanual composition
+├── robot.py          # Geodude class + _ArmScope for robot.right/left
 ├── config.py         # PlanningConfig, VentionBaseConfig, DebugConfig
 ├── primitives.py     # pickup() / place() / go_home() — BT-backed
 ├── bt/
-│   ├── nodes.py      # GenerateGrasps, GenerateDropZone
+│   ├── nodes.py      # GenerateGrasps, GenerateDropZone + smart resolution
 │   └── subtrees.py   # geodude_pickup, geodude_place
 ├── vention_base.py   # Linear actuator planning + collision checking
 └── __init__.py       # Public API + mj_manipulator re-exports

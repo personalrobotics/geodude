@@ -320,10 +320,16 @@ class Geodude:
                 ctx.arm("left").grasp("can_0")
         """
         arms = {"left": self._left_arm, "right": self._right_arm}
+        entities = {}
+        if self._left_base is not None:
+            entities[self._left_base.config.name] = self._left_base
+        if self._right_base is not None:
+            entities[self._right_base.config.name] = self._right_base
         inner = SimContext(
             self.model, self.data, arms,
             physics=physics, headless=headless,
             viewer=viewer, viewer_fps=viewer_fps,
+            entities=entities,
         )
         return _GeodudeSimContext(inner, self)
 
@@ -464,28 +470,30 @@ class Geodude:
     ) -> PlanResult | None:
         """Plan with a single arm at a specific base height.
 
-        Moves the base directly (kinematic set_height) before planning
-        the arm, so the planner sees the correct workspace. If planning
-        fails, restores the original base height.
+        Teleports the base for planning (so IK/RRT sees the correct
+        workspace), then restores it. The base trajectory is included
+        in the PlanResult so ctx.execute() moves the base properly
+        through physics/kinematics.
         """
         base = self._get_base_for_arm(arm)
         original_height = None
+        base_traj = None
 
-        # Move base if requested
+        # Plan base trajectory and teleport for arm planning
         if height is not None and base is not None:
             current_height = base.get_height()
             if abs(current_height - height) > 0.001:
-                # Check collision before moving
-                if not base._is_path_collision_free(current_height, height):
-                    return None
+                base_traj = base.plan_to(height, check_collisions=True)
+                if base_traj is None:
+                    return None  # path blocked by collision
                 original_height = current_height
-                base.set_height(height)
+                base.set_height(height)  # teleport for arm planning
 
         # Resolve timeout from config if not specified
         if timeout is None:
             timeout = self.config.planning.timeout
 
-        # Plan arm motion
+        # Plan arm motion (with base at target height)
         try:
             if goal_tsrs is not None:
                 tsrs = goal_tsrs if isinstance(goal_tsrs, list) else [goal_tsrs]
@@ -503,11 +511,17 @@ class Geodude:
                 base.set_height(original_height)
             return None
 
+        # Restore base — execution will move it properly
+        if original_height is not None:
+            base.set_height(original_height)
+
         arm_traj = arm.retime(path)
 
         return PlanResult(
             arm_name=arm.config.name,
             arm_trajectory=arm_traj,
+            base_trajectory=base_traj,
+            base_height=height,
         )
 
     # -- Scene setup ---------------------------------------------------------

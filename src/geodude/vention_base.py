@@ -155,7 +155,10 @@ class VentionBase:
         if traj is None:
             return False
 
-        # Step through trajectory, setting both qpos and ctrl
+        import time as _time
+
+        # Step through trajectory at real-time pace
+        dt = traj.timestamps[1] - traj.timestamps[0] if traj.num_waypoints > 1 else 0.008
         for i in range(traj.num_waypoints):
             h = float(traj.positions[i, 0])
             self.data.qpos[self._qpos_idx] = h
@@ -163,6 +166,7 @@ class VentionBase:
             mujoco.mj_forward(self.model, self.data)
             if viewer is not None:
                 viewer.sync()
+                _time.sleep(dt)
 
         # Ensure final position is exact
         self.data.qpos[self._qpos_idx] = height

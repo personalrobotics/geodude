@@ -136,9 +136,10 @@ def pickup(
             current = base.get_height()
             target_h = min(current + 0.15, base.height_range[1])
             if target_h > current + 0.01:
-                viewer = getattr(ctx, '_viewer', None)
-                ok = base.move_to(target_h, check_collisions=True, viewer=viewer)
-                if not ok:
+                base_traj = base.plan_to(target_h, check_collisions=True)
+                if base_traj is not None:
+                    ctx.execute(base_traj)
+                else:
                     logger.info("Base lift to %.2fm blocked by collision", target_h)
             ctx.sync()
         return True
@@ -276,11 +277,12 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
             logger.warning("Could not plan %s arm to ready", side)
             success = False
     # Return bases to starting height (0.25 midpoint)
-    viewer = getattr(ctx, '_viewer', None)
     for _, arm_obj in arms:
         base = robot._get_base_for_arm(arm_obj)
         if base is not None and abs(base.get_height() - 0.25) > 0.01:
-            base.move_to(0.25, check_collisions=True, viewer=viewer)
+            base_traj = base.plan_to(0.25, check_collisions=True)
+            if base_traj is not None:
+                ctx.execute(base_traj)
 
     ctx.sync()
     return success

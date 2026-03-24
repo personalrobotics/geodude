@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING
 
 import mujoco
@@ -73,9 +74,30 @@ class VentionBase:
                 self._arm_body_ids.add(i)
                 self._add_child_bodies(i)
 
+    # -- Entity protocol (for SimContext registration) -----------------------
+
     @property
     def name(self) -> str:
         return self.config.name
+
+    @property
+    def joint_qpos_indices(self) -> list[int]:
+        return [self._qpos_idx]
+
+    @property
+    def joint_qvel_indices(self) -> list[int]:
+        return [self.model.jnt_dofadr[self._joint_id]]
+
+    @property
+    def actuator_ids(self) -> list[int]:
+        return [self._actuator_id]
+
+    @property
+    def grasp_manager(self):
+        """Grasp manager from the associated arm (for attached object tracking)."""
+        return self._arm.grasp_manager
+
+    # -- Height access ------------------------------------------------------
 
     def get_height(self) -> float:
         """Current height in meters."""
@@ -144,13 +166,19 @@ class VentionBase:
     ) -> bool:
         """Move to target height with trapezoidal velocity profile.
 
-        Animates the base motion matching real Vention hardware behavior.
-        Works in both kinematic and physics mode — steps through the
-        trajectory setting qpos and ctrl at each waypoint.
+        .. deprecated::
+            Use ``base.plan_to(height)`` and ``ctx.execute(traj)`` instead.
+            This method bypasses SimContext and freezes physics during motion.
 
         Returns:
             True if movement succeeded, False if blocked by collision.
         """
+        warnings.warn(
+            "VentionBase.move_to() bypasses SimContext and freezes physics. "
+            "Use base.plan_to(height) + ctx.execute(traj) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         traj = self.plan_to(height, check_collisions=check_collisions)
         if traj is None:
             return False

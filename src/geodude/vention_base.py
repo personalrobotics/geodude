@@ -206,7 +206,22 @@ class VentionBase:
             mujoco.mj_forward(self.model, self.data)
 
     def _has_arm_collision(self) -> bool:
-        """Check if arm is in collision with environment."""
+        """Check if arm is in collision with environment.
+
+        Grasp-aware: contacts between the arm and grasped objects are
+        allowed (the arm is holding them, not colliding).
+        """
+        # Get grasped body names from grasp manager
+        grasped_bodies = set()
+        gm = self._arm.grasp_manager
+        if gm is not None:
+            for obj_name in gm.grasped:
+                body_id = mujoco.mj_name2id(
+                    self.model, mujoco.mjtObj.mjOBJ_BODY, obj_name,
+                )
+                if body_id >= 0:
+                    grasped_bodies.add(body_id)
+
         for i in range(self.data.ncon):
             contact = self.data.contact[i]
             body1 = self.model.geom_bodyid[contact.geom1]
@@ -215,7 +230,16 @@ class VentionBase:
             body1_is_arm = body1 in self._arm_body_ids
             body2_is_arm = body2 in self._arm_body_ids
 
+            # Skip arm-to-arm contacts (self-collision handled by MuJoCo excludes)
+            if body1_is_arm and body2_is_arm:
+                continue
+
+            # Arm touching non-arm
             if body1_is_arm != body2_is_arm:
+                other = body2 if body1_is_arm else body1
+                # Allow contacts with grasped objects
+                if other in grasped_bodies:
+                    continue
                 return True
 
         return False

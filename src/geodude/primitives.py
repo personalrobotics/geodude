@@ -119,7 +119,7 @@ def pickup(
     from geodude.bt.nodes import _find_scene_objects
     if not _find_scene_objects(robot, target):
         desc = f"'{target}'" if target else "any object"
-        print(f"Pickup failed: no graspable objects found for {desc}")
+        logger.warning("Pickup failed: no graspable objects found for %s", desc)
         return False
 
     def _try_pickup(side: str) -> bool:
@@ -136,14 +136,16 @@ def pickup(
             target_h = min(current + 0.15, base.height_range[1])
             if target_h > current + 0.01:
                 viewer = getattr(ctx, '_viewer', None)
-                base.move_to(target_h, check_collisions=True, viewer=viewer)
+                ok = base.move_to(target_h, check_collisions=True, viewer=viewer)
+                if not ok:
+                    logger.info("Base lift to %.2fm blocked by collision", target_h)
             ctx.sync()
         return True
 
     if arm is not None:
         if _try_pickup(arm):
             return True
-        print(f"Pickup failed: {arm} arm could not pick up '{target}'")
+        logger.warning("Pickup failed: %s arm could not pick up '%s'", arm, target)
         return False
 
     import random
@@ -154,7 +156,7 @@ def pickup(
             return True
 
     desc = f"'{target}'" if target else "any object"
-    print(f"Pickup failed: neither arm could pick up {desc} (tried {', '.join(sides)})")
+    logger.warning("Pickup failed: neither arm could pick up %s (tried %s)", desc, ", ".join(sides))
     return False
 
 
@@ -192,7 +194,7 @@ def place(
                 arm = side
                 break
         if arm is None:
-            print("Place failed: no arm is holding an object")
+            logger.warning("Place failed: no arm is holding an object")
             return False
 
     if verbose is None:
@@ -203,7 +205,7 @@ def place(
     bb.set(f"{ns}/destination", destination)
     ok = _tick_tree(geodude_place(ns), verbose=verbose)
     if not ok:
-        print(f"Place failed: {arm} arm could not place at '{destination}'")
+        logger.warning("Place failed: %s arm could not place at '%s'", arm, destination)
     return ok
 
 
@@ -259,7 +261,7 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
             ctx.execute(traj)
         else:
             if verbose:
-                print(f"  go_home: {side} arm FAILED to plan")
+                logger.debug("go_home: %s arm failed to plan", side)
             logger.warning("Could not plan %s arm to ready", side)
             success = False
     # Return bases to starting height (0.25 midpoint)

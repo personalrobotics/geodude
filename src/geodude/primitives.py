@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+import mujoco
 import numpy as np
 import py_trees
 from py_trees.common import Access, Status
@@ -200,12 +201,22 @@ def place(
     if verbose is None:
         verbose = robot.config.debug.verbose
 
+    # Capture held object before the tree releases the grasp
+    held = list(robot.grasp_manager.get_grasped_by(arm))
+    held_object = held[0] if held else None
+
     ns = f"/{arm}"
     bb = _setup_blackboard(robot, ns)
     bb.set(f"{ns}/destination", destination)
     ok = _tick_tree(geodude_place(ns), verbose=verbose)
     if not ok:
         logger.warning("Place failed: %s arm could not place at '%s'", arm, destination)
+
+    # Hide the placed/released object so it doesn't float (kinematic) or clutter
+    if held_object and robot.env.registry.is_active(held_object):
+        robot.env.registry.hide(held_object)
+        mujoco.mj_forward(robot.model, robot.data)
+
     return ok
 
 

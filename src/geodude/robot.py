@@ -510,6 +510,61 @@ class Geodude:
             arm_trajectory=arm_traj,
         )
 
+    # -- Scene setup ---------------------------------------------------------
+
+    def setup_scene(
+        self,
+        fixtures: dict[str, list[list[float]]] | None = None,
+    ) -> None:
+        """Set up the scene: place fixtures and ready the robot.
+
+        Activates fixture objects at specified positions, sets bases to
+        midpoint height, and arms to "ready" keyframe.
+
+        Args:
+            fixtures: Stationary objects and their positions, e.g.
+                ``{"recycle_bin": [[0.85, -0.35, 0.01], [-0.85, -0.35, 0.01]]}``
+        """
+        fixtures = fixtures or {}
+
+        # 1. Activate fixtures at specified positions
+        for obj_type, positions in fixtures.items():
+            for pos in positions:
+                self._env.registry.activate(obj_type, pos=list(pos))
+
+        # 2. Set bases to midpoint
+        for base in [self._left_base, self._right_base]:
+            if base is not None:
+                base.set_height(0.25)
+
+        # 3. Set arms to ready keyframe
+        if "ready" in self._named_poses:
+            for side, arm in [("left", self._left_arm), ("right", self._right_arm)]:
+                q = np.array(self._named_poses["ready"][side])
+                for i, idx in enumerate(arm.joint_qpos_indices):
+                    self.data.qpos[idx] = q[i]
+
+        mujoco.mj_forward(self.model, self.data)
+
+    def holding(self) -> tuple[str, str] | None:
+        """Return which arm is holding an object.
+
+        Returns:
+            ``(side, object_name)`` if either arm is holding, else ``None``.
+
+        Example::
+
+            result = robot.holding()
+            if result:
+                side, obj = result
+                print(f"{side} arm is holding {obj}")
+        """
+        for side in ("left", "right"):
+            held = list(self.grasp_manager.get_grasped_by(side))
+            if held:
+                return (side, held[0])
+        return None
+
     # -- Scene queries -------------------------------------------------------
 
     def find_objects(self, target: str | None = None) -> list[str]:

@@ -158,12 +158,17 @@ class VentionBase:
         import time as _time
 
         # Step through trajectory at real-time pace
+        gm = self._arm.grasp_manager
         dt = traj.timestamps[1] - traj.timestamps[0] if traj.num_waypoints > 1 else 0.008
         for i in range(traj.num_waypoints):
             h = float(traj.positions[i, 0])
             self.data.qpos[self._qpos_idx] = h
             self.data.ctrl[self._actuator_id] = h
             mujoco.mj_forward(self.model, self.data)
+            # Move grasped objects with the arm
+            if gm is not None:
+                gm.update_attached_poses()
+                mujoco.mj_forward(self.model, self.data)
             if viewer is not None:
                 viewer.sync()
                 _time.sleep(dt)
@@ -172,6 +177,9 @@ class VentionBase:
         self.data.qpos[self._qpos_idx] = height
         self.data.ctrl[self._actuator_id] = height
         mujoco.mj_forward(self.model, self.data)
+        if gm is not None:
+            gm.update_attached_poses()
+            mujoco.mj_forward(self.model, self.data)
 
         return True
 

@@ -262,5 +262,12 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
                 print(f"  go_home: {side} arm FAILED to plan")
             logger.warning("Could not plan %s arm to ready", side)
             success = False
+    # Return bases to starting height (0.25 midpoint)
+    viewer = getattr(ctx, '_viewer', None)
+    for _, arm_obj in arms:
+        base = robot._get_base_for_arm(arm_obj)
+        if base is not None and abs(base.get_height() - 0.25) > 0.01:
+            base.move_to(0.25, check_collisions=True, viewer=viewer)
+
     ctx.sync()
     return success

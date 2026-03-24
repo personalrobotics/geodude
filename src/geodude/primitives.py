@@ -118,25 +118,43 @@ def pickup(
     # Quick check: are there any matching objects?
     from geodude.bt.nodes import _find_scene_objects
     if not _find_scene_objects(robot, target):
-        logger.info("No objects found for '%s'", target)
+        desc = f"'{target}'" if target else "any object"
+        print(f"Pickup failed: no graspable objects found for {desc}")
         return False
 
-    if arm is not None:
-        ns = f"/{arm}"
+    def _try_pickup(side: str) -> bool:
+        ns = f"/{side}"
         bb = _setup_blackboard(robot, ns)
         bb.set(f"{ns}/object_name", target)
-        return _tick_tree(geodude_pickup(ns), verbose=verbose)
+        if not _tick_tree(geodude_pickup(ns), verbose=verbose):
+            return False
+        # Raise base to clear worktop clutter (collision-checked)
+        base = robot._get_base_for_arm(robot._resolve_arm(side))
+        if base is not None:
+            current = base.get_height()
+            target_h = min(current + 0.15, base.height_range[1])
+            if target_h > current + 0.01:
+                traj = base.plan_to(target_h)
+                if traj is not None:
+                    base.set_height(target_h)
+                    ctx.sync()
+        return True
+
+    if arm is not None:
+        if _try_pickup(arm):
+            return True
+        print(f"Pickup failed: {arm} arm could not pick up '{target}'")
+        return False
 
     import random
     sides = ["right", "left"]
     random.shuffle(sides)
     for side in sides:
-        ns = f"/{side}"
-        bb = _setup_blackboard(robot, ns)
-        bb.set(f"{ns}/object_name", target)
-        if _tick_tree(geodude_pickup(ns), verbose=verbose):
+        if _try_pickup(side):
             return True
 
+    desc = f"'{target}'" if target else "any object"
+    print(f"Pickup failed: neither arm could pick up {desc} (tried {', '.join(sides)})")
     return False
 
 
@@ -174,7 +192,7 @@ def place(
                 arm = side
                 break
         if arm is None:
-            logger.warning("No arm is holding an object")
+            print("Place failed: no arm is holding an object")
             return False
 
     if verbose is None:
@@ -183,7 +201,10 @@ def place(
     ns = f"/{arm}"
     bb = _setup_blackboard(robot, ns)
     bb.set(f"{ns}/destination", destination)
-    return _tick_tree(geodude_place(ns), verbose=verbose)
+    ok = _tick_tree(geodude_place(ns), verbose=verbose)
+    if not ok:
+        print(f"Place failed: {arm} arm could not place at '{destination}'")
+    return ok
 
 
 def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = None) -> bool:

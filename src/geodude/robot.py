@@ -510,6 +510,25 @@ class Geodude:
             arm_trajectory=arm_traj,
         )
 
+    # -- Scene queries -------------------------------------------------------
+
+    def find_objects(self, target: str | None = None) -> list[str]:
+        """Find objects in the scene.
+
+        Args:
+            target: "can_0" (specific), "can" (type), None (all graspable).
+
+        Returns:
+            List of body names on the table (active, not grasped, not hidden).
+
+        Example::
+
+            robot.find_objects()         # ['can_0', 'can_1', 'potted_meat_can_0']
+            robot.find_objects("can")    # ['can_0', 'can_1']
+        """
+        from geodude.bt.nodes import _find_scene_objects
+        return [name for name, _ in _find_scene_objects(self, target)]
+
     # -- Primitives (delegate to primitives module) --------------------------
 
     def pickup(self, target: str | None = None, **kwargs) -> bool:

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import mujoco
 import numpy as np
 
-from mj_manipulator import Arm, KinematicExecutor, Trajectory
+from mj_manipulator import Arm, Trajectory
 from mj_manipulator.trajectory import create_linear_trajectory
 
 from geodude.config import VentionBaseConfig
@@ -142,9 +142,11 @@ class VentionBase:
         check_collisions: bool = True,
         viewer=None,
     ) -> bool:
-        """Move to target height with collision checking (kinematic mode).
+        """Move to target height with trapezoidal velocity profile.
 
-        For execution through SimContext, use plan_to() instead.
+        Animates the base motion matching real Vention hardware behavior.
+        Works in both kinematic and physics mode — steps through the
+        trajectory setting qpos and ctrl at each waypoint.
 
         Returns:
             True if movement succeeded, False if blocked by collision.
@@ -153,18 +155,21 @@ class VentionBase:
         if traj is None:
             return False
 
-        executor = KinematicExecutor(
-            model=self.model,
-            data=self.data,
-            joint_qpos_indices=[self._qpos_idx],
-            viewer=viewer,
-        )
-        success = executor.execute(traj)
+        # Step through trajectory, setting both qpos and ctrl
+        for i in range(traj.num_waypoints):
+            h = float(traj.positions[i, 0])
+            self.data.qpos[self._qpos_idx] = h
+            self.data.ctrl[self._actuator_id] = h
+            mujoco.mj_forward(self.model, self.data)
+            if viewer is not None:
+                viewer.sync()
 
-        if success:
-            self.data.ctrl[self._actuator_id] = height
+        # Ensure final position is exact
+        self.data.qpos[self._qpos_idx] = height
+        self.data.ctrl[self._actuator_id] = height
+        mujoco.mj_forward(self.model, self.data)
 
-        return success
+        return True
 
     def _is_path_collision_free(self, start: float, end: float) -> bool:
         """Check if linear path is collision-free."""

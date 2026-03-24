@@ -128,16 +128,15 @@ def pickup(
         bb.set(f"{ns}/object_name", target)
         if not _tick_tree(geodude_pickup(ns), verbose=verbose):
             return False
-        # Raise base to clear worktop clutter (collision-checked)
+        # Raise base to clear worktop clutter (collision-checked, animated)
         base = robot._get_base_for_arm(robot._resolve_arm(side))
         if base is not None:
             current = base.get_height()
             target_h = min(current + 0.15, base.height_range[1])
             if target_h > current + 0.01:
-                traj = base.plan_to(target_h)
-                if traj is not None:
-                    base.set_height(target_h)
-                    ctx.sync()
+                viewer = getattr(ctx, '_viewer', None)
+                base.move_to(target_h, check_collisions=True, viewer=viewer)
+                ctx.sync()
         return True
 
     if arm is not None:

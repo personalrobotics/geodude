@@ -34,7 +34,6 @@ def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
     """Set up blackboard with robot state for a given arm namespace."""
     ctx = robot._active_context
     arm = robot._resolve_arm(ns.strip("/"))
-    step_fn = ctx.step if hasattr(ctx, '_controller') and ctx._controller is not None else None
 
     bb = py_trees.blackboard.Client(name=f"primitives{ns}")
     keys = [
@@ -43,7 +42,7 @@ def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
         f"{ns}/arm", f"{ns}/arm_name",
         f"{ns}/grasp_tsrs", f"{ns}/place_tsrs",
         f"{ns}/timeout", f"{ns}/object_name", f"{ns}/destination",
-        f"{ns}/goal_config", f"{ns}/step_fn", f"{ns}/grasped",
+        f"{ns}/goal_config", f"{ns}/grasped",
         f"{ns}/path", f"{ns}/trajectory",
         f"{ns}/twist", f"{ns}/distance",
     ]
@@ -58,7 +57,6 @@ def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
     bb.set(f"{ns}/arm", arm)
     bb.set(f"{ns}/arm_name", arm.config.name)
     bb.set(f"{ns}/timeout", robot.config.planning.timeout)
-    bb.set(f"{ns}/step_fn", step_fn)
 
     # Home config for recovery
     side = arm.config.name
@@ -258,7 +256,12 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
 
         if path is None:
             # Retract up first, then retry
-            ctrl = CartesianController.from_arm(arm_obj)
+            arm_name = arm_obj.config.name
+
+            def _step_fn(q, qd):
+                ctx.step_cartesian(arm_name, q, qd)
+
+            ctrl = CartesianController.from_arm(arm_obj, step_fn=_step_fn)
             ctrl.move(
                 np.array([0.0, 0.0, 0.10, 0.0, 0.0, 0.0]),
                 dt=0.008, max_distance=0.10,

@@ -111,11 +111,6 @@ SCENE_PRESETS = {
             "recycle_bin": [[0.85, -0.35, 0.01], [-0.85, -0.35, 0.01]],
         },
     },
-    "stacking": {
-        "description": "Stacking challenge (6 cans, no bins)",
-        "objects": {"can": 6},
-        "fixtures": {},
-    },
 }
 
 

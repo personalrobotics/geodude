@@ -50,8 +50,8 @@ def main():
         help="LLM model name (default: claude-sonnet-4-20250514)",
     )
     parser.add_argument(
-        "--headless", action="store_true",
-        help="Run without MuJoCo viewer",
+        "--viewer", action="store_true",
+        help="Launch MuJoCo viewer (requires mjpython)",
     )
     args = parser.parse_args()
 
@@ -98,7 +98,7 @@ def main():
     _spawn_manipulable_objects(robot, objects, fixture_types)
 
     # Start sim and chat
-    with robot.sim(physics=args.physics, headless=args.headless) as ctx:
+    with robot.sim(physics=args.physics, headless=not args.viewer) as ctx:
         from geodude.chat import chat_loop
         chat_loop(robot, mode=mode, model_name=args.model)
 

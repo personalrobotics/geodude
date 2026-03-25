@@ -1,6 +1,6 @@
 # Geodude
 
-Bimanual manipulation with the Geodude robot, built on [mj_manipulator](https://github.com/siddhss5/mj_manipulator).
+Bimanual manipulation with the Geodude robot, built on [mj_manipulator](https://github.com/personalrobotics/mj_manipulator).
 
 ## The Robot
 
@@ -179,7 +179,7 @@ uv run pytest tests/ -v
 
 **Workspace packages:**
 
-- [mj_manipulator](https://github.com/siddhss5/mj_manipulator) — Arm control, planning, execution, BT leaf nodes
+- [mj_manipulator](https://github.com/personalrobotics/mj_manipulator) — Arm control, planning, execution, BT leaf nodes
 - [geodude_assets](https://github.com/personalrobotics/geodude_assets) — MuJoCo models (UR5e + Robotiq)
 - [prl_assets](https://github.com/personalrobotics/prl_assets) — Object models with geometry metadata
 - [tsr](https://github.com/personalrobotics/tsr) — Task Space Regions + grasp generation

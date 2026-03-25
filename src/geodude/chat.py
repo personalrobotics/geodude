@@ -288,6 +288,18 @@ def _build_tools(robot: Geodude) -> list[dict]:
                 "required": [],
             },
         },
+        {
+            "name": "get_robot_state",
+            "description": (
+                "Get detailed robot state: joint positions, EE pose, base height, "
+                "gripper state, home status, and holding info for each arm."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
     ]
 
 
@@ -338,6 +350,38 @@ def _execute_tool(robot: Geodude, name: str, args: dict) -> str:
         objects = robot.find_objects(args.get("target"))
         return json.dumps(objects)
 
+    elif name == "get_robot_state":
+        state = {}
+        for side, arm in [("left", robot.left_arm), ("right", robot.right_arm)]:
+            ee_pose = arm.get_ee_pose()
+            current_q = [float(robot.data.qpos[i]) for i in arm.joint_qpos_indices]
+
+            at_home = False
+            if "ready" in robot.named_poses and side in robot.named_poses["ready"]:
+                ready_q = np.array(robot.named_poses["ready"][side])
+                at_home = bool(np.allclose(current_q, ready_q, atol=0.05))
+
+            held = list(robot.grasp_manager.get_grasped_by(side))
+
+            arm_state = {
+                "ee_position": [round(float(x), 3) for x in ee_pose[:3, 3]],
+                "joint_positions_rad": [round(float(q), 3) for q in current_q],
+                "at_home": at_home,
+                "holding": held[0] if held else None,
+            }
+
+            base = robot._get_base_for_arm(arm)
+            if base is not None:
+                arm_state["base_height_m"] = round(float(base.get_height()), 3)
+                arm_state["base_range_m"] = [
+                    round(float(base.height_range[0]), 3),
+                    round(float(base.height_range[1]), 3),
+                ]
+
+            state[side] = arm_state
+
+        return json.dumps(state, indent=2)
+
     else:
         return f"Unknown tool: {name}"
 
@@ -367,19 +411,26 @@ def _scene_summary(robot: Geodude) -> str:
     else:
         lines.append("  Holding: nothing (both arms free)")
 
-    # Arm positions and home status
+    # Arm state
     for side, arm in [("left", robot.left_arm), ("right", robot.right_arm)]:
         ee_pose = arm.get_ee_pose()
         pos = ee_pose[:3, 3]
-        # Check if arm is at home (ready) configuration
+        # Home status
         at_home = False
         if "ready" in robot.named_poses and side in robot.named_poses["ready"]:
             ready_q = np.array(robot.named_poses["ready"][side])
             current_q = np.array([robot.data.qpos[i] for i in arm.joint_qpos_indices])
             at_home = np.allclose(current_q, ready_q, atol=0.05)
+        # Holding
+        held = list(robot.grasp_manager.get_grasped_by(side))
+        holding_str = f", holding {held[0]}" if held else ""
+        # Base height
+        base = robot._get_base_for_arm(arm)
+        base_str = f", base at {base.get_height():.2f}m" if base else ""
         status = "at home" if at_home else "not at home"
         lines.append(
-            f"  {side.capitalize()} arm EE: [{pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f}] ({status})"
+            f"  {side.capitalize()} arm: EE=[{pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f}] "
+            f"({status}{holding_str}{base_str})"
         )
 
     return "\n".join(lines)
@@ -388,17 +439,40 @@ def _scene_summary(robot: Geodude) -> str:
 # -- Main chat loop ---------------------------------------------------------
 
 SYSTEM_PROMPT = """\
-You are the control interface for Geodude, a bimanual robot with two UR5e arms \
-and Robotiq 2F-140 grippers. You translate user requests into robot actions \
-using the available tools.
+You are the control interface for Geodude, a bimanual robot.
 
-Rules:
+## Robot description
+- Two UR5e 6-DOF arms ("left" and "right") with Robotiq 2F-140 parallel-jaw grippers
+- Each arm is mounted on a Vention linear actuator base that moves vertically (0.0–0.5m)
+- The left arm's workspace is the left side of the table (negative x), the right arm covers the right side (positive x). There is some overlap in the center.
+- Objects near x=0 may be reachable by either arm
+- The "home" or "ready" position has both arms raised with grippers above the worktop
+- After a successful pickup, the base lifts 15cm to clear clutter
+
+## Grippers
+- Each gripper is a parallel-jaw gripper that can grasp objects by closing on them
+- After placing an object, it is removed from the scene (simulates dropping into a bin or container)
+- The gripper is either open or closed — there is no partial close
+
+## Objects and destinations
+- Objects are graspable things on the worktop (cans, potted meat cans, etc.)
+- Destinations are stationary fixtures like recycle bins — they are NOT graspable
+- Object names follow the pattern: type_N (e.g. "can_0", "can_1", "potted_meat_can_0", "recycle_bin_0")
+- To refer to any object of a type, use just the type name (e.g. "can" matches any can)
+
+## Sensors
+- Each arm has a 6-axis force/torque sensor at the wrist
+- F/T readings are only meaningful in physics mode — in kinematic mode they are near-zero noise
+- Use F/T to detect contact, estimate object weight, or monitor grip
+
+## Rules
 - Use tools to act. Don't describe what you would do — do it.
-- After each action, briefly report the result.
-- For spatial queries ("closest", "nearest"), compute distances from arm EE positions to object positions.
+- After each action, briefly report the result (1 sentence).
+- For spatial queries ("closest", "nearest"), compute Euclidean distances from arm EE positions to object positions using the coordinates in the scene state.
 - If a request is ambiguous, ask for clarification.
-- If an action fails, explain what happened and suggest alternatives.
-- Keep responses concise.
+- If an action fails, explain what happened and suggest alternatives (e.g. try the other arm).
+- Never make up information. If you don't know something, say so or use a tool to find out.
+- Keep responses concise — no filler, no restating the question.
 
 {scene_state}
 """

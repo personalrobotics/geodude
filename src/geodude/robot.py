@@ -174,6 +174,8 @@ class Geodude:
                 acceleration=UR5E_ACCELERATION_LIMITS.copy(),
             ),
             ee_site=spec.ee_site,
+            ft_force_sensor=f"{spec.prefix}/ft_sensor_force",
+            ft_torque_sensor=f"{spec.prefix}/ft_sensor_torque",
         )
 
         # Create arm first to get joint indices for IK solver

@@ -29,6 +29,9 @@ prl-assets = { workspace = true }
 tsr = { workspace = true }
 
 [project.optional-dependencies]
+chat = [
+    "anthropic>=0.40",
+]
 dev = [
     "pytest",
     "ruff",

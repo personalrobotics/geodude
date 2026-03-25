@@ -367,12 +367,19 @@ def _scene_summary(robot: Geodude) -> str:
     else:
         lines.append("  Holding: nothing (both arms free)")
 
-    # Arm positions
+    # Arm positions and home status
     for side, arm in [("left", robot.left_arm), ("right", robot.right_arm)]:
         ee_pose = arm.get_ee_pose()
         pos = ee_pose[:3, 3]
+        # Check if arm is at home (ready) configuration
+        at_home = False
+        if "ready" in robot.named_poses and side in robot.named_poses["ready"]:
+            ready_q = np.array(robot.named_poses["ready"][side])
+            current_q = np.array([robot.data.qpos[i] for i in arm.joint_qpos_indices])
+            at_home = np.allclose(current_q, ready_q, atol=0.05)
+        status = "at home" if at_home else "not at home"
         lines.append(
-            f"  {side.capitalize()} arm EE: [{pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f}]"
+            f"  {side.capitalize()} arm EE: [{pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f}] ({status})"
         )
 
     return "\n".join(lines)

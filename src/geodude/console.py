@@ -44,12 +44,16 @@ def start_console(
         if not os.environ.get("ANTHROPIC_API_KEY"):
             print("Set ANTHROPIC_API_KEY to use chat()")
             return None
-        from geodude.chat import ChatSession
-        chat_session = ChatSession(
-            robot, mode=mode, model_name=model_name,
-            original_objects=objects or {},
-            original_fixtures=fixtures or {},
-        )
+        try:
+            from geodude.chat import ChatSession
+            chat_session = ChatSession(
+                robot, mode=mode, model_name=model_name,
+                original_objects=objects or {},
+                original_fixtures=fixtures or {},
+            )
+        except ImportError:
+            print("Install chat dependencies: uv sync --extra chat")
+            return None
         return chat_session
 
     def chat(message: str) -> None:

@@ -467,7 +467,13 @@ class ChatSession:
         original_objects: dict[str, int] | None = None,
         original_fixtures: dict[str, list[list[float]]] | None = None,
     ):
-        import anthropic
+        try:
+            import anthropic
+        except ImportError:
+            raise ImportError(
+                "anthropic package not installed. "
+                "Install with: uv sync --extra chat"
+            ) from None
 
         self.robot = robot
         self.mode = mode

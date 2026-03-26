@@ -321,6 +321,12 @@ def _api_reference(robot: Geodude) -> str:
             "robot.left_arm.gripper / robot.right_arm.gripper (RobotiqGripper)",
             type(robot.left_arm.gripper), "gripper",
         )
+
+    from mj_manipulator.sim_context import SimArmController
+    _add_section(
+        "ctx.arm('left') / ctx.arm('right') (SimArmController)",
+        SimArmController, "ctx.arm('name')",
+    )
     if robot.left_base is not None:
         _add_section("robot.left_base / robot.right_base (VentionBase)", VentionBase, "base")
 

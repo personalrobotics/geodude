@@ -421,6 +421,51 @@ def _execute_tool(robot: Geodude, name: str, args: dict) -> str:
 # -- Scene state for LLM context -------------------------------------------
 
 
+def _api_reference(robot: Geodude) -> str:
+    """Generate API reference from live docstrings."""
+    import inspect
+
+    from mj_environment import ObjectRegistry
+    from mj_manipulator import Arm
+
+    from geodude.vention_base import VentionBase
+
+    lines = []
+
+    def _add_section(title: str, cls, prefix: str):
+        lines.append(f"\n{title}:")
+        for name, method in sorted(inspect.getmembers(cls, predicate=inspect.isfunction)):
+            if name.startswith("_"):
+                continue
+            try:
+                sig = inspect.signature(method)
+            except (ValueError, TypeError):
+                continue
+            doc = (inspect.getdoc(method) or "").split("\n")[0]
+            params = [p for p in sig.parameters if p != "self"]
+            param_str = ", ".join(params)
+            lines.append(f"  {prefix}.{name}({param_str}) — {doc}")
+
+    _add_section("robot (Geodude)", type(robot), "robot")
+    _add_section("robot.left_arm / robot.right_arm (Arm)", Arm, "arm")
+    _add_section("robot.env.registry (ObjectRegistry)", ObjectRegistry, "robot.env.registry")
+    if robot.left_base is not None:
+        _add_section("robot.left_base / robot.right_base (VentionBase)", VentionBase, "base")
+
+    # Add key properties
+    lines.append("\nKey properties:")
+    lines.append("  robot.left_arm, robot.right_arm — Arm instances")
+    lines.append("  robot.left_base, robot.right_base — VentionBase instances (or None)")
+    lines.append("  robot.left, robot.right — scoped shortcuts (robot.left.pickup('can'))")
+    lines.append("  robot.env — MuJoCo Environment")
+    lines.append("  robot.env.registry — ObjectRegistry for hide/show/activate")
+    lines.append("  robot.model — raw MuJoCo mjModel")
+    lines.append("  robot.data — raw MuJoCo mjData (qpos, qvel, sensordata, etc.)")
+    lines.append("  robot.grasp_manager — GraspManager for grasp state queries")
+
+    return "\n".join(lines)
+
+
 def _scene_summary(robot: Geodude) -> str:
     """Build a scene state summary for the LLM system prompt."""
     lines = ["Current scene state:"]
@@ -505,40 +550,14 @@ You are the control interface for Geodude, a bimanual robot.
 
 ## User environment
 The user is in an IPython console with `robot`, `ctx`, and `np` available. When the user \
-asks how to do something in Python, give them the actual Python API — not tool names. \
-ONLY recommend methods that actually exist on the robot object. The complete list:
-
-- `robot.find_objects()` — list all graspable objects (returns list of names)
-- `robot.find_objects("can")` — find objects matching a type
-- `robot.holding()` — what is the robot holding? Returns (side, name) or None
-- `robot.pickup()` — pick up nearest reachable object
-- `robot.pickup("can")` — pick up any can
-- `robot.pickup("can_0")` — pick up specific object
-- `robot.place("recycle_bin")` — place held object in any bin
-- `robot.go_home()` — return arms to ready position
-- `robot.left_arm.get_ft_wrench()` — read left wrist F/T sensor
-- `robot.right_arm.get_ft_wrench()` — read right wrist F/T sensor
-- `robot.get_object_pose("can_0")` — get 4x4 pose matrix of an object
-- `robot.left_arm.get_ee_pose()` — get left end-effector 4x4 pose
-
-Lower-level APIs (available but not commonly needed):
-
-- `robot.env.registry.hide("can_0")` — remove an object from the scene (disable physics + rendering)
-- `robot.env.registry.activate("can", pos=[x, y, z])` — spawn/show an object at a position
-- `robot.env.registry.active_objects()` — list all currently active object names
-- `robot.env.registry.is_active("can_0")` — check if an object is in the scene
-- `robot.grasp_manager.get_grasped_by("left")` — set of objects grasped by an arm
-- `robot.grasp_manager.mark_released("can_0")` — release a grasped object
-- `robot.left_arm.get_joint_positions()` — current joint angles (6,)
-- `robot.left_arm.get_joint_limits()` — (lower, upper) arrays
-- `robot.left_base.get_height()` — current base height in meters
-- `robot.left_base.set_height(0.3)` — teleport base to height (no physics)
-- `robot.data` — raw MuJoCo data (qpos, qvel, sensordata, etc.)
-- `robot.model` — raw MuJoCo model
+asks how to do something in Python, give them the actual Python API — not tool names.
 
 NEVER recommend methods that don't exist. If unsure whether a method exists, say so. \
 Tool names (pickup, get_objects, get_ft_wrench, etc.) are for YOUR internal use only — \
 never tell the user to call tool names directly.
+
+The complete API reference (auto-generated from docstrings):
+{api_reference}
 
 ## Rules
 - Use tools to act. Don't describe what you would do — do it.
@@ -578,6 +597,7 @@ class ChatSession:
         self.original_fixtures = original_fixtures or {}
         self.client = anthropic.Anthropic()
         self.tools = _build_tools(robot)
+        self.api_reference = _api_reference(robot)
         self.messages: list[dict] = []
 
     def send(self, user_input: str) -> str:
@@ -604,7 +624,8 @@ class ChatSession:
 
         while True:
             system = SYSTEM_PROMPT.format(
-                scene_state=_scene_summary(self.robot)
+                scene_state=_scene_summary(self.robot),
+                api_reference=self.api_reference,
             )
 
             response = self.client.messages.create(

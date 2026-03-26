@@ -313,14 +313,13 @@ def _api_reference(robot: Geodude) -> str:
             param_str = ", ".join(params)
             lines.append(f"  {prefix}.{name}({param_str}) — {doc}")
 
+    from geodude.robot import _ArmScope
+
     _add_section("robot (Geodude)", type(robot), "robot")
-    _add_section("robot.left / robot.right (Arm)", Arm, "arm")
+    # Combine _ArmScope methods + Arm methods for the unified interface
+    _add_section("robot.left / robot.right", _ArmScope, "robot.left")
+    _add_section("robot.left / robot.right (Arm methods, also on robot.left)", Arm, "robot.left")
     _add_section("robot.env.registry (ObjectRegistry)", ObjectRegistry, "robot.env.registry")
-    from mj_manipulator.sim_context import SimArmController
-    _add_section(
-        "ctx.arm('left') / ctx.arm('right') (SimArmController)",
-        SimArmController, "ctx.arm('name')",
-    )
     if robot.left_base is not None:
         _add_section("robot.left_base / robot.right_base (VentionBase)", VentionBase, "base")
 

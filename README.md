@@ -108,13 +108,42 @@ robot.pickup("can", arm="right")  # equivalent to above
 └──────────────────────────────────────────────────────┘
 ```
 
-## Recycling Demo
+## Interactive Console
+
+The primary way to use Geodude. IPython REPL with tab completion, optional LLM chat, and a demo system.
 
 ```bash
-uv run mjpython examples/recycle.py
-uv run mjpython examples/recycle.py --physics
-uv run mjpython examples/recycle.py --headless --cycles 5
+geodude --demo recycling                              # headless console
+geodude --list-demos                                  # see available demos
+uv run mjpython -m geodude --demo recycling --viewer  # with MuJoCo viewer
 ```
+
+```python
+In [1]: robot.pickup()               # pick up nearest object
+In [2]: robot.place("recycle_bin")   # place in any bin
+In [3]: sort_all()                   # run the demo's built-in function
+In [4]: reset()                      # restart the demo
+In [5]: commands()                   # quick reference
+
+# Natural language (requires ANTHROPIC_API_KEY + uv sync --extra chat)
+In [6]: chat('clear the table')
+```
+
+### Creating demos
+
+Demos are Python files in `src/geodude/demos/`. Create one interactively with `save_demo('name')`, or write a file:
+
+```python
+# demos/my_task.py
+"""My task — do something useful."""
+scene = {"objects": {"can": 4}, "fixtures": {}}
+
+def do_task():
+    while robot.pickup("can"):
+        robot.place()
+```
+
+Then: `geodude --demo my_task`
 
 ## Debugging
 
@@ -166,6 +195,11 @@ src/geodude/
 │   ├── nodes.py      # GenerateGrasps, GenerateDropZone + smart resolution
 │   └── subtrees.py   # geodude_pickup, geodude_place
 ├── vention_base.py   # Linear actuator planning + collision checking
+├── cli.py            # geodude CLI entry point
+├── console.py        # IPython console with chat, demos, save_demo
+├── chat.py           # LLM chat integration (ChatSession, tools)
+├── demo_loader.py    # Demo discovery, loading, scene setup
+├── demos/            # Demo files (recycling.py, ...)
 └── __init__.py       # Public API + mj_manipulator re-exports
 ```
 

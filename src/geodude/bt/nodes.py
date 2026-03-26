@@ -126,7 +126,30 @@ def _generate_tsrs_for_object(robot, body_name: str, obj_type: str) -> list:
         T_bottom = obj_pose.copy()
         local_z = obj_pose[:3, 2]
         T_bottom[:3, 3] -= local_z * (size[2] / 2)
-        templates = hand.grasp_box(size[0], size[1], size[2])
+        # Try each grasp mode — some may fail for thin objects
+        import logging
+        _logger = logging.getLogger(__name__)
+        templates = []
+        for grasp_fn in [
+            hand.grasp_box_face_x,
+            hand.grasp_box_face_y,
+            hand.grasp_box_top,
+            hand.grasp_box_bottom,
+        ]:
+            try:
+                templates.extend(grasp_fn(size[0], size[1], size[2]))
+            except ValueError as e:
+                _logger.info(
+                    "%s: skipping %s — %s (size=%.0f×%.0f×%.0fmm)",
+                    body_name, grasp_fn.__name__, e,
+                    size[0] * 1000, size[1] * 1000, size[2] * 1000,
+                )
+        if not templates:
+            _logger.warning(
+                "%s: no valid grasps — object too small for gripper "
+                "(size=%.0f×%.0f×%.0fmm)",
+                body_name, size[0] * 1000, size[1] * 1000, size[2] * 1000,
+            )
         return [t.instantiate(T_bottom) for t in templates]
 
     return []

@@ -14,6 +14,7 @@ Example::
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 from typing import TYPE_CHECKING
@@ -24,6 +25,27 @@ if TYPE_CHECKING:
     from geodude.robot import Geodude
 
 logger = logging.getLogger(__name__)
+
+
+class _LogCapture:
+    """Context manager that captures log output from geodude/mj_manipulator."""
+
+    def __init__(self):
+        self._handler = logging.StreamHandler(io.StringIO())
+        self._handler.setLevel(logging.INFO)
+        self._handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
+
+    def __enter__(self):
+        for name in ("geodude", "mj_manipulator"):
+            logging.getLogger(name).addHandler(self._handler)
+        return self
+
+    def __exit__(self, *args):
+        for name in ("geodude", "mj_manipulator"):
+            logging.getLogger(name).removeHandler(self._handler)
+
+    def get_output(self) -> str:
+        return self._handler.stream.getvalue().strip()
 
 
 # -- Tool definitions for LLM -----------------------------------------------
@@ -594,19 +616,25 @@ class ChatSession:
                         response_text += block.text
                 break
 
-            # Execute tools — always produce a result for each call
+            # Execute tools — capture logs for LLM context
             tool_results = []
             for tc in tool_calls:
                 print(f"  \u2192 {tc.name}({json.dumps(tc.input)})")
+                log_capture = _LogCapture()
                 try:
-                    result = _execute_tool(
-                        self.robot, tc.name, dict(tc.input),
-                        original_objects=self.original_objects,
-                        original_fixtures=self.original_fixtures,
-                        mode=self.mode,
-                    )
+                    with log_capture:
+                        result = _execute_tool(
+                            self.robot, tc.name, dict(tc.input),
+                            original_objects=self.original_objects,
+                            original_fixtures=self.original_fixtures,
+                            mode=self.mode,
+                        )
                 except Exception as e:
                     result = f"Error executing {tc.name}: {e}"
+                # Append captured logs so LLM sees diagnostics
+                logs = log_capture.get_output()
+                if logs:
+                    result += f"\n\nDiagnostics:\n{logs}"
                 status = "\u2713" if "Success" in result or "Error" not in result else "\u2717"
                 print(f"  {status} {result}")
                 tool_results.append({

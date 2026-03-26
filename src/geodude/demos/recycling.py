@@ -21,7 +21,6 @@ scene = {
         "herring_tin": 3,
         "fuze_bottle": 3,
         "pop_tarts": 3,
-        "notebook": 3,
         "plastic_glass": 3,
         "recycle_bin": 2,
     },

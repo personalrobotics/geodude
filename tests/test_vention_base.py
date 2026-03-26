@@ -103,6 +103,7 @@ class TestVentionBaseSetHeight:
         assert robot.right_base.get_height() == pytest.approx(0.4, abs=0.001)
 
 
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 class TestVentionBaseMoveTo:
     def test_move_to_no_collision_check(self):
         robot = Geodude()

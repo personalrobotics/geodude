@@ -114,8 +114,8 @@ class TestGeodudeFull:
     def test_geodude_init_and_arms(self):
         """Full Geodude initialization with arms and bases."""
         robot = Geodude()
-        assert robot.left_arm.dof == 6
-        assert robot.right_arm.dof == 6
+        assert robot.left.dof == 6
+        assert robot.right.dof == 6
         assert robot.left_base is not None
         assert robot.right_base is not None
 
@@ -129,7 +129,7 @@ class TestGeodudeFull:
     def test_ee_poses_reachable(self):
         """EE poses are valid transforms in ready config."""
         robot = Geodude()
-        for arm in (robot.left_arm, robot.right_arm):
+        for arm in (robot.left, robot.right):
             pose = arm.get_ee_pose()
             assert pose.shape == (4, 4)
             det = np.linalg.det(pose[:3, :3])

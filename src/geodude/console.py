@@ -69,6 +69,14 @@ def start_console(
             print(f"\nGeodude [{mode}]: {response}\n")
 
     # -- Demo helpers --------------------------------------------------------
+    def reset() -> None:
+        """Reset the demo — robot to ready, objects re-scattered."""
+        from geodude.demo_loader import _spawn_manipulable_objects
+        robot.reset()
+        fixture_types = set(fixtures.keys()) if fixtures else set()
+        _spawn_manipulable_objects(robot, objects or {}, fixture_types)
+        print("Scene reset.")
+
     def demos() -> None:
         """List available demos."""
         from geodude.demo_loader import list_demos
@@ -147,6 +155,7 @@ Scoped shortcuts:
   robot.right.place("recycle_bin")  — right arm places in bin
 
 Demos:
+  reset()                           — restart the demo (re-scatter objects)
   demos()                           — list available demos
   save_demo('name')                 — save current scene as a demo
 
@@ -169,6 +178,7 @@ IPython:
         "commands": commands,
         "demos": demos,
         "save_demo": save_demo,
+        "reset": reset,
     }
 
     if demo_module is not None:

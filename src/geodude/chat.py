@@ -234,22 +234,12 @@ def _execute_tool(
         return json.dumps(objects)
 
     elif name == "reset_scene":
-        import mujoco
-
-        # Hide all active objects
-        for obj_name in list(robot.env.registry.active_objects()):
-            robot.env.registry.hide(obj_name)
-        # Release any grasped objects
-        for obj in list(robot.grasp_manager.grasped.keys()):
-            robot.grasp_manager.mark_released(obj)
-        # Re-setup fixtures and spawn objects
         original_objects = original_objects or {}
         original_fixtures = original_fixtures or {}
-        robot.setup_scene(fixtures=original_fixtures if original_fixtures else None)
+        robot.reset()
         fixture_types = set(original_fixtures.keys()) if original_fixtures else set()
         from geodude.demo_loader import _spawn_manipulable_objects
         _spawn_manipulable_objects(robot, original_objects, fixture_types)
-        mujoco.mj_forward(robot.model, robot.data)
         n = len(robot.find_objects())
         return f"Success: scene reset with {n} objects"
 

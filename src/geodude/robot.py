@@ -642,28 +642,33 @@ class Geodude:
         mujoco.mj_forward(self.model, self.data)
 
     def reset(self) -> None:
-        """Reset simulation to initial state.
+        """Reset the scene to its initial state.
 
-        Resets to ready keyframe, releases all grasps, and restores
-        fixtures to their original positions.
+        Hides all objects, releases grasps, restores fixtures to their
+        original positions, and sets the robot to the ready keyframe.
+        Call ``_spawn_manipulable_objects`` after to re-scatter objects.
+
+        For just returning the robot to home, use ``robot.go_home()``
+        which plans and executes through the context.
         """
+        # Reset MuJoCo state to keyframe
         key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, "ready")
         if key_id != -1:
             mujoco.mj_resetDataKeyframe(self.model, self.data, key_id)
         else:
             mujoco.mj_resetData(self.model, self.data)
 
+        # Release grasps
         for obj in list(self.grasp_manager.grasped.keys()):
             self.grasp_manager.mark_released(obj)
 
-        # Restore fixtures to original positions
-        fixtures = getattr(self, "_fixtures", {})
-        if fixtures and self._env.registry is not None:
-            for obj_type, positions in fixtures.items():
-                for instance in list(self._env.registry.get_active_instances(obj_type)):
-                    self._env.registry.hide(instance)
-                for pos in positions:
-                    self._env.registry.activate(obj_type, pos=list(pos))
+        # Hide all objects
+        if self._env.registry is not None:
+            for name in list(self._env.registry.active_objects()):
+                self._env.registry.hide(name)
+
+        # Re-setup scene (fixtures + robot pose)
+        self.setup_scene(fixtures=getattr(self, "_fixtures", None))
 
         mujoco.mj_forward(self.model, self.data)
 

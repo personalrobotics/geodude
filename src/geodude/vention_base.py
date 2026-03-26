@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import mujoco
 import numpy as np
 
-from mj_manipulator import Arm, Trajectory
+from mj_manipulator import Arm, GraspManager, Trajectory
 from mj_manipulator.trajectory import create_linear_trajectory
 
 from geodude.config import VentionBaseConfig
@@ -25,6 +25,10 @@ class VentionBase:
     and verifies the path is safe before moving.
     """
 
+    model: mujoco.MjModel
+    data: mujoco.MjData
+    config: VentionBaseConfig
+
     def __init__(
         self,
         model: mujoco.MjModel,
@@ -32,9 +36,9 @@ class VentionBase:
         config: VentionBaseConfig,
         arm: Arm,
     ):
-        self.model = model
-        self.data = data
-        self.config = config
+        self.model: mujoco.MjModel = model
+        self.data: mujoco.MjData = data
+        self.config: VentionBaseConfig = config
         self._arm = arm
 
         # Get joint ID and qpos index
@@ -93,7 +97,7 @@ class VentionBase:
         return [self._actuator_id]
 
     @property
-    def grasp_manager(self):
+    def grasp_manager(self) -> GraspManager | None:
         """Grasp manager from the associated arm (for attached object tracking)."""
         return self._arm.grasp_manager
 

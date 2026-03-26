@@ -170,20 +170,24 @@ def _build_tools(robot: Geodude) -> list[dict]:
         {
             "name": "pickup",
             "description": (
-                "Pick up an object. If target is None, picks up the nearest "
-                "reachable object. If arm is None, tries both arms."
+                "Pick up an object. Prefer omitting target — the planner automatically "
+                "finds the nearest reachable object and the best arm. Only specify "
+                "target when the user asks for a specific object by name or type. "
+                "target can be a specific instance ('can_0'), a type ('can' matches "
+                "any can), or omitted for any reachable object. "
+                "arm can be 'left', 'right', or omitted to try both."
             ),
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "target": {
                         "type": "string",
-                        "description": "Object name (e.g. 'can_0', 'potted_meat_can_0') or null for any",
+                        "description": "Object name or type. Omit to pick up nearest reachable object (preferred).",
                     },
                     "arm": {
                         "type": "string",
                         "enum": ["left", "right"],
-                        "description": "Which arm to use, or omit for auto",
+                        "description": "Which arm to use. Omit to auto-select best arm (preferred).",
                     },
                 },
                 "required": [],
@@ -193,19 +197,21 @@ def _build_tools(robot: Geodude) -> list[dict]:
             "name": "place",
             "description": (
                 "Place the held object at a destination (e.g. a bin). "
-                "Auto-detects which arm is holding."
+                "Auto-detects which arm is holding. Destination can be a specific "
+                "instance ('recycle_bin_0'), a type ('recycle_bin' for any bin), "
+                "or omitted for any available destination."
             ),
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "destination": {
                         "type": "string",
-                        "description": "Destination name (e.g. 'recycle_bin_0') or null for any",
+                        "description": "Destination name or type. Omit for any available destination.",
                     },
                     "arm": {
                         "type": "string",
                         "enum": ["left", "right"],
-                        "description": "Which arm to use, or omit for auto-detect",
+                        "description": "Which arm. Omit to auto-detect holding arm (preferred).",
                     },
                 },
                 "required": [],

@@ -696,6 +696,10 @@ class Geodude:
         else:
             mujoco.mj_resetData(self.model, self.data)
 
+        # Sync controller targets to new positions (prevents violent corrections)
+        if self._context is not None:
+            self._context.hold()
+
         # Release grasps
         for obj in list(self.grasp_manager.grasped.keys()):
             self.grasp_manager.mark_released(obj)

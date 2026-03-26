@@ -70,11 +70,14 @@ def start_console(
 
     # -- Demo helpers --------------------------------------------------------
     def reset() -> None:
-        """Reset the demo — robot to ready, objects re-scattered."""
+        """Reset the demo — robot to ready, objects re-scattered, chat history cleared."""
+        nonlocal chat_session
         from geodude.demo_loader import _spawn_manipulable_objects
         robot.reset()
         fixture_types = set(fixtures.keys()) if fixtures else set()
         _spawn_manipulable_objects(robot, objects or {}, fixture_types)
+        if chat_session is not None:
+            chat_session.messages.clear()
         print("Scene reset.")
 
     def demos() -> None:

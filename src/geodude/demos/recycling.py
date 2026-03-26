@@ -15,7 +15,7 @@ scene = {
 
 def sort_all():
     """Pick up and place every object into a recycle bin."""
-    while robot.pickup():  # noqa: F821 — robot is injected at load time
-        if not robot.place("recycle_bin"):  # noqa: F821
-            robot.go_home()  # noqa: F821
-    robot.go_home()  # noqa: F821
+    while robot.pickup():
+        if not robot.place("recycle_bin"):
+            robot.go_home()
+    robot.go_home()

@@ -521,7 +521,22 @@ ONLY recommend methods that actually exist on the robot object. The complete lis
 - `robot.get_object_pose("can_0")` — get 4x4 pose matrix of an object
 - `robot.left_arm.get_ee_pose()` — get left end-effector 4x4 pose
 
-NEVER recommend methods that don't exist (e.g. robot.get_objects is NOT a method). \
+Lower-level APIs (available but not commonly needed):
+
+- `robot.env.registry.hide("can_0")` — remove an object from the scene (disable physics + rendering)
+- `robot.env.registry.activate("can", pos=[x, y, z])` — spawn/show an object at a position
+- `robot.env.registry.active_objects()` — list all currently active object names
+- `robot.env.registry.is_active("can_0")` — check if an object is in the scene
+- `robot.grasp_manager.get_grasped_by("left")` — set of objects grasped by an arm
+- `robot.grasp_manager.mark_released("can_0")` — release a grasped object
+- `robot.left_arm.get_joint_positions()` — current joint angles (6,)
+- `robot.left_arm.get_joint_limits()` — (lower, upper) arrays
+- `robot.left_base.get_height()` — current base height in meters
+- `robot.left_base.set_height(0.3)` — teleport base to height (no physics)
+- `robot.data` — raw MuJoCo data (qpos, qvel, sensordata, etc.)
+- `robot.model` — raw MuJoCo model
+
+NEVER recommend methods that don't exist. If unsure whether a method exists, say so. \
 Tool names (pickup, get_objects, get_ft_wrench, etc.) are for YOUR internal use only — \
 never tell the user to call tool names directly.
 

@@ -2,53 +2,16 @@
 
 Usage::
 
-    geodude                          # interactive scene picker + viewer
-    geodude --demo recycling         # load a demo
-    geodude --demo recycling --physics
-    geodude --headless               # no viewer (CI/scripting)
+    geodude --demo recycling              # headless (default)
+    geodude --demo recycling --viewer     # viewer (macOS: requires mjpython)
     geodude --list-demos
-
-Automatically re-execs under mjpython when a viewer is needed.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import sys
-
-
-def _running_under_mjpython() -> bool:
-    """Check if we're running under mjpython (required for viewer on macOS)."""
-    # mjpython sets a distinctive sys.executable or process name.
-    # The reliable check: the executable basename is 'mjpython'.
-    return os.path.basename(sys.executable) == "mjpython"
-
-
-def _find_mjpython() -> str | None:
-    """Find mjpython — check venv bin dir first, then PATH."""
-    # mjpython lives next to python in the venv
-    venv_bin = os.path.dirname(sys.executable)
-    candidate = os.path.join(venv_bin, "mjpython")
-    if os.path.isfile(candidate):
-        return candidate
-    return shutil.which("mjpython")
-
-
-def _reexec_with_mjpython() -> None:
-    """Re-execute this process under mjpython."""
-    import subprocess
-
-    mjpython = _find_mjpython()
-    if mjpython is None:
-        print("Error: mjpython not found. Install MuJoCo or add --headless.")
-        sys.exit(1)
-    result = subprocess.run(
-        [mjpython, "-m", "geodude.cli"] + sys.argv[1:],
-        stdin=sys.stdin,
-    )
-    sys.exit(result.returncode)
 
 
 def main() -> None:
@@ -58,7 +21,7 @@ def main() -> None:
     )
     parser.add_argument("--demo", type=str, default=None, help="Demo name or path")
     parser.add_argument("--physics", action="store_true", help="Physics simulation")
-    parser.add_argument("--headless", action="store_true", help="No viewer")
+    parser.add_argument("--viewer", action="store_true", help="Launch MuJoCo viewer")
     parser.add_argument("--objects", type=str, default=None, help='JSON, e.g. \'{"can": 4}\'')
     parser.add_argument("--model", type=str, default="claude-sonnet-4-20250514", help="LLM model")
     parser.add_argument("--list-demos", action="store_true", help="List demos and exit")
@@ -78,10 +41,15 @@ def main() -> None:
         print()
         sys.exit(0)
 
-    # Viewer by default — re-exec under mjpython if needed
-    viewer = not args.headless
-    if viewer and not _running_under_mjpython():
-        _reexec_with_mjpython()
+    # Check viewer availability
+    if args.viewer and os.path.basename(sys.executable) != "mjpython":
+        # Build the equivalent mjpython command
+        cmd_args = ["uv", "run", "mjpython", "-m", "geodude.cli"]
+        for arg in sys.argv[1:]:
+            if arg != "--viewer":
+                cmd_args.append(arg)
+        print(f"Viewer requires mjpython on macOS. Run:\n\n  {' '.join(cmd_args)}\n")
+        sys.exit(1)
 
     from geodude.demo_loader import resolve_scene, setup_robot
 
@@ -93,7 +61,7 @@ def main() -> None:
     start_console(
         robot,
         physics=args.physics,
-        viewer=viewer,
+        viewer=args.viewer,
         model_name=args.model,
         demo_module=demo_module,
         objects=objects,

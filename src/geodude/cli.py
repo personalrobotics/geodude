@@ -21,7 +21,7 @@ def main() -> None:
     )
     parser.add_argument("--demo", type=str, default=None, help="Demo name or path to demo file")
     parser.add_argument("--physics", action="store_true", help="Use physics simulation")
-    parser.add_argument("--viewer", action="store_true", help="Launch MuJoCo viewer (requires mjpython)")
+    parser.add_argument("--headless", action="store_true", help="Run without MuJoCo viewer")
     parser.add_argument("--objects", type=str, default=None, help='JSON object spec, e.g. \'{"can": 4}\'')
     parser.add_argument("--model", type=str, default="claude-sonnet-4-20250514", help="LLM model name")
     parser.add_argument("--list-demos", action="store_true", help="List available demos and exit")
@@ -41,6 +41,17 @@ def main() -> None:
         print()
         sys.exit(0)
 
+    # Check for viewer support unless headless
+    viewer = not args.headless
+    if viewer:
+        try:
+            import mujoco.viewer  # noqa: F401
+        except (ImportError, AttributeError):
+            print("Error: MuJoCo viewer requires mjpython.")
+            print("Run with: uv run mjpython -m geodude.cli --demo <name>")
+            print("Or add --headless to skip the viewer.")
+            sys.exit(1)
+
     from geodude.demo_loader import resolve_scene, setup_robot
 
     objects, fixtures, demo_module = resolve_scene(args.demo, args.objects)
@@ -51,7 +62,7 @@ def main() -> None:
     start_console(
         robot,
         physics=args.physics,
-        viewer=args.viewer,
+        viewer=viewer,
         model_name=args.model,
         demo_module=demo_module,
         objects=objects,

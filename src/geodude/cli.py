@@ -27,17 +27,8 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.list_demos:
-        from geodude.demo_loader import discover_demos, load_demo
-        found = discover_demos()
-        if not found:
-            print("No demos found.")
-            sys.exit(0)
-        print("\nAvailable demos:\n")
-        for name in found:
-            mod = load_demo(name)
-            desc = (mod.__doc__ or name).strip().split("\n")[0]
-            print(f"  {name:20s} — {desc}")
-        print()
+        from geodude.demo_loader import list_demos
+        list_demos()
         sys.exit(0)
 
     from geodude.demo_loader import resolve_scene, setup_robot

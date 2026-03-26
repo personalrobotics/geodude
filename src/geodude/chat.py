@@ -509,9 +509,11 @@ class ChatSession:
         """Inner conversation loop. Raises on API errors."""
         response_text = ""
 
+        scene_state = _scene_summary(self.robot)
+
         while True:
             system = SYSTEM_PROMPT.format(
-                scene_state=_scene_summary(self.robot),
+                scene_state=scene_state,
                 api_reference=self.api_reference,
             )
 
@@ -553,10 +555,9 @@ class ChatSession:
                     "content": result,
                 })
 
-            # Append updated scene state so LLM sees post-action world
-            tool_results[-1]["content"] += (
-                f"\n\nUpdated scene:\n{_scene_summary(self.robot)}"
-            )
+            # Refresh scene state after tool execution
+            scene_state = _scene_summary(self.robot)
+            tool_results[-1]["content"] += f"\n\nUpdated scene:\n{scene_state}"
 
             self.messages.append({"role": "user", "content": tool_results})
 

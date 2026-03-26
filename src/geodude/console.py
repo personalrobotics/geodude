@@ -71,18 +71,8 @@ def start_console(
     # -- Demo helpers --------------------------------------------------------
     def demos() -> None:
         """List available demos."""
-        from geodude.demo_loader import discover_demos
-        found = discover_demos()
-        if not found:
-            print("No demos found.")
-            return
-        print("\nAvailable demos:\n")
-        for name, path in found.items():
-            mod = __import__("geodude.demo_loader", fromlist=["load_demo"])
-            demo = mod.load_demo(name)
-            desc = (demo.__doc__ or name).strip().split("\n")[0]
-            print(f"  {name:20s} — {desc}")
-        print()
+        from geodude.demo_loader import list_demos
+        list_demos()
 
     def save_demo(name: str, description: str = "") -> None:
         """Save current scene config + user-defined functions as a demo file."""
@@ -100,7 +90,8 @@ def start_console(
 
         # Find user-defined functions (not in initial namespace)
         user_funcs = {}
-        for k, v in shell.user_ns.items():
+        ip = get_ipython()  # noqa: F821 — available inside IPython
+        for k, v in ip.user_ns.items():
             if (
                 callable(v)
                 and not k.startswith("_")
@@ -180,7 +171,6 @@ IPython:
         "save_demo": save_demo,
     }
 
-    # Inject demo functions
     if demo_module is not None:
         from geodude.demo_loader import get_demo_functions, inject_robot
         inject_robot(demo_module, robot)

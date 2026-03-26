@@ -52,6 +52,36 @@ def discover_demos() -> dict[str, Path]:
     return demos
 
 
+def _get_demo_description(path: Path) -> str:
+    """Extract the first line of a demo file's docstring without importing."""
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith('"""') or line.startswith("'''"):
+                # Single-line docstring: """description"""
+                quote = line[:3]
+                content = line[3:]
+                if content.endswith(quote):
+                    return content[:-3].strip()
+                return content.strip()
+            if line and not line.startswith("#"):
+                break
+    return path.stem
+
+
+def list_demos() -> None:
+    """Print available demos."""
+    found = discover_demos()
+    if not found:
+        print("No demos found.")
+        return
+    print("\nAvailable demos:\n")
+    for name, path in found.items():
+        desc = _get_demo_description(path)
+        print(f"  {name:20s} — {desc}")
+    print()
+
+
 def load_demo(name_or_path: str) -> ModuleType:
     """Load a demo by name (from demos/) or file path."""
     path = Path(name_or_path)
@@ -116,8 +146,7 @@ def _choose_scene() -> tuple[dict[str, int], dict[str, list[list[float]]], Modul
 
     print("\nWhat scene would you like?\n")
     for i, (name, path) in enumerate(demo_list, 1):
-        mod = load_demo(str(path))
-        desc = (mod.__doc__ or name).strip().split("\n")[0]
+        desc = _get_demo_description(path)
         print(f"  {i}. {desc}")
     print(f"  {len(demo_list) + 1}. Custom\n")
 

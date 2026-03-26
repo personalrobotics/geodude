@@ -664,7 +664,7 @@ class Geodude:
 
         # Hide all objects
         if self._env.registry is not None:
-            for name in list(self._env.registry.active_objects()):
+            for name in list(self._env.registry.active_objects):
                 self._env.registry.hide(name)
 
         # Re-setup scene (fixtures + robot pose)

@@ -13,6 +13,7 @@ dependencies = [
     "mujoco",
     "pyyaml",
     "py_trees>=2.2",
+    "ipython>=8.0",
     "mj-manipulator",
     "mj_environment @ git+https://github.com/personalrobotics/mj_environment.git",
     "geodude-assets",
@@ -20,6 +21,9 @@ dependencies = [
     "tsr",
     "eaik",
 ]
+
+[project.scripts]
+geodude = "geodude.cli:main"
 
 [tool.uv.sources]
 mj-manipulator = { workspace = true }
@@ -31,7 +35,6 @@ tsr = { workspace = true }
 [project.optional-dependencies]
 chat = [
     "anthropic>=0.40",
-    "ipython>=8.0",
 ]
 dev = [
     "pytest",
@@ -46,3 +49,6 @@ packages = ["src/geodude"]
 
 [tool.ruff]
 lint.select = ["F", "E", "W", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/geodude/demos/*.py" = ["F821"]

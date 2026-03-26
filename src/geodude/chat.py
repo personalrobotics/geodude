@@ -316,12 +316,6 @@ def _api_reference(robot: Geodude) -> str:
     _add_section("robot (Geodude)", type(robot), "robot")
     _add_section("robot.left_arm / robot.right_arm (Arm)", Arm, "arm")
     _add_section("robot.env.registry (ObjectRegistry)", ObjectRegistry, "robot.env.registry")
-    if robot.left_arm.gripper is not None:
-        _add_section(
-            "robot.left_arm.gripper / robot.right_arm.gripper (RobotiqGripper)",
-            type(robot.left_arm.gripper), "gripper",
-        )
-
     from mj_manipulator.sim_context import SimArmController
     _add_section(
         "ctx.arm('left') / ctx.arm('right') (SimArmController)",

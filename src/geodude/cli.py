@@ -3,7 +3,7 @@
 Usage::
 
     geodude --demo recycling              # headless (default)
-    geodude --demo recycling --viewer     # viewer (macOS: requires mjpython)
+    geodude --demo recycling --viewer     # viewer (requires mjpython on macOS)
     geodude --list-demos
 """
 
@@ -43,7 +43,7 @@ def main() -> None:
     from geodude.demo_loader import resolve_scene, setup_robot
 
     objects, fixtures, demo_module = resolve_scene(args.demo, args.objects)
-    print(f"\nLoading Geodude with {objects}...")
+    print(f"\nLoading Geodude with {objects}...", flush=True)
     robot = setup_robot(objects, fixtures)
 
     from geodude.console import start_console

@@ -100,7 +100,10 @@ def main():
     # Start sim and chat
     with robot.sim(physics=args.physics, headless=not args.viewer) as ctx:
         from geodude.chat import chat_loop
-        chat_loop(robot, mode=mode, model_name=args.model)
+        chat_loop(
+            robot, mode=mode, model_name=args.model,
+            original_objects=objects, original_fixtures=fixtures,
+        )
 
 
 if __name__ == "__main__":

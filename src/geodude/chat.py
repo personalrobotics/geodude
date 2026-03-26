@@ -301,6 +301,19 @@ def _build_tools(robot: Geodude) -> list[dict]:
                 "required": [],
             },
         },
+        {
+            "name": "reset_scene",
+            "description": (
+                "Reset the scene: re-spawn all original objects at random positions "
+                "on the worktop, release any grasped objects, and return arms to home. "
+                "Use when the user wants to start over or put objects back."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
     ]
 
 
@@ -350,6 +363,25 @@ def _execute_tool(robot: Geodude, name: str, args: dict) -> str:
     elif name == "find_objects":
         objects = robot.find_objects(args.get("target"))
         return json.dumps(objects)
+
+    elif name == "reset_scene":
+        import mujoco
+
+        # Hide all active objects
+        for obj_name in list(robot.env.registry.active_objects()):
+            robot.env.registry.hide(obj_name)
+        # Release any grasped objects
+        for obj in list(robot.grasp_manager.grasped.keys()):
+            robot.grasp_manager.mark_released(obj)
+        # Re-setup fixtures and spawn objects
+        original_objects = args.get("_original_objects", {})
+        original_fixtures = args.get("_original_fixtures", {})
+        robot.setup_scene(fixtures=original_fixtures if original_fixtures else None)
+        fixture_types = set(original_fixtures.keys()) if original_fixtures else set()
+        _spawn_manipulable_objects(robot, original_objects, fixture_types)
+        mujoco.mj_forward(robot.model, robot.data)
+        n = len(robot.find_objects())
+        return f"Success: scene reset with {n} objects"
 
     elif name == "get_robot_state":
         state = {}
@@ -453,6 +485,7 @@ You are the control interface for Geodude, a bimanual robot.
 ## Grippers
 - Each gripper is a parallel-jaw gripper that can grasp objects by closing on them
 - After placing an object, it is removed from the scene (simulates dropping into a bin or container)
+- To bring objects back, use reset_scene — this re-spawns all original objects at new random positions
 - The gripper is either open or closed — there is no partial close
 
 ## Objects and destinations
@@ -489,6 +522,8 @@ def chat_loop(
     *,
     mode: str = "kinematic",
     model_name: str = "claude-sonnet-4-20250514",
+    original_objects: dict[str, int] | None = None,
+    original_fixtures: dict[str, list[list[float]]] | None = None,
 ) -> None:
     """Run the interactive chat REPL.
 
@@ -496,6 +531,8 @@ def chat_loop(
         robot: Geodude instance with active execution context.
         mode: "kinematic", "physics", or "hardware".
         model_name: Anthropic model to use.
+        original_objects: Object counts from scene setup (for reset).
+        original_fixtures: Fixture positions from scene setup (for reset).
     """
     try:
         import anthropic
@@ -585,7 +622,12 @@ def chat_loop(
             tool_results = []
             for tc in tool_calls:
                 print(f"  \u2192 {tc.name}({json.dumps(tc.input)})")
-                result = _execute_tool(robot, tc.name, tc.input)
+                # Inject original scene config for reset_scene
+                args = dict(tc.input)
+                if tc.name == "reset_scene":
+                    args["_original_objects"] = original_objects or {}
+                    args["_original_fixtures"] = original_fixtures or {}
+                result = _execute_tool(robot, tc.name, args)
                 status = "\u2713" if "Success" in result or "null" not in result else "\u2717"
                 print(f"  {status} {result}")
                 tool_results.append({

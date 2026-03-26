@@ -658,12 +658,12 @@ class Geodude:
 
         # Restore fixtures to original positions
         fixtures = getattr(self, "_fixtures", {})
-        for obj_type, positions in fixtures.items():
-            # Re-activate at original positions
-            for instance in self._env.registry.get_active_instances(obj_type):
-                self._env.registry.hide(instance)
-            for pos in positions:
-                self._env.registry.activate(obj_type, pos=list(pos))
+        if fixtures and self._env.registry is not None:
+            for obj_type, positions in fixtures.items():
+                for instance in list(self._env.registry.get_active_instances(obj_type)):
+                    self._env.registry.hide(instance)
+                for pos in positions:
+                    self._env.registry.activate(obj_type, pos=list(pos))
 
         mujoco.mj_forward(self.model, self.data)
 

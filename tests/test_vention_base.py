@@ -50,7 +50,7 @@ class TestVentionBaseInit:
             actuator_name="left_linear_actuator",
         )
         with pytest.raises(ValueError, match="Joint.*not found"):
-            VentionBase(robot.model, robot.data, config, robot.left_arm)
+            VentionBase(robot.model, robot.data, config, robot.left)
 
     def test_invalid_actuator_raises(self):
         robot = Geodude()
@@ -60,7 +60,7 @@ class TestVentionBaseInit:
             actuator_name="nonexistent_actuator",
         )
         with pytest.raises(ValueError, match="Actuator.*not found"):
-            VentionBase(robot.model, robot.data, config, robot.left_arm)
+            VentionBase(robot.model, robot.data, config, robot.left)
 
 
 class TestVentionBaseHeight:

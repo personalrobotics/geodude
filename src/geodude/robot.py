@@ -52,18 +52,31 @@ class _GeodudeSimContext:
 
 
 class _ArmScope:
-    """Arm-scoped primitives wrapper.
+    """Unified arm interface — high-level primitives + low-level Arm access.
 
-    Returned by ``robot.right`` / ``robot.left``. Delegates to the robot's
-    primitives with a fixed ``arm`` parameter::
+    Returned by ``robot.right`` / ``robot.left``. Provides geodude-specific
+    methods (pickup, place, close, open) and delegates everything else to
+    the underlying mj_manipulator Arm via ``__getattr__``::
 
-        robot.right.pickup("can")   # same as robot.pickup("can", arm="right")
-        robot.left.place("bin")     # same as robot.place("bin", arm="left")
+        robot.left.pickup("can")        # geodude primitive
+        robot.left.close()              # gripper control
+        robot.left.get_ee_pose()        # Arm method (delegated)
+        robot.left.get_ft_wrench()      # Arm method (delegated)
+        robot.left.plan_to_pose(target) # Arm method (delegated)
     """
 
     def __init__(self, robot: "Geodude", side: str):
         self._robot = robot
         self._side = side
+
+    def __getattr__(self, name):
+        # Delegate unknown attributes to the underlying Arm
+        return getattr(self._robot._resolve_arm(self._side), name)
+
+    def __dir__(self):
+        # Combine _ArmScope methods + Arm methods for tab completion
+        arm = self._robot._resolve_arm(self._side)
+        return sorted(set(super().__dir__()) | set(dir(arm)))
 
     def pickup(self, target: str | None = None, **kwargs) -> bool:
         return self._robot.pickup(target, arm=self._side, **kwargs)
@@ -92,11 +105,6 @@ class _ArmScope:
         if ctx is None:
             raise RuntimeError("No active execution context. Use 'with robot.sim() as ctx:'")
         ctx.arm(self._side).release()
-
-    @property
-    def arm(self) -> Arm:
-        """The underlying mj_manipulator Arm."""
-        return self._robot._resolve_arm(self._side)
 
 
 class Geodude:
@@ -235,20 +243,30 @@ class Geodude:
 
     @property
     def left(self) -> _ArmScope:
-        """Left arm primitives: ``robot.left.pickup("can")``."""
+        """Left arm: ``robot.left.pickup("can")``, ``robot.left.get_ee_pose()``."""
         return _ArmScope(self, "left")
 
     @property
     def right(self) -> _ArmScope:
-        """Right arm primitives: ``robot.right.pickup("can")``."""
+        """Right arm: ``robot.right.pickup("can")``, ``robot.right.get_ee_pose()``."""
         return _ArmScope(self, "right")
 
     @property
     def left_arm(self) -> Arm:
+        import warnings
+        warnings.warn(
+            "robot.left_arm is deprecated. Use robot.left instead.",
+            DeprecationWarning, stacklevel=2,
+        )
         return self._left_arm
 
     @property
     def right_arm(self) -> Arm:
+        import warnings
+        warnings.warn(
+            "robot.right_arm is deprecated. Use robot.right instead.",
+            DeprecationWarning, stacklevel=2,
+        )
         return self._right_arm
 
     @property

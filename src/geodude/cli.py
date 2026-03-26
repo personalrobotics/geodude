@@ -28,9 +28,19 @@ def _has_viewer() -> bool:
         return False
 
 
+def _find_mjpython() -> str | None:
+    """Find mjpython — check venv bin dir first, then PATH."""
+    # mjpython lives next to python in the venv
+    venv_bin = os.path.dirname(sys.executable)
+    candidate = os.path.join(venv_bin, "mjpython")
+    if os.path.isfile(candidate):
+        return candidate
+    return shutil.which("mjpython")
+
+
 def _reexec_with_mjpython() -> None:
     """Re-execute this process under mjpython."""
-    mjpython = shutil.which("mjpython")
+    mjpython = _find_mjpython()
     if mjpython is None:
         print("Error: mjpython not found. Install MuJoCo or add --headless.")
         sys.exit(1)

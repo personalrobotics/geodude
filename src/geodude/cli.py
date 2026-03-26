@@ -10,7 +10,6 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
 
@@ -40,16 +39,6 @@ def main() -> None:
             print(f"  {name:20s} — {desc}")
         print()
         sys.exit(0)
-
-    # Check viewer availability
-    if args.viewer and os.path.basename(sys.executable) != "mjpython":
-        # Build the equivalent mjpython command
-        cmd_args = ["uv", "run", "mjpython", "-m", "geodude.cli"]
-        for arg in sys.argv[1:]:
-            if arg != "--viewer":
-                cmd_args.append(arg)
-        print(f"Viewer requires mjpython on macOS. Run:\n\n  {' '.join(cmd_args)}\n")
-        sys.exit(1)
 
     from geodude.demo_loader import resolve_scene, setup_robot
 

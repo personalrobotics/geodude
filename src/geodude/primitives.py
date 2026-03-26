@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-import mujoco
 import numpy as np
 import py_trees
 from py_trees.common import Access, Status
@@ -214,7 +213,7 @@ def place(
     # Hide the placed/released object so it doesn't float (kinematic) or clutter
     if held_object and robot.env.registry.is_active(held_object):
         robot.env.registry.hide(held_object)
-        mujoco.mj_forward(robot.model, robot.data)
+        robot.forward()
 
     return ok
 

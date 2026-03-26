@@ -566,7 +566,7 @@ class Geodude:
                 for i, idx in enumerate(arm.joint_qpos_indices):
                     self.data.qpos[idx] = q[i]
 
-        mujoco.mj_forward(self.model, self.data)
+        self.forward()
 
     def holding(self) -> tuple[str, str] | None:
         """Return which arm is holding an object.
@@ -638,8 +638,10 @@ class Geodude:
     # -- State management ----------------------------------------------------
 
     def forward(self) -> None:
-        """Run forward kinematics to update positions."""
+        """Run forward kinematics and sync viewer."""
         mujoco.mj_forward(self.model, self.data)
+        if self._context is not None:
+            self._context.sync()
 
     def reset(self) -> None:
         """Reset the scene to its initial state.
@@ -667,10 +669,8 @@ class Geodude:
             for name in list(self._env.registry.active_objects):
                 self._env.registry.hide(name)
 
-        # Re-setup scene (fixtures + robot pose)
+        # Re-setup scene (fixtures + robot pose — calls forward() internally)
         self.setup_scene(fixtures=getattr(self, "_fixtures", None))
-
-        mujoco.mj_forward(self.model, self.data)
 
     def reset_to_keyframe(self, name: str) -> None:
         """Reset robot to a MuJoCo keyframe by name."""
@@ -678,7 +678,7 @@ class Geodude:
         if key_id == -1:
             raise ValueError(f"Keyframe '{name}' not found in model")
         mujoco.mj_resetDataKeyframe(self.model, self.data, key_id)
-        mujoco.mj_forward(self.model, self.data)
+        self.forward()
 
     def get_object_pose(self, object_name: str) -> np.ndarray:
         """Get the 4x4 pose of an object in the scene."""

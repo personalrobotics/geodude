@@ -128,36 +128,47 @@ def pickup(
             return False
         return True
 
-    def _pickup_details(side: str) -> tuple[list[str], str | None]:
-        """Get attempted objects and the specific object reached (if any)."""
+    def _pickup_details(side: str) -> tuple[list[str], str | None, bool]:
+        """Get attempted objects, the specific object reached, and grasp result.
+
+        Returns:
+            (attempted_objects, reached_object, grasp_succeeded)
+        """
         ns = f"/{side}"
         attempted: list[str] = []
         reached: str | None = None
+        grasped = False
         try:
             bb = py_trees.blackboard.Client(name=f"pickup_report{ns}")
             bb.register_key(key=f"{ns}/tsr_to_object", access=Access.READ)
             bb.register_key(key=f"{ns}/object_name", access=Access.READ)
+            bb.register_key(key=f"{ns}/grasped", access=Access.READ)
             mapping = bb.get(f"{ns}/tsr_to_object")
             if mapping:
                 attempted = sorted(set(mapping))
             obj = bb.get(f"{ns}/object_name")
             if obj:
                 reached = obj
+            grasped = bool(bb.get(f"{ns}/grasped"))
         except (KeyError, RuntimeError):
             pass
-        return attempted, reached
+        return attempted, reached, grasped
 
     def _report_failure(sides_tried: list[str]) -> None:
         all_attempted: set[str] = set()
-        last_reached: str | None = None
+        grasp_failures: list[str] = []
         for side in sides_tried:
-            attempted, reached = _pickup_details(side)
+            attempted, reached, grasped = _pickup_details(side)
             all_attempted.update(attempted)
-            if reached:
-                last_reached = reached
+            if reached and not grasped:
+                grasp_failures.append(f"{reached} ({side} arm)")
 
-        if last_reached:
-            logger.warning("Pickup failed: reached %s but grasp failed", last_reached)
+        if grasp_failures:
+            unreached = all_attempted - {r.split(" ")[0] for r in grasp_failures}
+            msg = f"Pickup failed: reached {', '.join(grasp_failures)} but grasp failed"
+            if unreached:
+                msg += f"; could not plan to {', '.join(sorted(unreached))}"
+            logger.warning(msg)
         elif all_attempted:
             logger.warning(
                 "Pickup failed: could not plan to %s",

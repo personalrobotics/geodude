@@ -573,6 +573,20 @@ class ChatSession:
         self.messages.append({"role": "user", "content": user_input})
         response_text = ""
 
+        try:
+            response_text = self._run_conversation()
+        except Exception as e:
+            # On error, remove the failed user message and reset cleanly
+            logger.warning("Chat error: %s. Resetting conversation.", e)
+            self.messages.clear()
+            response_text = f"Error: {e}. Conversation reset."
+
+        return response_text
+
+    def _run_conversation(self) -> str:
+        """Inner conversation loop. Raises on API errors."""
+        response_text = ""
+
         while True:
             system = SYSTEM_PROMPT.format(
                 scene_state=_scene_summary(self.robot)
@@ -596,16 +610,19 @@ class ChatSession:
                         response_text += block.text
                 break
 
-            # Execute tools
+            # Execute tools — always produce a result for each call
             tool_results = []
             for tc in tool_calls:
                 print(f"  \u2192 {tc.name}({json.dumps(tc.input)})")
-                args = dict(tc.input)
-                if tc.name == "reset_scene":
-                    args["_original_objects"] = self.original_objects
-                    args["_original_fixtures"] = self.original_fixtures
-                result = _execute_tool(self.robot, tc.name, args)
-                status = "\u2713" if "Success" in result or "null" not in result else "\u2717"
+                try:
+                    args = dict(tc.input)
+                    if tc.name == "reset_scene":
+                        args["_original_objects"] = self.original_objects
+                        args["_original_fixtures"] = self.original_fixtures
+                    result = _execute_tool(self.robot, tc.name, args)
+                except Exception as e:
+                    result = f"Error executing {tc.name}: {e}"
+                status = "\u2713" if "Success" in result or "Error" not in result else "\u2717"
                 print(f"  {status} {result}")
                 tool_results.append({
                     "type": "tool_result",

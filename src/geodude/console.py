@@ -75,7 +75,6 @@ def start_console(
         robot.reset()
         fixture_types = set(fixtures.keys()) if fixtures else set()
         _spawn_manipulable_objects(robot, objects or {}, fixture_types)
-        robot.forward()
         print("Scene reset.")
 
     def demos() -> None:

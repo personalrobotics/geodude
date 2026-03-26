@@ -255,6 +255,9 @@ def _spawn_manipulable_objects(
                 robot.data.qpos[qpos_adr : qpos_adr + 3] = tsr.sample()[:3, 3]
                 mujoco.mj_forward(robot.model, robot.data)
 
+    # Final sync — updates viewer with all placed objects
+    robot.forward()
+
 
 def _has_object_collision(model, data, body_name: str) -> bool:
     """Check if a body is in contact with any other object (not floor)."""

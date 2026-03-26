@@ -196,14 +196,22 @@ def _choose_scene() -> tuple[dict[str, int], dict[str, list[list[float]]], Modul
 def setup_robot(
     objects: dict[str, int],
     fixtures: dict[str, list[list[float]]],
+    spawn_count: int | None = None,
 ) -> Geodude:
-    """Create and set up a Geodude robot with the given scene config."""
+    """Create and set up a Geodude robot with the given scene config.
+
+    Args:
+        objects: Object types and pool counts.
+        fixtures: Fixture positions.
+        spawn_count: If set, randomly pick this many objects to spawn
+            from the pool (instead of spawning all).
+    """
     from geodude.robot import Geodude
 
     robot = Geodude(objects=objects)
     robot.setup_scene(fixtures=fixtures if fixtures else None)
     fixture_types = set(fixtures.keys()) if fixtures else set()
-    _spawn_manipulable_objects(robot, objects, fixture_types)
+    _spawn_manipulable_objects(robot, objects, fixture_types, spawn_count=spawn_count)
     return robot
 
 
@@ -211,16 +219,38 @@ def _spawn_manipulable_objects(
     robot: Geodude,
     objects: dict[str, int],
     fixture_types: set[str],
+    spawn_count: int | None = None,
 ) -> None:
-    """Scatter non-fixture objects on the worktop (simulates perception)."""
+    """Scatter non-fixture objects on the worktop (simulates perception).
+
+    Args:
+        robot: Geodude instance.
+        objects: Object pool — type name to count.
+        fixture_types: Types to skip (placed as fixtures).
+        spawn_count: If set, randomly select this many objects from the
+            pool instead of spawning all. Picks types with replacement.
+    """
+    import random
+
     import mujoco
     from asset_manager import AssetManager
     from prl_assets import OBJECTS_DIR
     from tsr.placement import TablePlacer
 
-    specs = [(t, n) for t, n in objects.items() if t not in fixture_types]
-    if not specs:
+    graspable = [(t, n) for t, n in objects.items() if t not in fixture_types]
+    if not graspable:
         return
+
+    # Build spawn list: either all objects or a random subset
+    if spawn_count is not None:
+        available_types = [t for t, _ in graspable]
+        spawn_list = random.choices(available_types, k=spawn_count)
+        # Count how many of each type to spawn
+        from collections import Counter
+        type_counts = Counter(spawn_list)
+        specs = list(type_counts.items())
+    else:
+        specs = graspable
 
     assets = AssetManager(str(OBJECTS_DIR))
     wt_id = mujoco.mj_name2id(robot.model, mujoco.mjtObj.mjOBJ_SITE, "worktop")

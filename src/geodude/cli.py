@@ -34,8 +34,11 @@ def main() -> None:
     from geodude.demo_loader import resolve_scene, setup_robot
 
     objects, fixtures, demo_module = resolve_scene(args.demo, args.objects)
+    spawn_count = None
+    if demo_module and hasattr(demo_module, "scene"):
+        spawn_count = demo_module.scene.get("spawn_count")
     print(f"\nLoading Geodude with {objects}...", flush=True)
-    robot = setup_robot(objects, fixtures)
+    robot = setup_robot(objects, fixtures, spawn_count=spawn_count)
 
     from geodude.console import start_console
     start_console(

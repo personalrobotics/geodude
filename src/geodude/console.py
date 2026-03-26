@@ -75,7 +75,10 @@ def start_console(
         from geodude.demo_loader import _spawn_manipulable_objects
         robot.reset()
         fixture_types = set(fixtures.keys()) if fixtures else set()
-        _spawn_manipulable_objects(robot, objects or {}, fixture_types)
+        spawn_count = None
+        if demo_module and hasattr(demo_module, "scene"):
+            spawn_count = demo_module.scene.get("spawn_count")
+        _spawn_manipulable_objects(robot, objects or {}, fixture_types, spawn_count=spawn_count)
         if chat_session is not None:
             chat_session.messages.clear()
         print("Scene reset.")

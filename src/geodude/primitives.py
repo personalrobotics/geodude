@@ -128,10 +128,49 @@ def pickup(
             return False
         return True
 
+    def _pickup_details(side: str) -> tuple[list[str], str | None]:
+        """Get attempted objects and the specific object reached (if any)."""
+        ns = f"/{side}"
+        attempted: list[str] = []
+        reached: str | None = None
+        try:
+            bb = py_trees.blackboard.Client(name=f"pickup_report{ns}")
+            bb.register_key(key=f"{ns}/tsr_to_object", access=Access.READ)
+            bb.register_key(key=f"{ns}/object_name", access=Access.READ)
+            mapping = bb.get(f"{ns}/tsr_to_object")
+            if mapping:
+                attempted = sorted(set(mapping))
+            obj = bb.get(f"{ns}/object_name")
+            if obj:
+                reached = obj
+        except (KeyError, RuntimeError):
+            pass
+        return attempted, reached
+
+    def _report_failure(sides_tried: list[str]) -> None:
+        all_attempted: set[str] = set()
+        last_reached: str | None = None
+        for side in sides_tried:
+            attempted, reached = _pickup_details(side)
+            all_attempted.update(attempted)
+            if reached:
+                last_reached = reached
+
+        if last_reached:
+            logger.warning("Pickup failed: reached %s but grasp failed", last_reached)
+        elif all_attempted:
+            logger.warning(
+                "Pickup failed: could not plan to %s",
+                ", ".join(sorted(all_attempted)),
+            )
+        else:
+            desc = f"'{target}'" if target else "any object"
+            logger.warning("Pickup failed: no graspable %s found", desc)
+
     if arm is not None:
         if _try_pickup(arm):
             return True
-        logger.warning("Pickup failed: %s arm could not pick up '%s'", arm, target)
+        _report_failure([arm])
         return False
 
     import random
@@ -141,8 +180,7 @@ def pickup(
         if _try_pickup(side):
             return True
 
-    desc = f"'{target}'" if target else "any object"
-    logger.warning("Pickup failed: neither arm could pick up %s (tried %s)", desc, ", ".join(sides))
+    _report_failure(sides)
     return False
 
 

@@ -575,6 +575,12 @@ You are the control interface for Geodude, a bimanual robot.
 - Object names follow the pattern: type_N (e.g. "can_0", "can_1", "potted_meat_can_0", "recycle_bin_0")
 - To refer to any object of a type, use just the type name (e.g. "can" matches any can)
 
+## Viewer and state updates
+- After modifying the scene (hide, activate, set_height, etc.), always call `robot.forward()` then `ctx.sync()` to update the viewer
+- `robot.forward()` runs MuJoCo forward kinematics to update internal state
+- `ctx.sync()` pushes the updated state to the viewer for rendering
+- Example: `robot.env.registry.hide('can_0'); robot.forward(); ctx.sync()`
+
 ## Sensors
 - Each arm has a 6-axis force/torque sensor at the wrist
 - F/T readings are only meaningful in physics mode — in kinematic mode they are near-zero noise

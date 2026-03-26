@@ -99,12 +99,17 @@ class Geodude:
             robot.place("recycle_bin_0")
     """
 
+    config: GeodudConfig
+    model: mujoco.MjModel
+    data: mujoco.MjData
+    grasp_manager: GraspManager
+
     def __init__(
         self,
         config: GeodudConfig | None = None,
         objects: dict[str, int] | None = None,
     ):
-        self.config = config or GeodudConfig.default()
+        self.config: GeodudConfig = config or GeodudConfig.default()
 
         # Load MuJoCo model via mj_environment
         if not self.config.model_path.exists():
@@ -129,11 +134,11 @@ class Geodude:
                 scene_config_yaml=None,
             )
 
-        self.model = self._env.model
-        self.data = self._env.data
+        self.model: mujoco.MjModel = self._env.model
+        self.data: mujoco.MjData = self._env.data
 
         # Shared grasp manager
-        self.grasp_manager = GraspManager(self.model, self.data)
+        self.grasp_manager: GraspManager = GraspManager(self.model, self.data)
 
         # Create arms from mj_manipulator
         self._left_arm = self._create_arm(self.config.left_arm, "left")

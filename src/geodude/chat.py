@@ -7,7 +7,8 @@ Example::
 
     robot = Geodude(objects={"can": 4, "recycle_bin": 2})
     with robot.sim(physics=True) as ctx:
-        chat_loop(robot, mode="physics")
+        session = ChatSession(robot, mode="physics")
+        print(session.send("pick up a can"))
 """
 
 from __future__ import annotations
@@ -78,8 +79,6 @@ def _spawn_manipulable_objects(
                 robot.data.qpos[qpos_adr : qpos_adr + 3] = tsr.sample()[:3, 3]
                 mujoco.mj_forward(robot.model, robot.data)
 
-    mujoco.mj_forward(robot.model, robot.data)
-
 
 def _has_object_collision(model, data, body_name: str) -> bool:
     """Check if a body is in contact with any other object (not floor)."""
@@ -111,6 +110,38 @@ SCENE_PRESETS = {
         },
     },
 }
+
+
+def resolve_scene(
+    preset: str | None = None,
+    objects_json: str | None = None,
+) -> tuple[dict[str, int], dict[str, list[list[float]]]]:
+    """Resolve scene config from CLI args. Returns (objects, fixtures)."""
+    if objects_json:
+        import json as _json
+        return _json.loads(objects_json), {}
+    if preset:
+        if preset not in SCENE_PRESETS:
+            raise ValueError(
+                f"Unknown preset: {preset}. Available: {', '.join(SCENE_PRESETS.keys())}"
+            )
+        p = SCENE_PRESETS[preset]
+        return p["objects"], p["fixtures"]
+    return choose_scene()
+
+
+def setup_robot(
+    objects: dict[str, int],
+    fixtures: dict[str, list[list[float]]],
+) -> "Geodude":
+    """Create and set up a Geodude robot with the given scene config."""
+    from geodude.robot import Geodude
+
+    robot = Geodude(objects=objects)
+    robot.setup_scene(fixtures=fixtures if fixtures else None)
+    fixture_types = set(fixtures.keys()) if fixtures else set()
+    _spawn_manipulable_objects(robot, objects, fixture_types)
+    return robot
 
 
 def choose_scene() -> tuple[dict[str, int], dict[str, list[list[float]]]]:
@@ -163,7 +194,7 @@ def choose_scene() -> tuple[dict[str, int], dict[str, list[list[float]]]]:
 # -- Tool definitions for LLM -----------------------------------------------
 
 
-def _build_tools(robot: Geodude) -> list[dict]:
+def _build_tools() -> list[dict]:
     """Build tool schemas for the LLM."""
     return [
         {
@@ -316,7 +347,14 @@ def _build_tools(robot: Geodude) -> list[dict]:
     ]
 
 
-def _execute_tool(robot: Geodude, name: str, args: dict) -> str:
+def _execute_tool(
+    robot: Geodude,
+    name: str,
+    args: dict,
+    *,
+    original_objects: dict[str, int] | None = None,
+    original_fixtures: dict[str, list[list[float]]] | None = None,
+) -> str:
     """Execute a tool call and return the result as a string."""
     if name == "pickup":
         ok = robot.pickup(args.get("target"), arm=args.get("arm"))
@@ -327,11 +365,8 @@ def _execute_tool(robot: Geodude, name: str, args: dict) -> str:
         return f"{'Success' if ok else 'Failed'}: place({args})"
 
     elif name == "go_home":
-        ok = robot.go_home() if "arm" not in args else robot.go_home()
-        # go_home doesn't take arm param at top level, use _ArmScope
-        if "arm" in args:
-            from geodude.primitives import go_home
-            ok = go_home(robot, arm=args["arm"])
+        from geodude.primitives import go_home
+        ok = go_home(robot, arm=args.get("arm"))
         return f"{'Success' if ok else 'Failed'}: go_home({args})"
 
     elif name == "get_objects":
@@ -373,8 +408,8 @@ def _execute_tool(robot: Geodude, name: str, args: dict) -> str:
         for obj in list(robot.grasp_manager.grasped.keys()):
             robot.grasp_manager.mark_released(obj)
         # Re-setup fixtures and spawn objects
-        original_objects = args.get("_original_objects", {})
-        original_fixtures = args.get("_original_fixtures", {})
+        original_objects = original_objects or {}
+        original_fixtures = original_fixtures or {}
         robot.setup_scene(fixtures=original_fixtures if original_fixtures else None)
         fixture_types = set(original_fixtures.keys()) if original_fixtures else set()
         _spawn_manipulable_objects(robot, original_objects, fixture_types)
@@ -388,10 +423,7 @@ def _execute_tool(robot: Geodude, name: str, args: dict) -> str:
             ee_pose = arm.get_ee_pose()
             current_q = [float(robot.data.qpos[i]) for i in arm.joint_qpos_indices]
 
-            at_home = False
-            if "ready" in robot.named_poses and side in robot.named_poses["ready"]:
-                ready_q = np.array(robot.named_poses["ready"][side])
-                at_home = bool(np.allclose(current_q, ready_q, atol=0.05))
+            at_home = _is_arm_at_home(robot, side, arm)
 
             held = list(robot.grasp_manager.get_grasped_by(side))
 
@@ -419,6 +451,15 @@ def _execute_tool(robot: Geodude, name: str, args: dict) -> str:
 
 
 # -- Scene state for LLM context -------------------------------------------
+
+
+def _is_arm_at_home(robot: Geodude, side: str, arm) -> bool:
+    """Check if an arm is at its home (ready) configuration."""
+    if "ready" not in robot.named_poses or side not in robot.named_poses["ready"]:
+        return False
+    ready_q = np.array(robot.named_poses["ready"][side])
+    current_q = np.array([robot.data.qpos[i] for i in arm.joint_qpos_indices])
+    return bool(np.allclose(current_q, ready_q, atol=0.05))
 
 
 def _api_reference(robot: Geodude) -> str:
@@ -493,11 +534,7 @@ def _scene_summary(robot: Geodude) -> str:
         ee_pose = arm.get_ee_pose()
         pos = ee_pose[:3, 3]
         # Home status
-        at_home = False
-        if "ready" in robot.named_poses and side in robot.named_poses["ready"]:
-            ready_q = np.array(robot.named_poses["ready"][side])
-            current_q = np.array([robot.data.qpos[i] for i in arm.joint_qpos_indices])
-            at_home = np.allclose(current_q, ready_q, atol=0.05)
+        at_home = _is_arm_at_home(robot, side, arm)
         # Holding
         held = list(robot.grasp_manager.get_grasped_by(side))
         holding_str = f", holding {held[0]}" if held else ""
@@ -596,7 +633,7 @@ class ChatSession:
         self.original_objects = original_objects or {}
         self.original_fixtures = original_fixtures or {}
         self.client = anthropic.Anthropic()
-        self.tools = _build_tools(robot)
+        self.tools = _build_tools()
         self.api_reference = _api_reference(robot)
         self.messages: list[dict] = []
 
@@ -651,11 +688,11 @@ class ChatSession:
             for tc in tool_calls:
                 print(f"  \u2192 {tc.name}({json.dumps(tc.input)})")
                 try:
-                    args = dict(tc.input)
-                    if tc.name == "reset_scene":
-                        args["_original_objects"] = self.original_objects
-                        args["_original_fixtures"] = self.original_fixtures
-                    result = _execute_tool(self.robot, tc.name, args)
+                    result = _execute_tool(
+                        self.robot, tc.name, dict(tc.input),
+                        original_objects=self.original_objects,
+                        original_fixtures=self.original_fixtures,
+                    )
                 except Exception as e:
                     result = f"Error executing {tc.name}: {e}"
                 status = "\u2713" if "Success" in result or "Error" not in result else "\u2717"
@@ -666,7 +703,7 @@ class ChatSession:
                     "content": result,
                 })
 
-            # Append updated scene state to last tool result
+            # Append updated scene state so LLM sees post-action world
             tool_results[-1]["content"] += (
                 f"\n\nUpdated scene:\n{_scene_summary(self.robot)}"
             )

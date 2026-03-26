@@ -2,7 +2,7 @@
 """Interactive console for Geodude with integrated LLM chat.
 
 IPython REPL with tab completion, introspection, and history.
-Use /chat to talk to the robot via an LLM.
+Use chat('message') or %chat message to talk to the robot via an LLM.
 
 Usage:
     uv run python examples/console.py --preset recycling
@@ -10,84 +10,34 @@ Usage:
     uv run mjpython examples/console.py --physics --viewer --preset recycling
 
 Environment:
-    ANTHROPIC_API_KEY: Required for /chat. Console works without it.
+    ANTHROPIC_API_KEY: Required for chat(). Console works without it.
 """
 
 import argparse
-import json
 import os
 import sys
 
 
 def main():
     parser = argparse.ArgumentParser(description="Geodude interactive console")
-    parser.add_argument(
-        "--physics", action="store_true",
-        help="Use physics simulation (default: kinematic)",
-    )
-    parser.add_argument(
-        "--hardware", action="store_true",
-        help="Connect to real robot hardware",
-    )
-    parser.add_argument(
-        "--preset", type=str, default=None,
-        help="Scene preset name (e.g. 'recycling')",
-    )
-    parser.add_argument(
-        "--objects", type=str, default=None,
-        help='JSON object counts, e.g. \'{"can": 4, "recycle_bin": 2}\'',
-    )
-    parser.add_argument(
-        "--model", type=str, default="claude-sonnet-4-20250514",
-        help="LLM model name for /chat",
-    )
-    parser.add_argument(
-        "--viewer", action="store_true",
-        help="Launch MuJoCo viewer (requires mjpython)",
-    )
+    parser.add_argument("--physics", action="store_true")
+    parser.add_argument("--preset", type=str, default=None)
+    parser.add_argument("--objects", type=str, default=None)
+    parser.add_argument("--model", type=str, default="claude-sonnet-4-20250514")
+    parser.add_argument("--viewer", action="store_true")
     args = parser.parse_args()
-
-    if args.hardware:
-        print("Hardware mode not yet implemented. See geodude#91.")
-        sys.exit(1)
 
     mode = "physics" if args.physics else "kinematic"
 
-    # Determine scene
-    from geodude.chat import SCENE_PRESETS, choose_scene
+    from geodude.chat import resolve_scene, setup_robot
 
-    if args.objects:
-        objects = json.loads(args.objects)
-        fixtures = {}
-    elif args.preset:
-        if args.preset not in SCENE_PRESETS:
-            print(f"Unknown preset: {args.preset}")
-            print(f"Available: {', '.join(SCENE_PRESETS.keys())}")
-            sys.exit(1)
-        preset = SCENE_PRESETS[args.preset]
-        objects = preset["objects"]
-        fixtures = preset["fixtures"]
-    else:
-        objects, fixtures = choose_scene()
+    objects, fixtures = resolve_scene(args.preset, args.objects)
+    print(f"\nLoading Geodude with {objects}...")
+    robot = setup_robot(objects, fixtures)
 
-    # Create robot
     import numpy as np
 
-    from geodude.robot import Geodude
-
-    print(f"\nLoading Geodude with {objects}...")
-    robot = Geodude(objects=objects)
-    robot.setup_scene(fixtures=fixtures if fixtures else None)
-
-    from geodude.chat import _spawn_manipulable_objects
-    fixture_types = set(fixtures.keys()) if fixtures else set()
-    _spawn_manipulable_objects(robot, objects, fixture_types)
-
-    # Start sim
-    sim_ctx = robot.sim(physics=args.physics, headless=not args.viewer)
-    ctx = sim_ctx.__enter__()
-
-    # Set up chat session (lazy — only if API key is available)
+    # -- Chat integration (lazy) ---------------------------------------------
     chat_session = None
 
     def _get_chat():
@@ -95,7 +45,7 @@ def main():
         if chat_session is not None:
             return chat_session
         if not os.environ.get("ANTHROPIC_API_KEY"):
-            print("Set ANTHROPIC_API_KEY to use /chat")
+            print("Set ANTHROPIC_API_KEY to use chat()")
             return None
         from geodude.chat import ChatSession
         chat_session = ChatSession(
@@ -116,7 +66,7 @@ def main():
         if response:
             print(f"\nGeodude [{mode}]: {response}\n")
 
-    def quickref():
+    def commands():
         """Print a quick reference of available commands."""
         print("""
 Geodude Quick Reference
@@ -158,7 +108,7 @@ IPython:
   whos                              — list all variables
 """)
 
-    # Banner
+    # -- Banner --------------------------------------------------------------
     n_objects = len(robot.find_objects())
     banner = (
         f"\n{'=' * 60}\n"
@@ -166,8 +116,6 @@ IPython:
     )
     if os.environ.get("ANTHROPIC_API_KEY"):
         banner += f"  LLM: {args.model}\n"
-    if mode == "hardware":
-        banner += "  \u26a0 REAL ROBOT \u2014 commands will move hardware\n"
     banner += (
         f"{'=' * 60}\n"
         f"\n"
@@ -176,39 +124,33 @@ IPython:
         f"  robot.<tab>  — tab completion\n"
     )
 
-    # Namespace for IPython
+    # -- Launch IPython inside sim context -----------------------------------
     user_ns = {
         "robot": robot,
-        "ctx": ctx,
         "np": np,
         "chat": chat,
-        "commands": quickref,
+        "commands": commands,
     }
 
     import IPython
     from IPython.terminal.embed import InteractiveShellEmbed
 
-    shell = InteractiveShellEmbed(
-        header=banner,
-        user_ns=user_ns,
-        colors="neutral",
-    )
+    with robot.sim(physics=args.physics, headless=not args.viewer) as ctx:
+        user_ns["ctx"] = ctx
 
-    # Register /chat magic now that the shell exists
-    from IPython.core.magic import register_line_magic
+        shell = InteractiveShellEmbed(
+            header=banner,
+            user_ns=user_ns,
+            colors="neutral",
+        )
 
-    @shell.register_magic_function
-    def chat_magic(line):
-        """/chat <message> — send a message to the LLM."""
-        chat(line)
+        @shell.register_magic_function
+        def chat_magic(line):
+            """%chat <message> — send a message to the LLM."""
+            chat(line)
 
-    # Make /chat work (alias)
-    shell.magics_manager.register_alias("chat", "chat_magic")
-
-    shell()
-
-    # Cleanup
-    sim_ctx.__exit__(None, None, None)
+        shell.magics_manager.register_alias("chat", "chat_magic")
+        shell()
 
 
 if __name__ == "__main__":

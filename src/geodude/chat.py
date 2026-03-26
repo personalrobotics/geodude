@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import traceback
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -517,117 +516,73 @@ You are the control interface for Geodude, a bimanual robot.
 """
 
 
-def chat_loop(
-    robot: Geodude,
-    *,
-    mode: str = "kinematic",
-    model_name: str = "claude-sonnet-4-20250514",
-    original_objects: dict[str, int] | None = None,
-    original_fixtures: dict[str, list[list[float]]] | None = None,
-) -> None:
-    """Run the interactive chat REPL.
+class ChatSession:
+    """Manages LLM conversation state for robot control.
 
-    Args:
-        robot: Geodude instance with active execution context.
-        mode: "kinematic", "physics", or "hardware".
-        model_name: Anthropic model to use.
-        original_objects: Object counts from scene setup (for reset).
-        original_fixtures: Fixture positions from scene setup (for reset).
+    Holds the message history, tool definitions, and scene config.
+    Call send() for each user message — usable from any REPL.
     """
-    try:
+
+    def __init__(
+        self,
+        robot: Geodude,
+        *,
+        mode: str = "kinematic",
+        model_name: str = "claude-sonnet-4-20250514",
+        original_objects: dict[str, int] | None = None,
+        original_fixtures: dict[str, list[list[float]]] | None = None,
+    ):
         import anthropic
-    except ImportError:
-        print("Error: anthropic package not installed.")
-        print("Install with: uv add anthropic")
-        return
 
-    client = anthropic.Anthropic()
-    tools = _build_tools(robot)
+        self.robot = robot
+        self.mode = mode
+        self.model_name = model_name
+        self.original_objects = original_objects or {}
+        self.original_fixtures = original_fixtures or {}
+        self.client = anthropic.Anthropic()
+        self.tools = _build_tools(robot)
+        self.messages: list[dict] = []
 
-    # Banner
-    objects = robot.find_objects()
-    n_objects = len(objects)
-    print(f"\n{'=' * 60}")
-    print(f"  Geodude [{mode}] | 2 arms | {n_objects} objects")
-    print(f"  LLM: {model_name}")
-    if mode == "hardware":
-        print("  \u26a0 REAL ROBOT \u2014 commands will move hardware")
-    print(f"{'=' * 60}")
-    print("  Type naturally to control the robot.")
-    print("  Prefix with ! for Python (e.g. !robot.holding())")
-    print("  Type 'quit' to exit.\n")
+    def send(self, user_input: str) -> str:
+        """Send a message to the LLM and execute any tool calls.
 
-    messages: list[dict] = []
+        Returns the final text response.
+        """
+        self.messages.append({"role": "user", "content": user_input})
+        response_text = ""
 
-    while True:
-        try:
-            user_input = input("You: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nBye!")
-            break
-
-        if not user_input:
-            continue
-        if user_input.lower() in ("quit", "exit", "q"):
-            print("Bye!")
-            break
-
-        # Python escape hatch
-        if user_input.startswith("!"):
-            code = user_input[1:].strip()
-            try:
-                # Try eval first (expressions), fall back to exec (statements)
-                try:
-                    result = eval(code, {"robot": robot, "np": np})
-                    if result is not None:
-                        print(repr(result))
-                except SyntaxError:
-                    exec(code, {"robot": robot, "np": np})
-            except Exception:
-                traceback.print_exc()
-            continue
-
-        # Build system prompt with current scene state
-        system = SYSTEM_PROMPT.format(scene_state=_scene_summary(robot))
-
-        messages.append({"role": "user", "content": user_input})
-
-        # LLM conversation loop (handles multi-turn tool use)
         while True:
-            # Refresh scene state each round so LLM sees current world
-            system = SYSTEM_PROMPT.format(scene_state=_scene_summary(robot))
-
-            response = client.messages.create(
-                model=model_name,
-                max_tokens=1024,
-                system=system,
-                tools=tools,
-                messages=messages,
+            system = SYSTEM_PROMPT.format(
+                scene_state=_scene_summary(self.robot)
             )
 
-            # Collect text and tool calls from response
-            assistant_content = response.content
-            messages.append({"role": "assistant", "content": assistant_content})
+            response = self.client.messages.create(
+                model=self.model_name,
+                max_tokens=1024,
+                system=system,
+                tools=self.tools,
+                messages=self.messages,
+            )
 
-            # Check for tool use
+            assistant_content = response.content
+            self.messages.append({"role": "assistant", "content": assistant_content})
+
             tool_calls = [b for b in assistant_content if b.type == "tool_use"]
             if not tool_calls:
-                # No tools — print text response and break
                 for block in assistant_content:
                     if hasattr(block, "text"):
-                        print(f"\nGeodude [{mode}]: {block.text}\n")
+                        response_text += block.text
                 break
 
-            # Execute tools and collect results
+            # Execute tools
             tool_results = []
             for tc in tool_calls:
                 print(f"  \u2192 {tc.name}({json.dumps(tc.input)})")
-                # Inject original scene config for reset_scene
                 args = dict(tc.input)
                 if tc.name == "reset_scene":
-                    args["_original_objects"] = original_objects or {}
-                    args["_original_fixtures"] = original_fixtures or {}
-                result = _execute_tool(robot, tc.name, args)
+                    args["_original_objects"] = self.original_objects
+                    args["_original_fixtures"] = self.original_fixtures
+                result = _execute_tool(self.robot, tc.name, args)
                 status = "\u2713" if "Success" in result or "null" not in result else "\u2717"
                 print(f"  {status} {result}")
                 tool_results.append({
@@ -638,9 +593,9 @@ def chat_loop(
 
             # Append updated scene state to last tool result
             tool_results[-1]["content"] += (
-                f"\n\nUpdated scene:\n{_scene_summary(robot)}"
+                f"\n\nUpdated scene:\n{_scene_summary(self.robot)}"
             )
 
-            messages.append({"role": "user", "content": tool_results})
+            self.messages.append({"role": "user", "content": tool_results})
 
-            # Continue loop — LLM will process tool results
+        return response_text

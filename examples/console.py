@@ -171,7 +171,7 @@ IPython:
     banner += (
         f"{'=' * 60}\n"
         f"\n"
-        f"  quickref()   — quick reference of all commands\n"
+        f"  commands()   — quick reference of all commands\n"
         f"  chat('msg')  — talk to the robot via LLM\n"
         f"  robot.<tab>  — tab completion\n"
     )
@@ -182,7 +182,7 @@ IPython:
         "ctx": ctx,
         "np": np,
         "chat": chat,
-        "quickref": quickref,
+        "commands": quickref,
     }
 
     import IPython

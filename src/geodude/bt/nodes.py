@@ -115,14 +115,17 @@ def _generate_tsrs_for_object(robot, body_name: str, obj_type: str) -> list:
 
     hand = Robotiq2F140()
     if gp.get("type") == "cylinder":
+        # Shift to bottom face along the object's local Z axis
         T_bottom = obj_pose.copy()
-        T_bottom[2, 3] -= gp["height"] / 2
+        local_z = obj_pose[:3, 2]  # object's Z axis in world frame
+        T_bottom[:3, 3] -= local_z * (gp["height"] / 2)
         templates = hand.grasp_cylinder_side(gp["radius"], gp["height"])
         return [t.instantiate(T_bottom) for t in templates]
     elif gp.get("type") == "box":
         size = gp["size"]  # [x, y, z]
         T_bottom = obj_pose.copy()
-        T_bottom[2, 3] -= size[2] / 2
+        local_z = obj_pose[:3, 2]
+        T_bottom[:3, 3] -= local_z * (size[2] / 2)
         templates = hand.grasp_box(size[0], size[1], size[2])
         return [t.instantiate(T_bottom) for t in templates]
 

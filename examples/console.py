@@ -116,6 +116,48 @@ def main():
         if response:
             print(f"\nGeodude [{mode}]: {response}\n")
 
+    def quickref():
+        """Print a quick reference of available commands."""
+        print("""
+Geodude Quick Reference
+=======================
+
+Scene:
+  robot.find_objects()              — list all objects on table
+  robot.find_objects("can")         — find objects by type
+  robot.get_object_pose("can_0")    — 4x4 pose matrix of an object
+  robot.holding()                   — (side, name) or None
+
+Actions:
+  robot.pickup()                    — pick up nearest reachable object
+  robot.pickup("can")               — pick up any can
+  robot.pickup("can_0")             — pick up specific object
+  robot.pickup("can", arm="left")   — use a specific arm
+  robot.place("recycle_bin")        — place in any bin
+  robot.place()                     — place in any destination
+  robot.go_home()                   — return all arms to ready
+
+Arms:
+  robot.left_arm.get_ee_pose()      — left end-effector 4x4 pose
+  robot.right_arm.get_ee_pose()     — right end-effector 4x4 pose
+  robot.left_arm.get_ft_wrench()    — left wrist F/T sensor [fx,fy,fz,tx,ty,tz]
+  robot.right_arm.get_ft_wrench()   — right wrist F/T sensor
+
+Scoped shortcuts:
+  robot.left.pickup("can")          — left arm picks up a can
+  robot.right.place("recycle_bin")  — right arm places in bin
+
+LLM chat:
+  chat('clear the table')           — natural language control
+  %chat clear the table             — same, magic syntax
+
+IPython:
+  robot.<tab>                       — tab completion
+  ?robot.pickup                     — docstring
+  ??robot.pickup                    — source code
+  whos                              — list all variables
+""")
+
     # Banner
     n_objects = len(robot.find_objects())
     banner = (
@@ -129,10 +171,9 @@ def main():
     banner += (
         f"{'=' * 60}\n"
         f"\n"
-        f"  Available: robot, ctx, np\n"
+        f"  quickref()   — quick reference of all commands\n"
         f"  chat('msg')  — talk to the robot via LLM\n"
         f"  robot.<tab>  — tab completion\n"
-        f"  ?robot.pickup — help on any method\n"
     )
 
     # Namespace for IPython
@@ -141,6 +182,7 @@ def main():
         "ctx": ctx,
         "np": np,
         "chat": chat,
+        "quickref": quickref,
     }
 
     import IPython

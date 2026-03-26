@@ -167,6 +167,25 @@ def _build_tools() -> list[dict]:
             },
         },
         {
+            "name": "run_python",
+            "description": (
+                "Execute Python code in the robot console. Has access to "
+                "robot, ctx, and np. Use for any action not covered by other "
+                "tools — gripper control, arm queries, scene manipulation, etc. "
+                "Returns the result or error message."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Python code to execute. Use robot.left.close(), robot.left.get_ee_pose(), etc.",
+                    },
+                },
+                "required": ["code"],
+            },
+        },
+        {
             "name": "reset_scene",
             "description": (
                 "Reset the scene: re-spawn all original objects at random positions "
@@ -182,6 +201,13 @@ def _build_tools() -> list[dict]:
     ]
 
 
+_PYTHON_SAFE_BUILTINS = {
+    "abs", "all", "any", "bool", "dict", "enumerate", "float", "int",
+    "isinstance", "len", "list", "map", "max", "min", "print", "range",
+    "repr", "round", "set", "sorted", "str", "sum", "tuple", "type", "zip",
+}
+
+
 def _execute_tool(
     robot: Geodude,
     name: str,
@@ -189,6 +215,7 @@ def _execute_tool(
     *,
     original_objects: dict[str, int] | None = None,
     original_fixtures: dict[str, list[list[float]]] | None = None,
+    mode: str = "kinematic",
 ) -> str:
     """Execute a tool call and return the result as a string."""
     if name == "pickup":
@@ -232,6 +259,38 @@ def _execute_tool(
     elif name == "find_objects":
         objects = robot.find_objects(args.get("target"))
         return json.dumps(objects)
+
+    elif name == "run_python":
+        code = args["code"]
+
+        # Hardware mode: require user confirmation
+        if mode == "hardware":
+            print(f"\n  [hardware] LLM wants to run:\n    {code}")
+            confirm = input("  Allow? [y/N] ").strip().lower()
+            if confirm != "y":
+                return "Blocked: user denied execution in hardware mode"
+
+        # Sandboxed namespace — no os, sys, subprocess
+        safe_builtins = {k: __builtins__[k] if isinstance(__builtins__, dict) else getattr(__builtins__, k)
+                         for k in _PYTHON_SAFE_BUILTINS
+                         if (k in __builtins__ if isinstance(__builtins__, dict) else hasattr(__builtins__, k))}
+        namespace = {
+            "__builtins__": safe_builtins,
+            "robot": robot,
+            "ctx": robot._active_context,
+            "np": np,
+        }
+
+        try:
+            # Try eval first (expressions return a value)
+            try:
+                result = eval(code, namespace)
+                return repr(result) if result is not None else "OK (no return value)"
+            except SyntaxError:
+                exec(code, namespace)
+                return "OK"
+        except Exception as e:
+            return f"Error: {type(e).__name__}: {e}"
 
     elif name == "reset_scene":
         original_objects = original_objects or {}
@@ -544,6 +603,7 @@ class ChatSession:
                         self.robot, tc.name, dict(tc.input),
                         original_objects=self.original_objects,
                         original_fixtures=self.original_fixtures,
+                        mode=self.mode,
                     )
                 except Exception as e:
                     result = f"Error executing {tc.name}: {e}"

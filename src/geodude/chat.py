@@ -1,11 +1,12 @@
-"""Natural language CLI for Geodude robot control.
+"""LLM chat integration for Geodude robot control.
 
-Chat-based interface where an LLM translates natural language to robot
-API calls. Works in kinematic, physics, and hardware modes.
+Provides ChatSession for natural language → tool-use robot control.
+Scene setup and demo infrastructure live in demo_loader.py.
 
 Example::
 
-    robot = Geodude(objects={"can": 4, "recycle_bin": 2})
+    from geodude.demo_loader import setup_robot
+    robot = setup_robot({"can": 4, "recycle_bin": 2}, {})
     with robot.sim(physics=True) as ctx:
         session = ChatSession(robot, mode="physics")
         print(session.send("pick up a can"))
@@ -23,172 +24,6 @@ if TYPE_CHECKING:
     from geodude.robot import Geodude
 
 logger = logging.getLogger(__name__)
-
-
-# -- Object spawning --------------------------------------------------------
-
-
-def _spawn_manipulable_objects(
-    robot: Geodude,
-    objects: dict[str, int],
-    fixture_types: set[str],
-) -> None:
-    """Scatter non-fixture objects on the worktop (simulates perception).
-
-    Re-uses the same collision-free TSR placement as recycle.py.
-    """
-    import mujoco
-    from asset_manager import AssetManager
-    from prl_assets import OBJECTS_DIR
-    from tsr.placement import TablePlacer
-
-    specs = [(t, n) for t, n in objects.items() if t not in fixture_types]
-    if not specs:
-        return
-
-    assets = AssetManager(str(OBJECTS_DIR))
-    wt_id = mujoco.mj_name2id(robot.model, mujoco.mjtObj.mjOBJ_SITE, "worktop")
-    wt_size = robot.model.site_size[wt_id]
-    worktop_pos = robot.data.site_xpos[wt_id].copy()
-
-    placer = TablePlacer(wt_size[0] - 0.05, wt_size[1] - 0.05)
-    table_surface = np.eye(4)
-    table_surface[:3, 3] = worktop_pos
-
-    for obj_type, count in specs:
-        gp = assets.get(obj_type)["geometric_properties"]
-        if gp["type"] == "cylinder":
-            templates = placer.place_cylinder(gp["radius"], gp["height"])
-        elif gp["type"] == "box":
-            templates = placer.place_box(gp["size"][0], gp["size"][1], gp["size"][2])
-        else:
-            continue
-
-        for _ in range(count):
-            tsr = templates[0].instantiate(table_surface)
-            pos = tsr.sample()[:3, 3]
-            name = robot.env.registry.activate(obj_type, pos=list(pos))
-            mujoco.mj_forward(robot.model, robot.data)
-
-            body_id = mujoco.mj_name2id(robot.model, mujoco.mjtObj.mjOBJ_BODY, name)
-            jnt_id = robot.model.body_jntadr[body_id]
-            qpos_adr = robot.model.jnt_qposadr[jnt_id]
-            for _ in range(50):
-                if not _has_object_collision(robot.model, robot.data, name):
-                    break
-                robot.data.qpos[qpos_adr : qpos_adr + 3] = tsr.sample()[:3, 3]
-                mujoco.mj_forward(robot.model, robot.data)
-
-
-def _has_object_collision(model, data, body_name: str) -> bool:
-    """Check if a body is in contact with any other object (not floor)."""
-    import mujoco
-
-    body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
-    if body_id < 0:
-        return False
-    for i in range(data.ncon):
-        c = data.contact[i]
-        b1 = model.geom_bodyid[c.geom1]
-        b2 = model.geom_bodyid[c.geom2]
-        if (b1 == body_id or b2 == body_id) and c.dist < 0:
-            other = b2 if b1 == body_id else b1
-            other_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, other)
-            if other_name and other_name != "world":
-                return True
-    return False
-
-
-# -- Scene presets -----------------------------------------------------------
-
-SCENE_PRESETS = {
-    "recycling": {
-        "description": "Recycling demo (3 cans, 1 potted meat, 2 bins)",
-        "objects": {"can": 3, "potted_meat_can": 1, "recycle_bin": 2},
-        "fixtures": {
-            "recycle_bin": [[0.85, -0.35, 0.01], [-0.85, -0.35, 0.01]],
-        },
-    },
-}
-
-
-def resolve_scene(
-    preset: str | None = None,
-    objects_json: str | None = None,
-) -> tuple[dict[str, int], dict[str, list[list[float]]]]:
-    """Resolve scene config from CLI args. Returns (objects, fixtures)."""
-    if objects_json:
-        import json as _json
-        return _json.loads(objects_json), {}
-    if preset:
-        if preset not in SCENE_PRESETS:
-            raise ValueError(
-                f"Unknown preset: {preset}. Available: {', '.join(SCENE_PRESETS.keys())}"
-            )
-        p = SCENE_PRESETS[preset]
-        return p["objects"], p["fixtures"]
-    return choose_scene()
-
-
-def setup_robot(
-    objects: dict[str, int],
-    fixtures: dict[str, list[list[float]]],
-) -> "Geodude":
-    """Create and set up a Geodude robot with the given scene config."""
-    from geodude.robot import Geodude
-
-    robot = Geodude(objects=objects)
-    robot.setup_scene(fixtures=fixtures if fixtures else None)
-    fixture_types = set(fixtures.keys()) if fixtures else set()
-    _spawn_manipulable_objects(robot, objects, fixture_types)
-    return robot
-
-
-def choose_scene() -> tuple[dict[str, int], dict[str, list[list[float]]]]:
-    """Interactive scene selection. Returns (objects, fixtures)."""
-    print("\nWhat scene would you like?\n")
-    presets = list(SCENE_PRESETS.items())
-    for i, (_, preset) in enumerate(presets, 1):
-        print(f"  {i}. {preset['description']}")
-    print(f"  {len(presets) + 1}. Custom\n")
-
-    choice = input("> ").strip()
-    try:
-        idx = int(choice) - 1
-        if 0 <= idx < len(presets):
-            _, preset = presets[idx]
-            return preset["objects"], preset["fixtures"]
-    except ValueError:
-        pass
-
-    # Custom scene
-    from prl_assets import OBJECTS_DIR
-
-    available = sorted(
-        d.name for d in OBJECTS_DIR.iterdir()
-        if d.is_dir() and (d / "meta.yaml").exists()
-    )
-    print(f"\nAvailable objects: {', '.join(available)}")
-    print('How many of each? (e.g. "4 cans, 2 recycle_bins")')
-    spec = input("> ").strip()
-
-    objects: dict[str, int] = {}
-    for part in spec.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        tokens = part.split()
-        if len(tokens) == 2:
-            count_str, obj_type = tokens
-            # Strip trailing 's' for plurals
-            if obj_type.endswith("s") and obj_type[:-1] in available:
-                obj_type = obj_type[:-1]
-            try:
-                objects[obj_type] = int(count_str)
-            except ValueError:
-                print(f"  Skipping '{part}' — expected 'N type'")
-
-    return objects, {}
 
 
 # -- Tool definitions for LLM -----------------------------------------------
@@ -412,6 +247,7 @@ def _execute_tool(
         original_fixtures = original_fixtures or {}
         robot.setup_scene(fixtures=original_fixtures if original_fixtures else None)
         fixture_types = set(original_fixtures.keys()) if original_fixtures else set()
+        from geodude.demo_loader import _spawn_manipulable_objects
         _spawn_manipulable_objects(robot, original_objects, fixture_types)
         mujoco.mj_forward(robot.model, robot.data)
         n = len(robot.find_objects())

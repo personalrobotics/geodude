@@ -547,6 +547,7 @@ class Geodude:
                 ``{"recycle_bin": [[0.85, -0.35, 0.01], [-0.85, -0.35, 0.01]]}``
         """
         fixtures = fixtures or {}
+        self._fixtures = fixtures
 
         # 1. Activate fixtures at specified positions
         for obj_type, positions in fixtures.items():
@@ -641,16 +642,30 @@ class Geodude:
         mujoco.mj_forward(self.model, self.data)
 
     def reset(self) -> None:
-        """Reset simulation to initial state (ready keyframe if available)."""
+        """Reset simulation to initial state.
+
+        Resets to ready keyframe, releases all grasps, and restores
+        fixtures to their original positions.
+        """
         key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, "ready")
         if key_id != -1:
             mujoco.mj_resetDataKeyframe(self.model, self.data, key_id)
         else:
             mujoco.mj_resetData(self.model, self.data)
-        mujoco.mj_forward(self.model, self.data)
 
         for obj in list(self.grasp_manager.grasped.keys()):
             self.grasp_manager.mark_released(obj)
+
+        # Restore fixtures to original positions
+        fixtures = getattr(self, "_fixtures", {})
+        for obj_type, positions in fixtures.items():
+            # Re-activate at original positions
+            for instance in self._env.registry.get_active_instances(obj_type):
+                self._env.registry.hide(instance)
+            for pos in positions:
+                self._env.registry.activate(obj_type, pos=list(pos))
+
+        mujoco.mj_forward(self.model, self.data)
 
     def reset_to_keyframe(self, name: str) -> None:
         """Reset robot to a MuJoCo keyframe by name."""

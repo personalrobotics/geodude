@@ -75,6 +75,24 @@ class _ArmScope:
         from geodude.primitives import go_home
         return go_home(self._robot, arm=self._side, **kwargs)
 
+    def close(self) -> str | None:
+        """Close the gripper. Grasps whatever is between the fingers.
+
+        Returns:
+            Name of grasped object, or None if nothing detected.
+        """
+        ctx = self._robot._active_context
+        if ctx is None:
+            raise RuntimeError("No active execution context. Use 'with robot.sim() as ctx:'")
+        return ctx.arm(self._side).grasp()
+
+    def open(self) -> None:
+        """Open the gripper. Releases whatever is held."""
+        ctx = self._robot._active_context
+        if ctx is None:
+            raise RuntimeError("No active execution context. Use 'with robot.sim() as ctx:'")
+        ctx.arm(self._side).release()
+
     @property
     def arm(self) -> Arm:
         """The underlying mj_manipulator Arm."""

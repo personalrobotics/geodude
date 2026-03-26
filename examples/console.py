@@ -104,19 +104,15 @@ def main():
         )
         return chat_session
 
-    # Register IPython magic for /chat
-    from IPython.core.magic import register_line_magic
-
-    @register_line_magic
-    def chat(line):
-        """/chat <message> — send a message to the LLM."""
-        if not line.strip():
-            print("Usage: /chat <message>")
+    def chat(message: str) -> None:
+        """Send a message to the LLM. Usage: chat('clear the table')"""
+        if not message.strip():
+            print("Usage: chat('clear the table')")
             return
         session = _get_chat()
         if session is None:
             return
-        response = session.send(line.strip())
+        response = session.send(message.strip())
         if response:
             print(f"\nGeodude [{mode}]: {response}\n")
 
@@ -134,7 +130,7 @@ def main():
         f"{'=' * 60}\n"
         f"\n"
         f"  Available: robot, ctx, np\n"
-        f"  /chat <msg>  — talk to the robot via LLM\n"
+        f"  chat('msg')  — talk to the robot via LLM\n"
         f"  robot.<tab>  — tab completion\n"
         f"  ?robot.pickup — help on any method\n"
     )
@@ -148,11 +144,26 @@ def main():
     }
 
     import IPython
-    IPython.embed(
+    from IPython.terminal.embed import InteractiveShellEmbed
+
+    shell = InteractiveShellEmbed(
         header=banner,
         user_ns=user_ns,
         colors="neutral",
     )
+
+    # Register /chat magic now that the shell exists
+    from IPython.core.magic import register_line_magic
+
+    @shell.register_magic_function
+    def chat_magic(line):
+        """/chat <message> — send a message to the LLM."""
+        chat(line)
+
+    # Make /chat work (alias)
+    shell.magics_manager.register_alias("chat", "chat_magic")
+
+    shell()
 
     # Cleanup
     sim_ctx.__exit__(None, None, None)

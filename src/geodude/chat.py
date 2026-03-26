@@ -557,6 +557,9 @@ def chat_loop(
 
         # LLM conversation loop (handles multi-turn tool use)
         while True:
+            # Refresh scene state each round so LLM sees current world
+            system = SYSTEM_PROMPT.format(scene_state=_scene_summary(robot))
+
             response = client.messages.create(
                 model=model_name,
                 max_tokens=1024,
@@ -590,6 +593,11 @@ def chat_loop(
                     "tool_use_id": tc.id,
                     "content": result,
                 })
+
+            # Append updated scene state to last tool result
+            tool_results[-1]["content"] += (
+                f"\n\nUpdated scene:\n{_scene_summary(robot)}"
+            )
 
             messages.append({"role": "user", "content": tool_results})
 

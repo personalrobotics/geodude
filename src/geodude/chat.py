@@ -245,7 +245,7 @@ def _execute_tool(
 
     elif name == "get_robot_state":
         state = {}
-        for side, arm in [("left", robot.left_arm), ("right", robot.right_arm)]:
+        for side, arm in [("left", robot._left_arm), ("right", robot._right_arm)]:
             ee_pose = arm.get_ee_pose()
             current_q = [float(robot.data.qpos[i]) for i in arm.joint_qpos_indices]
 
@@ -314,7 +314,7 @@ def _api_reference(robot: Geodude) -> str:
             lines.append(f"  {prefix}.{name}({param_str}) — {doc}")
 
     _add_section("robot (Geodude)", type(robot), "robot")
-    _add_section("robot.left_arm / robot.right_arm (Arm)", Arm, "arm")
+    _add_section("robot.left / robot.right (Arm)", Arm, "arm")
     _add_section("robot.env.registry (ObjectRegistry)", ObjectRegistry, "robot.env.registry")
     from mj_manipulator.sim_context import SimArmController
     _add_section(
@@ -326,9 +326,8 @@ def _api_reference(robot: Geodude) -> str:
 
     # Add key properties
     lines.append("\nKey properties:")
-    lines.append("  robot.left_arm, robot.right_arm — Arm instances")
+    lines.append("  robot.left, robot.right — arm interface (pickup, close, get_ee_pose, etc.)")
     lines.append("  robot.left_base, robot.right_base — VentionBase instances (or None)")
-    lines.append("  robot.left, robot.right — scoped shortcuts (robot.left.pickup('can'))")
     lines.append("  robot.env — MuJoCo Environment")
     lines.append("  robot.env.registry — ObjectRegistry for hide/show/activate")
     lines.append("  robot.model — raw MuJoCo mjModel")
@@ -361,7 +360,7 @@ def _scene_summary(robot: Geodude) -> str:
         lines.append("  Holding: nothing (both arms free)")
 
     # Arm state
-    for side, arm in [("left", robot.left_arm), ("right", robot.right_arm)]:
+    for side, arm in [("left", robot.left), ("right", robot.right)]:
         ee_pose = arm.get_ee_pose()
         pos = ee_pose[:3, 3]
         # Home status

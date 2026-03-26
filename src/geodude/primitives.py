@@ -228,7 +228,7 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
     if arm is not None:
         arms = [(arm, robot._resolve_arm(arm))]
     else:
-        arms = [("left", robot.left_arm), ("right", robot.right_arm)]
+        arms = [("left", robot._left_arm), ("right", robot._right_arm)]
 
     success = True
     for side, arm_obj in arms:

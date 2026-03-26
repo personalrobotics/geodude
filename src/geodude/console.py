@@ -145,12 +145,11 @@ Actions:
   robot.go_home()                   — return all arms to ready
 
 Arms:
-  robot.left_arm.get_ee_pose()      — left end-effector 4x4 pose
-  robot.right_arm.get_ee_pose()     — right end-effector 4x4 pose
-  robot.left_arm.get_ft_wrench()    — left wrist F/T sensor [fx,fy,fz,tx,ty,tz]
-  robot.right_arm.get_ft_wrench()   — right wrist F/T sensor
-
-Scoped shortcuts:
+  robot.left.get_ee_pose()          — left end-effector 4x4 pose
+  robot.right.get_ee_pose()         — right end-effector 4x4 pose
+  robot.left.get_ft_wrench()        — left wrist F/T sensor [fx,fy,fz,tx,ty,tz]
+  robot.left.close()                — close left gripper
+  robot.left.open()                 — open left gripper
   robot.left.pickup("can")          — left arm picks up a can
   robot.right.place("recycle_bin")  — right arm places in bin
 

@@ -17,8 +17,8 @@ class TestGeodude:
         robot = Geodude()
         assert robot.model is not None
         assert robot.data is not None
-        assert robot.left_arm is not None
-        assert robot.right_arm is not None
+        assert robot.left is not None
+        assert robot.right is not None
         assert robot.grasp_manager is not None
 
     def test_model_not_found_raises(self):
@@ -31,18 +31,18 @@ class TestGeodude:
     def test_left_arm_has_6_joints(self):
         """Left arm has 6 joints (UR5e)."""
         robot = Geodude()
-        assert robot.left_arm.dof == 6
+        assert robot.left.dof == 6
 
     def test_right_arm_has_6_joints(self):
         """Right arm has 6 joints (UR5e)."""
         robot = Geodude()
-        assert robot.right_arm.dof == 6
+        assert robot.right.dof == 6
 
     def test_arm_names(self):
         """Arms have correct names."""
         robot = Geodude()
-        assert robot.left_arm.config.name == "left"
-        assert robot.right_arm.config.name == "right"
+        assert robot.left.config.name == "left"
+        assert robot.right.config.name == "right"
 
     def test_named_poses(self):
         """named_poses returns configuration dict from keyframes."""
@@ -66,7 +66,7 @@ class TestGeodude:
     def test_reset(self):
         """reset returns to initial state."""
         robot = Geodude()
-        for i, idx in enumerate(robot.right_arm.joint_qpos_indices):
+        for i, idx in enumerate(robot.right.joint_qpos_indices):
             robot.data.qpos[idx] = 0.5
         robot.reset()
         # After reset, time should be 0
@@ -75,20 +75,20 @@ class TestGeodude:
     def test_grippers_attached(self):
         """Both arms have grippers."""
         robot = Geodude()
-        assert robot.left_arm.gripper is not None
-        assert robot.right_arm.gripper is not None
+        assert robot.left.gripper is not None
+        assert robot.right.gripper is not None
 
     def test_gripper_actuator_ids(self):
         """Both grippers have valid actuator IDs."""
         robot = Geodude()
-        assert robot.left_arm.gripper.actuator_id is not None
-        assert robot.right_arm.gripper.actuator_id is not None
+        assert robot.left.gripper.actuator_id is not None
+        assert robot.right.gripper.actuator_id is not None
 
     def test_ik_solvers_attached(self):
         """Both arms have IK solvers."""
         robot = Geodude()
-        assert robot.left_arm.ik_solver is not None
-        assert robot.right_arm.ik_solver is not None
+        assert robot.left.ik_solver is not None
+        assert robot.right.ik_solver is not None
 
     def test_resolve_arms_both(self):
         """_resolve_arms(None) returns both arms."""
@@ -101,7 +101,7 @@ class TestGeodude:
         robot = Geodude()
         arms = robot._resolve_arms("left")
         assert len(arms) == 1
-        assert arms[0] is robot.left_arm
+        assert arms[0] is robot._left_arm
 
     def test_resolve_arms_invalid_raises(self):
         """_resolve_arms with invalid name raises."""
@@ -119,8 +119,8 @@ class TestGeodude:
     def test_get_arm_spec(self):
         """get_arm_spec returns correct spec for each arm."""
         robot = Geodude()
-        left_spec = robot.get_arm_spec(robot.left_arm)
-        right_spec = robot.get_arm_spec(robot.right_arm)
+        left_spec = robot.get_arm_spec(robot._left_arm)
+        right_spec = robot.get_arm_spec(robot._right_arm)
         assert "left_ur5e" in left_spec.prefix
         assert "right_ur5e" in right_spec.prefix
 
@@ -160,7 +160,7 @@ class TestEndEffectors:
     def test_left_arm_ee_pose_valid(self):
         """Left arm EE pose is a valid transform."""
         robot = Geodude()
-        pose = robot.left_arm.get_ee_pose()
+        pose = robot.left.get_ee_pose()
         assert pose.shape == (4, 4)
         det = np.linalg.det(pose[:3, :3])
         assert np.isclose(det, 1.0, atol=1e-6)
@@ -168,7 +168,7 @@ class TestEndEffectors:
     def test_right_arm_ee_pose_valid(self):
         """Right arm EE pose is a valid transform."""
         robot = Geodude()
-        pose = robot.right_arm.get_ee_pose()
+        pose = robot.right.get_ee_pose()
         assert pose.shape == (4, 4)
         det = np.linalg.det(pose[:3, :3])
         assert np.isclose(det, 1.0, atol=1e-6)
@@ -180,7 +180,7 @@ class TestJointLimits:
     def test_joint_limits_reasonable(self):
         """Joint limits are reasonable for UR5e."""
         robot = Geodude()
-        lower, upper = robot.right_arm.get_joint_limits()
+        lower, upper = robot.right.get_joint_limits()
         assert np.all(lower < 0)
         assert np.all(upper > 0)
         assert np.all(upper - lower > 3)

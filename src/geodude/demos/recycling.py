@@ -18,7 +18,6 @@ scene = {
         "gelatin_box": 3,
         "sugar_box": 3,
         "pocky_box": 3,
-        "herring_tin": 3,
         "fuze_bottle": 3,
         "pop_tarts": 3,
         "plastic_glass": 3,

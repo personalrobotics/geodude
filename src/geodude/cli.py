@@ -19,13 +19,11 @@ import shutil
 import sys
 
 
-def _has_viewer() -> bool:
-    """Check if MuJoCo viewer is available (i.e. running under mjpython)."""
-    try:
-        import mujoco.viewer  # noqa: F401
-        return True
-    except (ImportError, AttributeError):
-        return False
+def _running_under_mjpython() -> bool:
+    """Check if we're running under mjpython (required for viewer on macOS)."""
+    # mjpython sets a distinctive sys.executable or process name.
+    # The reliable check: the executable basename is 'mjpython'.
+    return os.path.basename(sys.executable) == "mjpython"
 
 
 def _find_mjpython() -> str | None:
@@ -76,7 +74,7 @@ def main() -> None:
 
     # Viewer by default — re-exec under mjpython if needed
     viewer = not args.headless
-    if viewer and not _has_viewer():
+    if viewer and not _running_under_mjpython():
         _reexec_with_mjpython()
 
     from geodude.demo_loader import resolve_scene, setup_robot

@@ -38,11 +38,17 @@ def _find_mjpython() -> str | None:
 
 def _reexec_with_mjpython() -> None:
     """Re-execute this process under mjpython."""
+    import subprocess
+
     mjpython = _find_mjpython()
     if mjpython is None:
         print("Error: mjpython not found. Install MuJoCo or add --headless.")
         sys.exit(1)
-    os.execvp(mjpython, [mjpython, "-m", "geodude.cli"] + sys.argv[1:])
+    result = subprocess.run(
+        [mjpython, "-m", "geodude.cli"] + sys.argv[1:],
+        stdin=sys.stdin,
+    )
+    sys.exit(result.returncode)
 
 
 def main() -> None:

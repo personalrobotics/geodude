@@ -10,7 +10,7 @@ import py_trees
 
 from mj_manipulator.bt import pickup_with_recovery, place_with_recovery
 
-from geodude.bt.nodes import GenerateDropZone, GenerateGrasps
+from geodude.bt.nodes import GenerateDropZone, GenerateGrasps, LiftBase
 
 
 def geodude_pickup(ns: str) -> py_trees.composites.Sequence:
@@ -25,6 +25,7 @@ def geodude_pickup(ns: str) -> py_trees.composites.Sequence:
         children=[
             GenerateGrasps(ns=ns),
             pickup_with_recovery(ns),
+            LiftBase(ns=ns),
         ],
     )
 

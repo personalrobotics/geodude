@@ -155,7 +155,35 @@ def _generate_tsrs_for_object(robot, body_name: str, obj_type: str) -> list:
     return []
 
 
-def _generate_drop_tsrs(robot, body_name: str, dest_type: str) -> list:
+def _get_held_object_height(robot) -> float:
+    """Get the height of the currently held object, or 0 if unknown."""
+    from asset_manager import AssetManager
+    from prl_assets import OBJECTS_DIR
+
+    held = robot.holding()
+    if not held:
+        return 0.0
+
+    _, obj_name = held
+    assets = AssetManager(str(OBJECTS_DIR))
+    # Extract type from instance name (e.g. "cracker_box_0" -> "cracker_box")
+    import re
+    m = re.match(r"^(.+?)_(\d+)$", obj_name)
+    if not m:
+        return 0.0
+
+    try:
+        gp = assets.get(m.group(1))["geometric_properties"]
+        if gp["type"] == "cylinder":
+            return max(gp["height"], gp["radius"] * 2)
+        elif gp["type"] == "box":
+            return max(gp["size"])
+    except (KeyError, TypeError):
+        pass
+    return 0.0
+
+
+def _generate_drop_tsrs(robot, body_name: str, dest_type: str, held_height: float = 0.0) -> list:
     """Generate drop-zone TSRs for a container from prl_assets geometry."""
     from asset_manager import AssetManager
     from prl_assets import OBJECTS_DIR
@@ -186,7 +214,8 @@ def _generate_drop_tsrs(robot, body_name: str, dest_type: str) -> list:
 
     # Drop point: above the container opening along its local Z axis
     local_z = dest_pose[:3, 2]
-    drop_pos = dest_pose[:3, 3] + local_z * (outer[2] + 0.15)
+    clearance = max(0.25, held_height + 0.10)
+    drop_pos = dest_pose[:3, 3] + local_z * (outer[2] + clearance)
 
     # Approach direction: gripper Z points opposite to container's local Z (downward into it)
     # Gripper X follows container's local X
@@ -280,6 +309,9 @@ class GenerateDropZone(py_trees.behaviour.Behaviour):
         robot = self.bb.get(f"{self.ns}/robot")
         target = self.bb.get(f"{self.ns}/destination")
 
+        # Determine held object height for drop clearance
+        held_height = _get_held_object_height(robot)
+
         # Find matching destinations
         objects = _find_scene_objects(robot, target)
         if not objects:
@@ -288,7 +320,7 @@ class GenerateDropZone(py_trees.behaviour.Behaviour):
 
         all_tsrs = []
         for body_name, dest_type in objects:
-            tsrs = _generate_drop_tsrs(robot, body_name, dest_type)
+            tsrs = _generate_drop_tsrs(robot, body_name, dest_type, held_height=held_height)
             all_tsrs.extend(tsrs)
 
         if not all_tsrs:

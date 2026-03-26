@@ -160,14 +160,22 @@ def _generate_drop_tsrs(robot, body_name: str, dest_type: str) -> list:
 
     hx = (outer[0] / 2) - wall - margin
     hy = (outer[1] / 2) - wall - margin
-    drop_z = dest_pose[2, 3] + outer[2] + 0.15
 
-    T0_w = np.array([
-        [1,  0,  0, dest_pose[0, 3]],
-        [0, -1,  0, dest_pose[1, 3]],
-        [0,  0, -1, drop_z],
-        [0,  0,  0, 1],
-    ], dtype=float)
+    # Drop point: above the container opening along its local Z axis
+    local_z = dest_pose[:3, 2]
+    drop_pos = dest_pose[:3, 3] + local_z * (outer[2] + 0.15)
+
+    # Approach direction: gripper Z points opposite to container's local Z (downward into it)
+    # Gripper X follows container's local X
+    approach = -local_z
+    gripper_x = dest_pose[:3, 0]
+    gripper_y = np.cross(approach, gripper_x)
+
+    T0_w = np.eye(4)
+    T0_w[:3, 0] = gripper_x
+    T0_w[:3, 1] = gripper_y
+    T0_w[:3, 2] = approach
+    T0_w[:3, 3] = drop_pos
 
     Bw = np.zeros((6, 2))
     Bw[0, :] = [-hx, hx]

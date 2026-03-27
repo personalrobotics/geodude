@@ -246,6 +246,7 @@ def _generate_surface_place_tsrs(
     surface_hx: float,
     surface_hy: float,
     held_obj_type: str | None,
+    T_gripper_object: np.ndarray | None = None,
 ) -> list:
     """Generate stable placement TSRs for placing a held object on a flat surface.
 
@@ -253,12 +254,18 @@ def _generate_surface_place_tsrs(
     clearance buffer so the planner targets a collision-free pose above the
     surface.  Physics drops the object the last few mm on release.
 
+    If ``T_gripper_object`` is provided, the grasp offset is composed into
+    ``Tw_e`` so that the TSR samples end-effector (gripper) poses rather than
+    object poses — which is what pycbirrt expects for IK.
+
     Args:
-        robot: Geodude instance.
+        robot: Geodude instance (unused, kept for API consistency).
         surface_pose: 4x4 world-frame pose of the surface center (z up).
         surface_hx: Surface half-extent along x (m).
         surface_hy: Surface half-extent along y (m).
         held_obj_type: prl_assets type of the held object, or None.
+        T_gripper_object: 4x4 grasp transform (gripper frame → object frame),
+            or None to skip the correction (e.g. for spawning / tests).
     """
     from asset_manager import AssetManager
     from prl_assets import OBJECTS_DIR
@@ -295,6 +302,14 @@ def _generate_surface_place_tsrs(
         return []
     template = templates[0]
 
+    # Apply grasp offset: convert object-frame TSR → gripper-frame TSR
+    # so pycbirrt plans the end-effector to the right pose.
+    #   Tw_e_corrected = Tw_e_object @ inv(T_gripper_object)
+    if T_gripper_object is not None:
+        import dataclasses
+        T_object_gripper = np.linalg.inv(T_gripper_object)
+        template = dataclasses.replace(template, Tw_e=template.Tw_e @ T_object_gripper)
+
     tsr = template.instantiate(surface_pose)
 
     # Lift z-bounds above the surface so the planner avoids collision.
@@ -307,6 +322,7 @@ def _generate_surface_place_tsrs(
 
 def _generate_place_tsrs(
     robot, body_name: str, dest_type: str, held_height: float = 0.0,
+    T_gripper_object: np.ndarray | None = None,
 ) -> list:
     """Generate placement TSRs — dispatches between container drop and surface placement."""
     from asset_manager import AssetManager
@@ -345,7 +361,10 @@ def _generate_place_tsrs(
         surface_pose[:3, 3] += dest_pose[:3, 2] * (obj_height / 2)
 
         held_type = _get_held_object_type(robot)
-        return _generate_surface_place_tsrs(robot, surface_pose, sx, sy, held_type)
+        return _generate_surface_place_tsrs(
+            robot, surface_pose, sx, sy, held_type,
+            T_gripper_object=T_gripper_object,
+        )
 
     return []
 
@@ -372,6 +391,15 @@ def _get_worktop_surface(robot) -> tuple[np.ndarray, float, float] | None:
     surface_pose = np.eye(4)
     surface_pose[:3, 3] = robot.data.site_xpos[wt_id].copy()
     return surface_pose, float(wt_size[0]), float(wt_size[1])
+
+
+def _get_grasp_transform(robot) -> np.ndarray | None:
+    """Get T_gripper_object for the currently held object, or None."""
+    held = robot.holding()
+    if not held:
+        return None
+    _, obj_name = held
+    return robot.grasp_manager.get_grasp_transform(obj_name)
 
 
 class GenerateGrasps(py_trees.behaviour.Behaviour):
@@ -449,6 +477,10 @@ class GeneratePlaceTSRs(py_trees.behaviour.Behaviour):
         held_height = _get_held_object_height(robot)
         held_type = _get_held_object_type(robot)
 
+        # Look up grasp transform so surface placement TSRs target the
+        # gripper (what pycbirrt expects) rather than the object.
+        T_gripper_object = _get_grasp_transform(robot)
+
         all_tsrs = []
 
         # Special case: "worktop" targets the worktop surface directly
@@ -458,6 +490,7 @@ class GeneratePlaceTSRs(py_trees.behaviour.Behaviour):
                 surface_pose, hx, hy = wt
                 all_tsrs = _generate_surface_place_tsrs(
                     robot, surface_pose, hx, hy, held_type,
+                    T_gripper_object=T_gripper_object,
                 )
             if not all_tsrs:
                 self.feedback_message = "No worktop surface found"
@@ -470,6 +503,7 @@ class GeneratePlaceTSRs(py_trees.behaviour.Behaviour):
         for body_name, dest_type in objects:
             tsrs = _generate_place_tsrs(
                 robot, body_name, dest_type, held_height=held_height,
+                T_gripper_object=T_gripper_object,
             )
             all_tsrs.extend(tsrs)
 
@@ -480,6 +514,7 @@ class GeneratePlaceTSRs(py_trees.behaviour.Behaviour):
                 surface_pose, hx, hy = wt
                 all_tsrs = _generate_surface_place_tsrs(
                     robot, surface_pose, hx, hy, held_type,
+                    T_gripper_object=T_gripper_object,
                 )
 
         if not all_tsrs:

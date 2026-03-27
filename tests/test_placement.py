@@ -80,6 +80,57 @@ class TestGenerateSurfacePlaceTSRs:
         np.testing.assert_allclose(tsrs[0].Bw[5], [-np.pi, np.pi])
 
 
+class TestGraspOffsetCorrection:
+    """Test that T_gripper_object is composed into Tw_e for surface placement."""
+
+    def test_no_grasp_offset_samples_object_pose(self):
+        """Without grasp offset, TSR samples the object resting pose."""
+        tsrs = _generate_surface_place_tsrs(
+            None, SURFACE_POSE, SURFACE_HX, SURFACE_HY, "can",
+        )
+        pose_no_offset = tsrs[0].sample()
+        # Should be above the surface by COM height + clearance
+        assert pose_no_offset[2, 3] > SURFACE_POSE[2, 3]
+
+    def test_identity_grasp_offset_matches_no_offset(self):
+        """Identity grasp transform should produce the same result."""
+        tsrs_none = _generate_surface_place_tsrs(
+            None, SURFACE_POSE, SURFACE_HX, SURFACE_HY, "can",
+        )
+        tsrs_ident = _generate_surface_place_tsrs(
+            None, SURFACE_POSE, SURFACE_HX, SURFACE_HY, "can",
+            T_gripper_object=np.eye(4),
+        )
+        # Tw_e should be identical since inv(I) = I
+        np.testing.assert_allclose(tsrs_none[0].Tw_e, tsrs_ident[0].Tw_e, atol=1e-10)
+
+    def test_grasp_offset_shifts_sample(self):
+        """A non-identity grasp offset should shift the sampled pose."""
+        # Simulate a gripper that's 10cm above the object
+        T_gripper_object = np.eye(4)
+        T_gripper_object[2, 3] = -0.10  # object is 10cm below gripper
+
+        tsrs_no_offset = _generate_surface_place_tsrs(
+            None, SURFACE_POSE, SURFACE_HX, SURFACE_HY, "can",
+        )
+        tsrs_with_offset = _generate_surface_place_tsrs(
+            None, SURFACE_POSE, SURFACE_HX, SURFACE_HY, "can",
+            T_gripper_object=T_gripper_object,
+        )
+
+        # Tw_e should differ — the corrected one includes inv(T_gripper_object)
+        assert not np.allclose(tsrs_no_offset[0].Tw_e, tsrs_with_offset[0].Tw_e)
+
+        # The corrected TSR should sample a gripper pose that's higher than
+        # the object pose (since gripper is above the object)
+        # Use Bw=0 sample (deterministic at center) by setting tight bounds
+        pose_object = tsrs_no_offset[0].sample()
+        pose_gripper = tsrs_with_offset[0].sample()
+        # Gripper z should be ~10cm above object z
+        z_diff = pose_gripper[2, 3] - pose_object[2, 3]
+        assert z_diff == pytest.approx(0.10, abs=0.01)
+
+
 class TestGeneratePlaceTSRsDispatch:
     """Test _generate_place_tsrs dispatches correctly by geometry type."""
 

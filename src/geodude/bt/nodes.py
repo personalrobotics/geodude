@@ -490,10 +490,6 @@ class GeneratePlaceTSRs(py_trees.behaviour.Behaviour):
         return Status.SUCCESS
 
 
-# Backwards-compatible alias
-GenerateDropZone = GeneratePlaceTSRs
-
-
 class LiftBase(py_trees.behaviour.Behaviour):
     """Lift the Vention base to clear worktop clutter after grasping.
 

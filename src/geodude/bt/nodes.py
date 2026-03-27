@@ -183,7 +183,9 @@ def _get_held_object_height(robot) -> float:
     return 0.0
 
 
-def _generate_drop_tsrs(robot, body_name: str, dest_type: str, held_height: float = 0.0) -> list:
+def _generate_container_drop_tsrs(
+    robot, body_name: str, dest_type: str, held_height: float = 0.0,
+) -> list:
     """Generate drop-zone TSRs for a container from prl_assets geometry."""
     from asset_manager import AssetManager
     from prl_assets import OBJECTS_DIR
@@ -238,6 +240,140 @@ def _generate_drop_tsrs(robot, body_name: str, dest_type: str, held_height: floa
     return [TSR(T0_w=T0_w, Bw=Bw)]
 
 
+def _generate_surface_place_tsrs(
+    robot,
+    surface_pose: np.ndarray,
+    surface_hx: float,
+    surface_hy: float,
+    held_obj_type: str | None,
+) -> list:
+    """Generate stable placement TSRs for placing a held object on a flat surface.
+
+    Uses StablePlacer to compute the resting pose, then lifts Bw[2] by a
+    clearance buffer so the planner targets a collision-free pose above the
+    surface.  Physics drops the object the last few mm on release.
+
+    Args:
+        robot: Geodude instance.
+        surface_pose: 4x4 world-frame pose of the surface center (z up).
+        surface_hx: Surface half-extent along x (m).
+        surface_hy: Surface half-extent along y (m).
+        held_obj_type: prl_assets type of the held object, or None.
+    """
+    from asset_manager import AssetManager
+    from prl_assets import OBJECTS_DIR
+    from tsr.placement import StablePlacer
+
+    if held_obj_type is None:
+        return []
+
+    assets = AssetManager(str(OBJECTS_DIR))
+    try:
+        gp = assets.get(held_obj_type)["geometric_properties"]
+    except (KeyError, TypeError):
+        return []
+
+    # Shrink placement area by a margin to keep objects away from edges
+    margin = 0.05
+    placer = StablePlacer(
+        table_x=max(0.01, surface_hx - margin),
+        table_y=max(0.01, surface_hy - margin),
+    )
+
+    geo_type = gp.get("type")
+    if geo_type == "cylinder":
+        templates = placer.place_cylinder(gp["radius"], gp["height"], subject=held_obj_type)
+    elif geo_type == "box":
+        templates = placer.place_box(gp["size"][0], gp["size"][1], gp["size"][2], subject=held_obj_type)
+    elif geo_type == "sphere":
+        templates = placer.place_sphere(gp["radius"], subject=held_obj_type)
+    else:
+        return []
+
+    # Only use the most natural resting pose (first template, typically -z face down)
+    if not templates:
+        return []
+    template = templates[0]
+
+    tsr = template.instantiate(surface_pose)
+
+    # Lift z-bounds above the surface so the planner avoids collision.
+    # The object will settle the last few mm on release via physics.
+    clearance = 0.005  # 5mm buffer
+    tsr.Bw[2, :] += clearance
+
+    return [tsr]
+
+
+def _generate_place_tsrs(
+    robot, body_name: str, dest_type: str, held_height: float = 0.0,
+) -> list:
+    """Generate placement TSRs — dispatches between container drop and surface placement."""
+    from asset_manager import AssetManager
+    from prl_assets import OBJECTS_DIR
+
+    assets = AssetManager(str(OBJECTS_DIR))
+    try:
+        gp = assets.get(dest_type)["geometric_properties"]
+    except (KeyError, TypeError):
+        return []
+
+    geo_type = gp.get("type")
+
+    # Container drop (existing behavior)
+    if geo_type in ("open_box", "tote"):
+        return _generate_container_drop_tsrs(robot, body_name, dest_type, held_height)
+
+    # Flat surface placement (tray, shelf, etc.)
+    if geo_type in ("tray", "surface", "box"):
+        try:
+            dest_pose = robot.get_object_pose(body_name)
+        except ValueError:
+            return []
+
+        # Surface dimensions from metadata
+        if "outer_dimensions" in gp:
+            sx, sy = gp["outer_dimensions"][0] / 2, gp["outer_dimensions"][1] / 2
+        elif "size" in gp:
+            sx, sy = gp["size"][0] / 2, gp["size"][1] / 2
+        else:
+            return []
+
+        # Surface pose: top of the destination object
+        surface_pose = dest_pose.copy()
+        obj_height = gp.get("outer_dimensions", gp.get("size", [0, 0, 0]))[2]
+        surface_pose[:3, 3] += dest_pose[:3, 2] * (obj_height / 2)
+
+        held_type = _get_held_object_type(robot)
+        return _generate_surface_place_tsrs(robot, surface_pose, sx, sy, held_type)
+
+    return []
+
+
+def _get_held_object_type(robot) -> str | None:
+    """Get the prl_assets type of the currently held object, or None."""
+    held = robot.holding()
+    if not held:
+        return None
+    _, obj_name = held
+    m = re.match(r"^(.+?)_(\d+)$", obj_name)
+    return m.group(1) if m else None
+
+
+def _get_worktop_surface(robot) -> tuple[np.ndarray, float, float] | None:
+    """Get the worktop surface pose and half-extents, or None if no worktop site."""
+    try:
+        wt_id = mujoco.mj_name2id(robot.model, mujoco.mjtObj.mjOBJ_SITE, "worktop")
+    except Exception:
+        return None
+    if wt_id < 0:
+        return None
+    wt_size = robot.model.site_size[wt_id]
+    surface_pose = np.eye(4)
+    surface_pose[:3, 3] = robot.data.site_xpos[wt_id].copy()
+    return surface_pose, float(wt_size[0]), float(wt_size[1])
+
+
 class GenerateGrasps(py_trees.behaviour.Behaviour):
     """Generate grasp TSRs for one or more objects in the scene.
 
@@ -288,16 +424,17 @@ class GenerateGrasps(py_trees.behaviour.Behaviour):
         return Status.SUCCESS
 
 
-class GenerateDropZone(py_trees.behaviour.Behaviour):
-    """Generate drop-zone TSRs for one or more containers in the scene.
+class GeneratePlaceTSRs(py_trees.behaviour.Behaviour):
+    """Generate placement TSRs for containers, surfaces, or worktop.
 
-    Supports smart resolution like GenerateGrasps.
+    Supports smart resolution like GenerateGrasps.  When no destination is
+    specified, tries containers first, then falls back to the worktop surface.
 
     Reads: ``{ns}/destination``, ``{ns}/robot``
-    Writes: ``{ns}/place_tsrs``, ``{ns}/tsr_to_object``
+    Writes: ``{ns}/place_tsrs``
     """
 
-    def __init__(self, ns: str = "", name: str = "GenerateDropZone"):
+    def __init__(self, ns: str = "", name: str = "GeneratePlaceTSRs"):
         super().__init__(name)
         self.ns = ns
         self.bb = self.attach_blackboard_client(name=name)
@@ -309,26 +446,52 @@ class GenerateDropZone(py_trees.behaviour.Behaviour):
         robot = self.bb.get(f"{self.ns}/robot")
         target = self.bb.get(f"{self.ns}/destination")
 
-        # Determine held object height for drop clearance
         held_height = _get_held_object_height(robot)
-
-        # Find matching destinations
-        objects = _find_scene_objects(robot, target)
-        if not objects:
-            self.feedback_message = f"No destinations found for '{target}'"
-            return Status.FAILURE
+        held_type = _get_held_object_type(robot)
 
         all_tsrs = []
+
+        # Special case: "worktop" targets the worktop surface directly
+        if target == "worktop":
+            wt = _get_worktop_surface(robot)
+            if wt is not None:
+                surface_pose, hx, hy = wt
+                all_tsrs = _generate_surface_place_tsrs(
+                    robot, surface_pose, hx, hy, held_type,
+                )
+            if not all_tsrs:
+                self.feedback_message = "No worktop surface found"
+                return Status.FAILURE
+            self.bb.set(f"{self.ns}/place_tsrs", all_tsrs)
+            return Status.SUCCESS
+
+        # Find matching destinations from scene objects
+        objects = _find_scene_objects(robot, target)
         for body_name, dest_type in objects:
-            tsrs = _generate_drop_tsrs(robot, body_name, dest_type, held_height=held_height)
+            tsrs = _generate_place_tsrs(
+                robot, body_name, dest_type, held_height=held_height,
+            )
             all_tsrs.extend(tsrs)
 
+        # No-destination fallback: try worktop if no container TSRs were found
+        if not all_tsrs and target is None:
+            wt = _get_worktop_surface(robot)
+            if wt is not None:
+                surface_pose, hx, hy = wt
+                all_tsrs = _generate_surface_place_tsrs(
+                    robot, surface_pose, hx, hy, held_type,
+                )
+
         if not all_tsrs:
-            self.feedback_message = f"No drop-zone TSRs for {[b for b, _ in objects]}"
+            self.feedback_message = f"No placement TSRs for destination '{target}'"
             return Status.FAILURE
 
         self.bb.set(f"{self.ns}/place_tsrs", all_tsrs)
         return Status.SUCCESS
+
+
+# Backwards-compatible alias
+GenerateDropZone = GeneratePlaceTSRs
 
 
 class LiftBase(py_trees.behaviour.Behaviour):

@@ -235,7 +235,7 @@ def _spawn_manipulable_objects(
     import mujoco
     from asset_manager import AssetManager
     from prl_assets import OBJECTS_DIR
-    from tsr.placement import TablePlacer
+    from tsr.placement import StablePlacer
 
     graspable = [(t, n) for t, n in objects.items() if t not in fixture_types]
     if not graspable:
@@ -257,7 +257,7 @@ def _spawn_manipulable_objects(
     wt_size = robot.model.site_size[wt_id]
     worktop_pos = robot.data.site_xpos[wt_id].copy()
 
-    placer = TablePlacer(wt_size[0] - 0.05, wt_size[1] - 0.05)
+    placer = StablePlacer(wt_size[0] - 0.05, wt_size[1] - 0.05)
     table_surface = np.eye(4)
     table_surface[:3, 3] = worktop_pos
 

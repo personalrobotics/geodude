@@ -192,7 +192,7 @@ src/geodude/
 ├── config.py         # PlanningConfig, VentionBaseConfig, DebugConfig
 ├── primitives.py     # pickup() / place() / go_home() — BT-backed
 ├── bt/
-│   ├── nodes.py      # GenerateGrasps, GenerateDropZone + smart resolution
+│   ├── nodes.py      # GenerateGrasps, GeneratePlaceTSRs + smart resolution
 │   └── subtrees.py   # geodude_pickup, geodude_place
 ├── vention_base.py   # Linear actuator planning + collision checking
 ├── cli.py            # geodude CLI entry point

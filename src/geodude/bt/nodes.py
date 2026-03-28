@@ -320,6 +320,86 @@ def _generate_surface_place_tsrs(
     return [tsr]
 
 
+_UPWARD_THRESHOLD = 0.95  # dot(normal, [0,0,1]) > this ≈ <18° from vertical
+
+
+def _get_upward_faces(
+    dest_pose: np.ndarray, gp: dict,
+) -> list[tuple[np.ndarray, float, float]]:
+    """Enumerate flat faces of a destination object that currently point upward.
+
+    Returns a list of ``(surface_pose, half_x, half_y)`` for each face whose
+    world-frame normal has ``dot(n, [0,0,1]) > _UPWARD_THRESHOLD``.
+
+    Args:
+        dest_pose: 4x4 world-frame pose of the destination (origin at center).
+        gp: ``geometric_properties`` dict from prl_assets metadata.
+    """
+    R = dest_pose[:3, :3]
+    origin = dest_pose[:3, 3]
+    geo_type = gp.get("type")
+
+    # Build candidate faces: (local_normal, offset_along_normal, half_x, half_y)
+    # Object frame has origin at center; faces are at ±half-extent along each axis.
+    candidates: list[tuple[np.ndarray, float, float, float]] = []
+
+    if geo_type == "box":
+        lx, ly, lz = gp["size"]
+        # ±z faces
+        candidates.append((np.array([0, 0, +1.0]), lz / 2, lx / 2, ly / 2))
+        candidates.append((np.array([0, 0, -1.0]), lz / 2, lx / 2, ly / 2))
+        # ±y faces
+        candidates.append((np.array([0, +1.0, 0]), ly / 2, lx / 2, lz / 2))
+        candidates.append((np.array([0, -1.0, 0]), ly / 2, lx / 2, lz / 2))
+        # ±x faces
+        candidates.append((np.array([+1.0, 0, 0]), lx / 2, ly / 2, lz / 2))
+        candidates.append((np.array([-1.0, 0, 0]), lx / 2, ly / 2, lz / 2))
+
+    elif geo_type == "cylinder":
+        r, h = gp["radius"], gp["height"]
+        # ±z end caps (circular, approximate extents as r × r)
+        candidates.append((np.array([0, 0, +1.0]), h / 2, r, r))
+        candidates.append((np.array([0, 0, -1.0]), h / 2, r, r))
+
+    # sphere: no flat faces → candidates stays empty
+
+    results = []
+    up = np.array([0.0, 0.0, 1.0])
+    for local_normal, offset, hx, hy in candidates:
+        normal_world = R @ local_normal
+        if normal_world @ up < _UPWARD_THRESHOLD:
+            continue
+
+        # Surface pose: origin at the face center, Z = upward normal
+        face_center = origin + R @ (local_normal * offset)
+
+        # Build surface orientation: Z = normal_world (≈ up),
+        # X/Y from the destination's rotation projected onto the face plane.
+        # Use the destination's local axes that span the face.
+        surface_pose = np.eye(4)
+        surface_pose[:3, 3] = face_center
+        surface_pose[:3, 2] = normal_world
+
+        # Pick X axis: use dest_pose's first axis that isn't the face normal
+        abs_normal = np.abs(local_normal)
+        if abs_normal[0] < 0.5:
+            local_x = np.array([1.0, 0, 0])
+        elif abs_normal[1] < 0.5:
+            local_x = np.array([0, 1.0, 0])
+        else:
+            local_x = np.array([0, 0, 1.0])
+        surface_x = R @ local_x
+        # Orthogonalize against normal
+        surface_x -= normal_world * (surface_x @ normal_world)
+        surface_x /= np.linalg.norm(surface_x)
+        surface_pose[:3, 0] = surface_x
+        surface_pose[:3, 1] = np.cross(normal_world, surface_x)
+
+        results.append((surface_pose, hx, hy))
+
+    return results
+
+
 def _generate_place_tsrs(
     robot, body_name: str, dest_type: str, held_height: float = 0.0,
     T_gripper_object: np.ndarray | None = None,
@@ -340,33 +420,25 @@ def _generate_place_tsrs(
     if geo_type in ("open_box", "tote"):
         return _generate_container_drop_tsrs(robot, body_name, dest_type, held_height)
 
-    # Flat surface placement (tray, shelf, etc.)
-    if geo_type in ("tray", "surface", "box"):
-        try:
-            dest_pose = robot.get_object_pose(body_name)
-        except ValueError:
-            return []
+    # Surface placement on any upward-facing flat face
+    try:
+        dest_pose = robot.get_object_pose(body_name)
+    except (ValueError, AttributeError):
+        return []
 
-        # Surface dimensions from metadata
-        if "outer_dimensions" in gp:
-            sx, sy = gp["outer_dimensions"][0] / 2, gp["outer_dimensions"][1] / 2
-        elif "size" in gp:
-            sx, sy = gp["size"][0] / 2, gp["size"][1] / 2
-        else:
-            return []
+    faces = _get_upward_faces(dest_pose, gp)
+    if not faces:
+        return []
 
-        # Surface pose: top of the destination object
-        surface_pose = dest_pose.copy()
-        obj_height = gp.get("outer_dimensions", gp.get("size", [0, 0, 0]))[2]
-        surface_pose[:3, 3] += dest_pose[:3, 2] * (obj_height / 2)
-
-        held_type = _get_held_object_type(robot)
-        return _generate_surface_place_tsrs(
-            robot, surface_pose, sx, sy, held_type,
+    held_type = _get_held_object_type(robot)
+    all_tsrs = []
+    for surface_pose, hx, hy in faces:
+        tsrs = _generate_surface_place_tsrs(
+            robot, surface_pose, hx, hy, held_type,
             T_gripper_object=T_gripper_object,
         )
-
-    return []
+        all_tsrs.extend(tsrs)
+    return all_tsrs
 
 
 def _get_held_object_type(robot) -> str | None:

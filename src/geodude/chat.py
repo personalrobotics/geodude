@@ -83,17 +83,20 @@ def _build_tools() -> list[dict]:
         {
             "name": "place",
             "description": (
-                "Place the held object at a destination (e.g. a bin). "
-                "Auto-detects which arm is holding. Destination can be a specific "
-                "instance ('recycle_bin_0'), a type ('recycle_bin' for any bin), "
-                "or omitted for any available destination."
+                "Place the held object at a destination. "
+                "Destinations can be containers (drop into a bin), any object with "
+                "a flat upward-facing surface (place on top), or 'worktop' for the "
+                "table surface. Auto-detects which arm is holding. "
+                "Destination can be a specific instance ('recycle_bin_0'), a type "
+                "('recycle_bin' for any bin, 'cracker_box' for on top of a box), "
+                "'worktop' for the table, or omitted to auto-select."
             ),
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "destination": {
                         "type": "string",
-                        "description": "Destination name or type. Omit for any available destination.",
+                        "description": "Destination: object name/type, 'worktop', or omit to auto-select.",
                     },
                     "arm": {
                         "type": "string",
@@ -475,13 +478,16 @@ You are the control interface for Geodude, a bimanual robot.
 
 ## Grippers
 - Each gripper is a parallel-jaw gripper that can grasp objects by closing on them
-- After placing an object, it is removed from the scene (simulates dropping into a bin or container)
-- To bring objects back, use reset_scene — this re-spawns all original objects at new random positions
+- Placing into a container (bin, tote) drops the object from above and removes it from the scene
+- Placing on a surface (worktop, box top, cylinder end) sets the object down gently — it stays in the scene
+- To re-spawn removed objects, use reset_scene — this re-spawns all original objects at new random positions
 - The gripper is either open or closed — there is no partial close
 
 ## Objects and destinations
-- Objects are graspable things on the worktop (cans, potted meat cans, etc.)
-- Destinations are stationary fixtures like recycle bins — they are NOT graspable
+- Objects are things in the scene (cans, boxes, bins, etc.)
+- Any object can be a placement destination if it has a flat face pointing upward (boxes, cylinders, trays)
+- Containers (bins, totes) are special: objects are dropped in from above
+- "worktop" is the table surface — always available as a destination
 - Object names follow the pattern: type_N (e.g. "can_0", "can_1", "potted_meat_can_0", "recycle_bin_0")
 - To refer to any object of a type, use just the type name (e.g. "can" matches any can)
 
@@ -507,7 +513,7 @@ You are the control interface for Geodude, a bimanual robot.
 
 ## Tool usage principles
 - Let the planner do its job. When the user says "clear the table" or "pick up a can", call pickup() with NO target and NO arm — the planner finds the nearest reachable object and the best arm automatically. Only specify target when the user names a specific object (e.g. "pick up can_0" or "pick up the potted meat").
-- Same for place(): omit destination and arm unless the user specifies one.
+- Same for place(): omit destination and arm unless the user specifies one. Valid destinations include containers ('recycle_bin'), any object with a flat top ('cracker_box'), or 'worktop'.
 - For repetitive tasks ("clear the table"), call pickup() then place() in a loop until pickup fails (nothing left).
 
 ## User environment

@@ -488,7 +488,7 @@ You are the control interface for Geodude, a bimanual robot.
 - Any object can be a placement destination if it has a flat face pointing upward (boxes, cylinders, trays)
 - Containers (bins, totes) are special: objects are dropped in from above
 - "worktop" is the table surface — always available as a destination
-- Object names follow the pattern: type_N (e.g. "can_0", "can_1", "potted_meat_can_0", "recycle_bin_0")
+- Object names follow the pattern: type_N (e.g. "can_0", "can_1", "spam_can_0", "recycle_bin_0")
 - To refer to any object of a type, use just the type name (e.g. "can" matches any can)
 
 ## Console and viewer

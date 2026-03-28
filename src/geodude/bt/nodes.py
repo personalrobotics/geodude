@@ -304,7 +304,7 @@ def _generate_surface_place_tsrs(
 
     # Apply grasp offset: convert object-frame TSR → gripper-frame TSR
     # so pycbirrt plans the end-effector to the right pose.
-    #   Tw_e_corrected = Tw_e_object @ inv(T_gripper_object)
+    #   Tw_e_corrected = Tw_e_object @ inv(T_site_object)
     if T_gripper_object is not None:
         import dataclasses
         T_object_gripper = np.linalg.inv(T_gripper_object)
@@ -466,12 +466,40 @@ def _get_worktop_surface(robot) -> tuple[np.ndarray, float, float] | None:
 
 
 def _get_grasp_transform(robot) -> np.ndarray | None:
-    """Get T_gripper_object for the currently held object, or None."""
+    """Get T_site_object (grasp site → object) for the currently held object.
+
+    GraspManager stores T_body_object (attachment body → object), but
+    pycbirrt targets the grasp_site, not the body.  We convert:
+        T_site_object = inv(T_body_site) @ T_body_object
+    """
     held = robot.holding()
     if not held:
         return None
-    _, obj_name = held
-    return robot.grasp_manager.get_grasp_transform(obj_name)
+    side, obj_name = held
+
+    T_body_object = robot.grasp_manager.get_grasp_transform(obj_name)
+    if T_body_object is None:
+        return None
+
+    # Get the arm for the holding side to find site and body poses
+    arm = robot._left_arm if side == "left" else robot._right_arm
+
+    # Compute T_body_site from world poses of body and site
+    body_name = arm.gripper.attachment_body
+    body_id = mujoco.mj_name2id(robot.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+    site_id = arm.ee_site_id
+
+    T_world_body = np.eye(4)
+    T_world_body[:3, :3] = robot.data.xmat[body_id].reshape(3, 3)
+    T_world_body[:3, 3] = robot.data.xpos[body_id]
+
+    T_world_site = np.eye(4)
+    T_world_site[:3, :3] = robot.data.site_xmat[site_id].reshape(3, 3)
+    T_world_site[:3, 3] = robot.data.site_xpos[site_id]
+
+    T_body_site = np.linalg.inv(T_world_body) @ T_world_site
+    T_site_object = np.linalg.inv(T_body_site) @ T_body_object
+    return T_site_object
 
 
 class GenerateGrasps(py_trees.behaviour.Behaviour):

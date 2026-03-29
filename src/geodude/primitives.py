@@ -118,7 +118,7 @@ def _tick_tree(root: py_trees.behaviour.Behaviour, verbose: bool = False) -> boo
     if root.status != Status.SUCCESS:
         tip = root.tip()
         if tip is not None and tip.feedback_message:
-            logger.warning("%s: %s", tip.name, tip.feedback_message)
+            logger.info("%s: %s", tip.name, tip.feedback_message)
 
     return root.status == Status.SUCCESS
 
@@ -157,7 +157,7 @@ def pickup(
     from geodude.bt.nodes import _find_scene_objects
     if not _find_scene_objects(robot, target):
         desc = f"'{target}'" if target else "any object"
-        logger.warning("Pickup failed: no graspable objects found for %s", desc)
+        logger.info("Pickup failed: no graspable objects found for %s", desc)
         return False
 
     def _try_pickup(side: str) -> bool:
@@ -217,20 +217,20 @@ def pickup(
 
         if grasp_failures:
             msg = f"Pickup failed: reached {', '.join(grasp_failures)} but grasp failed"
-            logger.warning(msg)
+            logger.info(msg)
         elif plan_failures:
-            logger.warning(
+            logger.info(
                 "Pickup failed: could not plan to %s",
                 "; ".join(plan_failures),
             )
         elif all_attempted:
-            logger.warning(
+            logger.info(
                 "Pickup failed: could not plan to %s",
                 ", ".join(sorted(all_attempted)),
             )
         else:
             desc = f"'{target}'" if target else "any object"
-            logger.warning("Pickup failed: no graspable %s found", desc)
+            logger.info("Pickup failed: no graspable %s found", desc)
 
     if arm is not None:
         if _try_pickup(arm):
@@ -283,7 +283,7 @@ def place(
                 arm = side
                 break
         if arm is None:
-            logger.warning("Place failed: no arm is holding an object")
+            logger.info("Place failed: no arm is holding an object")
             return False
 
     if verbose is None:
@@ -298,7 +298,7 @@ def place(
     bb.set(f"{ns}/destination", destination)
     ok = _tick_tree(geodude_place(ns), verbose=verbose)
     if not ok:
-        logger.warning("Place failed: %s arm could not place at '%s'", arm, destination)
+        logger.info("Place failed: %s arm could not place at '%s'", arm, destination)
 
     # Hide object only if placed into a container (recycled) — surface placements stay
     if ok and held_object and _is_container_destination(destination):
@@ -369,7 +369,7 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
         else:
             if verbose:
                 logger.debug("go_home: %s arm failed to plan", side)
-            logger.warning("Could not plan %s arm to ready", side)
+            logger.info("Could not plan %s arm to ready", side)
             success = False
     # Return bases to starting height (0.25 midpoint)
     for _, arm_obj in arms:

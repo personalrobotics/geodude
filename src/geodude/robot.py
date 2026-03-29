@@ -72,6 +72,7 @@ class _ArmScope:
     # These don't create attributes; they just inform static analysis tools.
     get_ee_pose: Callable
     get_ft_wrench: Callable
+    get_ft_wrench_world: Callable
     get_joint_positions: Callable
     get_joint_velocities: Callable
     get_joint_limits: Callable

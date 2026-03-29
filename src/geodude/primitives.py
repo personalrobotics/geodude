@@ -318,7 +318,8 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
         ready = np.array(robot.named_poses["ready"][side])
         try:
             path = arm_obj.plan_to_configuration(ready)
-        except Exception:
+        except Exception as e:
+            logger.info("go_home %s arm: initial plan failed: %s", side, e)
             path = None
 
         if path is None:
@@ -335,7 +336,8 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
             )
             try:
                 path = arm_obj.plan_to_configuration(ready)
-            except Exception:
+            except Exception as e:
+                logger.info("go_home %s arm: retry after retract failed: %s", side, e)
                 path = None
 
         if path is not None:

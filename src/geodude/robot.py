@@ -545,7 +545,8 @@ class Geodude:
                 path = arm.plan_to_pose(pose, timeout=timeout, seed=seed)
             else:
                 raise ValueError("Must provide goal_tsrs or pose")
-        except Exception:
+        except Exception as e:
+            logger.info("Planning failed: %s", e)
             path = None
 
         if path is None:

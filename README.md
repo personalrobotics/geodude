@@ -39,7 +39,9 @@ robot = Geodude(objects={"can": 3, "recycle_bin": 2})
 
 with robot.sim() as ctx:
     robot.pickup("can")           # pick up any can
-    robot.place("recycle_bin")    # place in any bin
+    robot.place("recycle_bin")    # drop into any bin
+    robot.place("worktop")       # place on the table
+    robot.place("sugar_box")     # place on top of a sugar box
     robot.go_home()
 ```
 
@@ -54,12 +56,31 @@ robot.pickup("can_0")         # specific instance
 robot.pickup("can")           # any can in the scene
 robot.pickup()                # anything graspable
 
-robot.place("recycle_bin_0")  # specific bin
-robot.place("recycle_bin")    # any bin
-robot.place()                 # any valid destination
+robot.place("recycle_bin_0")  # drop into a specific bin
+robot.place("recycle_bin")    # drop into any bin
+robot.place("sugar_box")     # place on top of any sugar box
+robot.place("worktop")       # place on the table surface
+robot.place()                 # auto-select: containers first, then worktop
 ```
 
 All matching objects' TSRs are combined and sent to the planner — it picks whichever is easiest to reach.
+
+## Placement
+
+`place()` supports three destination types:
+
+| Destination | Example | Behavior |
+|---|---|---|
+| Container (bin, tote) | `robot.place("recycle_bin")` | Drop from above, object removed from scene |
+| Surface (any flat-topped object) | `robot.place("sugar_box")` | Stable placement on top, object stays in scene |
+| Worktop | `robot.place("worktop")` | Place on the table surface |
+| Auto | `robot.place()` | Tries containers first, then worktop |
+
+Any object with an upward-facing flat face (box top, cylinder end) is a valid placement surface. The system automatically:
+- Enumerates flat faces from the destination's geometry
+- Filters to faces within ~18 degrees of vertical
+- Computes the grasp offset so the held object lands upright
+- Adds clearance so the planner avoids collision with the surface
 
 ## Arm Selection
 
@@ -118,16 +139,44 @@ geodude --list-demos                                  # see available demos
 uv run mjpython -m geodude --demo recycling --viewer  # with MuJoCo viewer
 ```
 
+### Python API
+
 ```python
 In [1]: robot.pickup()               # pick up nearest object
-In [2]: robot.place("recycle_bin")   # place in any bin
-In [3]: sort_all()                   # run the demo's built-in function
-In [4]: reset()                      # restart the demo
-In [5]: commands()                   # quick reference
-
-# Natural language (requires ANTHROPIC_API_KEY + uv sync --extra chat)
-In [6]: chat('clear the table')
+In [2]: robot.place("recycle_bin")   # drop in any bin
+In [3]: robot.place("worktop")      # place on the table
+In [4]: sort_all()                   # run the demo's built-in function
+In [5]: reset()                      # restart the demo
+In [6]: commands()                   # quick reference
 ```
+
+### LLM Chat
+
+Natural language control via Claude (requires `ANTHROPIC_API_KEY` + `uv sync --extra chat`).
+
+```python
+In [1]: /chat "what's on the table?"
+  -> get_objects({})
+Geodude: There are 2 cans, a sugar box, and 2 recycle bins on the table.
+
+In [2]: /chat "recycle all the cans"
+  -> pickup({"target": "can"})
+  -> place({"destination": "recycle_bin"})
+  -> pickup({"target": "can"})
+  -> place({"destination": "recycle_bin"})
+Geodude: Done! Both cans have been recycled.
+
+In [3]: /chat "stack the sugar box on the pop tarts case"
+  -> pickup({"target": "sugar_box"})
+  -> place({"destination": "pop_tarts_case"})
+Geodude: Placed the sugar box on top of the pop tarts case.
+
+In [4]: /chat "reset with 3 cans and a sugar box"
+  -> reset_scene({"objects": {"can": 3, "sugar_box": 1}})
+Geodude: Scene reset with 4 objects.
+```
+
+The LLM sees planning diagnostics behind the scenes (IK failures, collision details, grasp results) and adjusts its strategy automatically.
 
 ### Creating demos
 

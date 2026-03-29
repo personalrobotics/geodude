@@ -75,6 +75,8 @@ def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
         f"{ns}/goal_config", f"{ns}/grasped",
         f"{ns}/path", f"{ns}/trajectory",
         f"{ns}/twist", f"{ns}/distance",
+        f"{ns}/goal_tsr_index", f"{ns}/tsr_to_object",
+        f"{ns}/plan_failure_reason",
     ]
     for key in keys:
         try:
@@ -87,6 +89,13 @@ def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
     bb.set(f"{ns}/arm", arm)
     bb.set(f"{ns}/arm_name", arm.config.name)
     bb.set(f"{ns}/timeout", robot.config.planning.timeout)
+
+    # Clear stale results from previous runs
+    for stale_key in [
+        "path", "trajectory", "grasped", "grasp_tsrs", "place_tsrs",
+        "tsr_to_object", "goal_tsr_index", "plan_failure_reason",
+    ]:
+        bb.set(f"{ns}/{stale_key}", None)
 
     # Home config for recovery
     side = arm.config.name

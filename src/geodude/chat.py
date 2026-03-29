@@ -553,8 +553,10 @@ The complete API reference (auto-generated from docstrings):
 - Never make up information. If you don't know something, say so or use a tool to find out.
 - Keep responses concise — no filler, no restating the question.
 
-{scene_state}
 """
+
+# Dynamic part appended separately (not cached)
+_SCENE_STATE_PREFIX = "Current scene state (updated each turn):\n"
 
 
 class ChatSession:
@@ -618,15 +620,24 @@ class ChatSession:
         scene_state = _scene_summary(self.robot)
 
         while True:
-            system = SYSTEM_PROMPT.format(
-                scene_state=scene_state,
+            static_system = SYSTEM_PROMPT.format(
                 api_reference=self.api_reference,
             )
 
             response = self.client.messages.create(
                 model=self.model_name,
                 max_tokens=1024,
-                system=system,
+                system=[
+                    {
+                        "type": "text",
+                        "text": static_system,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {
+                        "type": "text",
+                        "text": _SCENE_STATE_PREFIX + scene_state,
+                    },
+                ],
                 tools=self.tools,
                 messages=self.messages,
             )

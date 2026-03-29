@@ -497,7 +497,7 @@ You are the control interface for Geodude, a bimanual robot.
 - Each gripper is a parallel-jaw gripper that can grasp objects by closing on them
 - Placing into a container (bin, tote) drops the object from above and removes it from the scene
 - Placing on a surface (worktop, box top, cylinder end) sets the object down gently — it stays in the scene
-- To re-spawn objects, use reset_scene — with no arguments it re-spawns the demo's default random selection. Pass objects like {"can": 2, "sugar_box": 1} for a custom scene.
+- To re-spawn objects, use reset_scene — with no arguments it re-spawns the demo's default random selection. Pass objects for a custom scene (e.g. 2 cans and 1 sugar box).
 - The gripper is either open or closed — there is no partial close
 
 ## Objects and destinations
@@ -605,7 +605,7 @@ class ChatSession:
             response_text = self._run_conversation()
         except Exception as e:
             # On error, remove the failed user message and reset cleanly
-            logger.warning("Chat error: %s. Resetting conversation.", e)
+            logger.warning("Chat error: %s. Resetting conversation.", e, exc_info=True)
             self.messages.clear()
             response_text = f"Error: {e}. Conversation reset."
 

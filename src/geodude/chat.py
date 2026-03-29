@@ -525,7 +525,7 @@ You are the control interface for Geodude, a bimanual robot.
 
 ## Sensors
 - Each arm has a 6-axis force/torque sensor at the wrist
-- F/T readings are only meaningful in physics mode — in kinematic mode they are near-zero noise
+- F/T readings return NaN in kinematic mode — only meaningful in physics mode where they report real wrist forces (gravity load ~13N empty, changes indicate grasped object weight or contact)
 - Use F/T to detect contact, estimate object weight, or monitor grip
 
 ## Tool usage principles

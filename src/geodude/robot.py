@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import random
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import mujoco
 import numpy as np
@@ -63,7 +63,30 @@ class _ArmScope:
         robot.left.get_ee_pose()        # Arm method (delegated)
         robot.left.get_ft_wrench()      # Arm method (delegated)
         robot.left.plan_to_pose(target) # Arm method (delegated)
+
+    Class-level annotations expose delegated Arm methods to IPython/Jedi
+    for tab completion (Jedi uses static analysis and can't follow __getattr__).
     """
+
+    # Type annotations for delegated Arm methods — enables IPython tab completion.
+    # These don't create attributes; they just inform static analysis tools.
+    get_ee_pose: Callable
+    get_ft_wrench: Callable
+    get_joint_positions: Callable
+    get_joint_velocities: Callable
+    get_joint_limits: Callable
+    forward_kinematics: Callable
+    plan_to_pose: Callable
+    plan_to_poses: Callable
+    plan_to_configuration: Callable
+    plan_to_configurations: Callable
+    plan_to_tsrs: Callable
+    retime: Callable
+    has_ft_sensor: bool
+    gripper: object
+    ik_solver: object
+    ee_site_id: int
+    config: object
 
     def __init__(self, robot: "Geodude", side: str):
         self._robot = robot

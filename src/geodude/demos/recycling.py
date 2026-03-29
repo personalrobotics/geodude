@@ -13,13 +13,13 @@ import random
 scene = {
     "objects": {
         "can": 3,
-        "potted_meat_can": 3,
+        "spam_can": 3,
         "cracker_box": 3,
         "gelatin_box": 3,
         "sugar_box": 3,
         "pocky_box": 3,
         "fuze_bottle": 3,
-        "pop_tarts": 3,
+        "pop_tarts_case": 3,
         "plastic_glass": 3,
         "recycle_bin": 2,
     },

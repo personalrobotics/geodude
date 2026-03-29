@@ -28,6 +28,37 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_CONTAINER_TYPES = frozenset(("open_box", "tote"))
+
+
+def _is_container_destination(destination: str | None) -> bool:
+    """Check if a destination name refers to a container (bin, tote).
+
+    Returns True for container types where the object should be hidden
+    after placement (simulating recycling/disposal). Returns False for
+    surface destinations where the object stays in the scene.
+    """
+    if destination is None:
+        return False
+
+    from asset_manager import AssetManager
+    from prl_assets import OBJECTS_DIR
+
+    # Strip instance suffix (e.g. "recycle_bin_0" → "recycle_bin")
+    import re
+    m = re.match(r"^(.+?)_(\d+)$", destination)
+    obj_type = m.group(1) if m else destination
+
+    if obj_type == "worktop":
+        return False
+
+    assets = AssetManager(str(OBJECTS_DIR))
+    try:
+        gp = assets.get(obj_type)["geometric_properties"]
+        return gp.get("type") in _CONTAINER_TYPES
+    except (KeyError, TypeError):
+        return False
+
 
 def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
     """Set up blackboard with robot state for a given arm namespace."""
@@ -246,10 +277,11 @@ def place(
     if not ok:
         logger.warning("Place failed: %s arm could not place at '%s'", arm, destination)
 
-    # Hide the placed/released object so it doesn't float (kinematic) or clutter
-    if held_object and robot.env.registry.is_active(held_object):
-        robot.env.registry.hide(held_object)
-        robot.forward()
+    # Hide object only if placed into a container (recycled) — surface placements stay
+    if ok and held_object and _is_container_destination(destination):
+        if robot.env.registry.is_active(held_object):
+            robot.env.registry.hide(held_object)
+            robot.forward()
 
     return ok
 

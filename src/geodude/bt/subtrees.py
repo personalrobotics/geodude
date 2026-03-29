@@ -10,7 +10,7 @@ import py_trees
 
 from mj_manipulator.bt import pickup_with_recovery, place_with_recovery
 
-from geodude.bt.nodes import GenerateDropZone, GenerateGrasps, LiftBase
+from geodude.bt.nodes import GenerateGrasps, GeneratePlaceTSRs, LiftBase
 
 
 def geodude_pickup(ns: str) -> py_trees.composites.Sequence:
@@ -31,7 +31,7 @@ def geodude_pickup(ns: str) -> py_trees.composites.Sequence:
 
 
 def geodude_place(ns: str) -> py_trees.composites.Sequence:
-    """Generate drop zone TSRs then place with recovery.
+    """Generate placement TSRs then place with recovery.
 
     Reads: ``{ns}/destination``, ``{ns}/robot``
     (plus all blackboard keys needed by place_with_recovery)
@@ -40,7 +40,7 @@ def geodude_place(ns: str) -> py_trees.composites.Sequence:
         name="geodude_place",
         memory=True,
         children=[
-            GenerateDropZone(ns=ns),
+            GeneratePlaceTSRs(ns=ns),
             place_with_recovery(ns),
         ],
     )

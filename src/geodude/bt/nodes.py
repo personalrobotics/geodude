@@ -183,7 +183,9 @@ def _get_held_object_height(robot) -> float:
     return 0.0
 
 
-def _generate_drop_tsrs(robot, body_name: str, dest_type: str, held_height: float = 0.0) -> list:
+def _generate_container_drop_tsrs(
+    robot, body_name: str, dest_type: str, held_height: float = 0.0,
+) -> list:
     """Generate drop-zone TSRs for a container from prl_assets geometry."""
     from asset_manager import AssetManager
     from prl_assets import OBJECTS_DIR
@@ -238,6 +240,268 @@ def _generate_drop_tsrs(robot, body_name: str, dest_type: str, held_height: floa
     return [TSR(T0_w=T0_w, Bw=Bw)]
 
 
+def _generate_surface_place_tsrs(
+    robot,
+    surface_pose: np.ndarray,
+    surface_hx: float,
+    surface_hy: float,
+    held_obj_type: str | None,
+    T_gripper_object: np.ndarray | None = None,
+) -> list:
+    """Generate stable placement TSRs for placing a held object on a flat surface.
+
+    Uses StablePlacer to compute the resting pose, then lifts Bw[2] by a
+    clearance buffer so the planner targets a collision-free pose above the
+    surface.  Physics drops the object the last few mm on release.
+
+    If ``T_gripper_object`` is provided, the grasp offset is composed into
+    ``Tw_e`` so that the TSR samples end-effector (gripper) poses rather than
+    object poses — which is what pycbirrt expects for IK.
+
+    Args:
+        robot: Geodude instance (unused, kept for API consistency).
+        surface_pose: 4x4 world-frame pose of the surface center (z up).
+        surface_hx: Surface half-extent along x (m).
+        surface_hy: Surface half-extent along y (m).
+        held_obj_type: prl_assets type of the held object, or None.
+        T_gripper_object: 4x4 grasp transform (gripper frame → object frame),
+            or None to skip the correction (e.g. for spawning / tests).
+    """
+    from asset_manager import AssetManager
+    from prl_assets import OBJECTS_DIR
+    from tsr.placement import StablePlacer
+
+    if held_obj_type is None:
+        return []
+
+    assets = AssetManager(str(OBJECTS_DIR))
+    try:
+        gp = assets.get(held_obj_type)["geometric_properties"]
+    except (KeyError, TypeError):
+        return []
+
+    # Shrink placement area by a margin to keep objects away from edges
+    margin = 0.05
+    placer = StablePlacer(
+        table_x=max(0.01, surface_hx - margin),
+        table_y=max(0.01, surface_hy - margin),
+    )
+
+    geo_type = gp.get("type")
+    if geo_type == "cylinder":
+        templates = placer.place_cylinder(gp["radius"], gp["height"], subject=held_obj_type)
+    elif geo_type == "box":
+        templates = placer.place_box(gp["size"][0], gp["size"][1], gp["size"][2], subject=held_obj_type)
+    elif geo_type == "sphere":
+        templates = placer.place_sphere(gp["radius"], subject=held_obj_type)
+    else:
+        return []
+
+    # Only use the most natural resting pose (first template, typically -z face down)
+    if not templates:
+        return []
+    template = templates[0]
+
+    # Apply grasp offset: convert object-frame TSR → gripper-frame TSR
+    # so pycbirrt plans the end-effector to the right pose.
+    #   Tw_e_corrected = Tw_e_object @ inv(T_site_object)
+    if T_gripper_object is not None:
+        import dataclasses
+        T_object_gripper = np.linalg.inv(T_gripper_object)
+        template = dataclasses.replace(template, Tw_e=template.Tw_e @ T_object_gripper)
+
+    tsr = template.instantiate(surface_pose)
+
+    # Lift z-bounds above the surface so the planner avoids collision.
+    # The object will settle the last few mm on release via physics.
+    clearance = 0.005  # 5mm buffer
+    tsr.Bw[2, :] += clearance
+
+    return [tsr]
+
+
+_UPWARD_THRESHOLD = 0.95  # dot(normal, [0,0,1]) > this ≈ <18° from vertical
+
+
+def _get_upward_faces(
+    dest_pose: np.ndarray, gp: dict,
+) -> list[tuple[np.ndarray, float, float]]:
+    """Enumerate flat faces of a destination object that currently point upward.
+
+    Returns a list of ``(surface_pose, half_x, half_y)`` for each face whose
+    world-frame normal has ``dot(n, [0,0,1]) > _UPWARD_THRESHOLD``.
+
+    Args:
+        dest_pose: 4x4 world-frame pose of the destination (origin at center).
+        gp: ``geometric_properties`` dict from prl_assets metadata.
+    """
+    R = dest_pose[:3, :3]
+    origin = dest_pose[:3, 3]
+    geo_type = gp.get("type")
+
+    # Build candidate faces: (local_normal, offset_along_normal, half_x, half_y)
+    # Object frame has origin at center; faces are at ±half-extent along each axis.
+    candidates: list[tuple[np.ndarray, float, float, float]] = []
+
+    if geo_type == "box":
+        lx, ly, lz = gp["size"]
+        # ±z faces
+        candidates.append((np.array([0, 0, +1.0]), lz / 2, lx / 2, ly / 2))
+        candidates.append((np.array([0, 0, -1.0]), lz / 2, lx / 2, ly / 2))
+        # ±y faces
+        candidates.append((np.array([0, +1.0, 0]), ly / 2, lx / 2, lz / 2))
+        candidates.append((np.array([0, -1.0, 0]), ly / 2, lx / 2, lz / 2))
+        # ±x faces
+        candidates.append((np.array([+1.0, 0, 0]), lx / 2, ly / 2, lz / 2))
+        candidates.append((np.array([-1.0, 0, 0]), lx / 2, ly / 2, lz / 2))
+
+    elif geo_type == "cylinder":
+        r, h = gp["radius"], gp["height"]
+        # ±z end caps (circular, approximate extents as r × r)
+        candidates.append((np.array([0, 0, +1.0]), h / 2, r, r))
+        candidates.append((np.array([0, 0, -1.0]), h / 2, r, r))
+
+    # sphere: no flat faces → candidates stays empty
+
+    results = []
+    up = np.array([0.0, 0.0, 1.0])
+    for local_normal, offset, hx, hy in candidates:
+        normal_world = R @ local_normal
+        if normal_world @ up < _UPWARD_THRESHOLD:
+            continue
+
+        # Surface pose: origin at the face center, Z = upward normal
+        face_center = origin + R @ (local_normal * offset)
+
+        # Build surface orientation: Z = normal_world (≈ up),
+        # X/Y from the destination's rotation projected onto the face plane.
+        # Use the destination's local axes that span the face.
+        surface_pose = np.eye(4)
+        surface_pose[:3, 3] = face_center
+        surface_pose[:3, 2] = normal_world
+
+        # Pick X axis: use dest_pose's first axis that isn't the face normal
+        abs_normal = np.abs(local_normal)
+        if abs_normal[0] < 0.5:
+            local_x = np.array([1.0, 0, 0])
+        elif abs_normal[1] < 0.5:
+            local_x = np.array([0, 1.0, 0])
+        else:
+            local_x = np.array([0, 0, 1.0])
+        surface_x = R @ local_x
+        # Orthogonalize against normal
+        surface_x -= normal_world * (surface_x @ normal_world)
+        surface_x /= np.linalg.norm(surface_x)
+        surface_pose[:3, 0] = surface_x
+        surface_pose[:3, 1] = np.cross(normal_world, surface_x)
+
+        results.append((surface_pose, hx, hy))
+
+    return results
+
+
+def _generate_place_tsrs(
+    robot, body_name: str, dest_type: str, held_height: float = 0.0,
+    T_gripper_object: np.ndarray | None = None,
+) -> list:
+    """Generate placement TSRs — dispatches between container drop and surface placement."""
+    from asset_manager import AssetManager
+    from prl_assets import OBJECTS_DIR
+
+    assets = AssetManager(str(OBJECTS_DIR))
+    try:
+        gp = assets.get(dest_type)["geometric_properties"]
+    except (KeyError, TypeError):
+        return []
+
+    geo_type = gp.get("type")
+
+    # Container drop (existing behavior)
+    if geo_type in ("open_box", "tote"):
+        return _generate_container_drop_tsrs(robot, body_name, dest_type, held_height)
+
+    # Surface placement on any upward-facing flat face
+    try:
+        dest_pose = robot.get_object_pose(body_name)
+    except (ValueError, AttributeError):
+        return []
+
+    faces = _get_upward_faces(dest_pose, gp)
+    if not faces:
+        return []
+
+    held_type = _get_held_object_type(robot)
+    all_tsrs = []
+    for surface_pose, hx, hy in faces:
+        tsrs = _generate_surface_place_tsrs(
+            robot, surface_pose, hx, hy, held_type,
+            T_gripper_object=T_gripper_object,
+        )
+        all_tsrs.extend(tsrs)
+    return all_tsrs
+
+
+def _get_held_object_type(robot) -> str | None:
+    """Get the prl_assets type of the currently held object, or None."""
+    held = robot.holding()
+    if not held:
+        return None
+    _, obj_name = held
+    m = re.match(r"^(.+?)_(\d+)$", obj_name)
+    return m.group(1) if m else None
+
+
+def _get_worktop_surface(robot) -> tuple[np.ndarray, float, float] | None:
+    """Get the worktop surface pose and half-extents, or None if no worktop site."""
+    try:
+        wt_id = mujoco.mj_name2id(robot.model, mujoco.mjtObj.mjOBJ_SITE, "worktop")
+    except Exception:
+        return None
+    if wt_id < 0:
+        return None
+    wt_size = robot.model.site_size[wt_id]
+    surface_pose = np.eye(4)
+    surface_pose[:3, 3] = robot.data.site_xpos[wt_id].copy()
+    return surface_pose, float(wt_size[0]), float(wt_size[1])
+
+
+def _get_grasp_transform(robot) -> np.ndarray | None:
+    """Get T_site_object (grasp site → object) for the currently held object.
+
+    GraspManager stores T_body_object (attachment body → object), but
+    pycbirrt targets the grasp_site, not the body.  We convert:
+        T_site_object = inv(T_body_site) @ T_body_object
+    """
+    held = robot.holding()
+    if not held:
+        return None
+    side, obj_name = held
+
+    T_body_object = robot.grasp_manager.get_grasp_transform(obj_name)
+    if T_body_object is None:
+        return None
+
+    # Get the arm for the holding side to find site and body poses
+    arm = robot._left_arm if side == "left" else robot._right_arm
+
+    # Compute T_body_site from world poses of body and site
+    body_name = arm.gripper.attachment_body
+    body_id = mujoco.mj_name2id(robot.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+    site_id = arm.ee_site_id
+
+    T_world_body = np.eye(4)
+    T_world_body[:3, :3] = robot.data.xmat[body_id].reshape(3, 3)
+    T_world_body[:3, 3] = robot.data.xpos[body_id]
+
+    T_world_site = np.eye(4)
+    T_world_site[:3, :3] = robot.data.site_xmat[site_id].reshape(3, 3)
+    T_world_site[:3, 3] = robot.data.site_xpos[site_id]
+
+    T_body_site = np.linalg.inv(T_world_body) @ T_world_site
+    T_site_object = np.linalg.inv(T_body_site) @ T_body_object
+    return T_site_object
+
+
 class GenerateGrasps(py_trees.behaviour.Behaviour):
     """Generate grasp TSRs for one or more objects in the scene.
 
@@ -288,16 +552,17 @@ class GenerateGrasps(py_trees.behaviour.Behaviour):
         return Status.SUCCESS
 
 
-class GenerateDropZone(py_trees.behaviour.Behaviour):
-    """Generate drop-zone TSRs for one or more containers in the scene.
+class GeneratePlaceTSRs(py_trees.behaviour.Behaviour):
+    """Generate placement TSRs for containers, surfaces, or worktop.
 
-    Supports smart resolution like GenerateGrasps.
+    Supports smart resolution like GenerateGrasps.  When no destination is
+    specified, tries containers first, then falls back to the worktop surface.
 
     Reads: ``{ns}/destination``, ``{ns}/robot``
-    Writes: ``{ns}/place_tsrs``, ``{ns}/tsr_to_object``
+    Writes: ``{ns}/place_tsrs``
     """
 
-    def __init__(self, ns: str = "", name: str = "GenerateDropZone"):
+    def __init__(self, ns: str = "", name: str = "GeneratePlaceTSRs"):
         super().__init__(name)
         self.ns = ns
         self.bb = self.attach_blackboard_client(name=name)
@@ -309,22 +574,51 @@ class GenerateDropZone(py_trees.behaviour.Behaviour):
         robot = self.bb.get(f"{self.ns}/robot")
         target = self.bb.get(f"{self.ns}/destination")
 
-        # Determine held object height for drop clearance
         held_height = _get_held_object_height(robot)
+        held_type = _get_held_object_type(robot)
 
-        # Find matching destinations
-        objects = _find_scene_objects(robot, target)
-        if not objects:
-            self.feedback_message = f"No destinations found for '{target}'"
-            return Status.FAILURE
+        # Look up grasp transform so surface placement TSRs target the
+        # gripper (what pycbirrt expects) rather than the object.
+        T_gripper_object = _get_grasp_transform(robot)
 
         all_tsrs = []
+
+        # Special case: "worktop" targets the worktop surface directly
+        if target == "worktop":
+            wt = _get_worktop_surface(robot)
+            if wt is not None:
+                surface_pose, hx, hy = wt
+                all_tsrs = _generate_surface_place_tsrs(
+                    robot, surface_pose, hx, hy, held_type,
+                    T_gripper_object=T_gripper_object,
+                )
+            if not all_tsrs:
+                self.feedback_message = "No worktop surface found"
+                return Status.FAILURE
+            self.bb.set(f"{self.ns}/place_tsrs", all_tsrs)
+            return Status.SUCCESS
+
+        # Find matching destinations from scene objects
+        objects = _find_scene_objects(robot, target)
         for body_name, dest_type in objects:
-            tsrs = _generate_drop_tsrs(robot, body_name, dest_type, held_height=held_height)
+            tsrs = _generate_place_tsrs(
+                robot, body_name, dest_type, held_height=held_height,
+                T_gripper_object=T_gripper_object,
+            )
             all_tsrs.extend(tsrs)
 
+        # No-destination fallback: try worktop if no container TSRs were found
+        if not all_tsrs and target is None:
+            wt = _get_worktop_surface(robot)
+            if wt is not None:
+                surface_pose, hx, hy = wt
+                all_tsrs = _generate_surface_place_tsrs(
+                    robot, surface_pose, hx, hy, held_type,
+                    T_gripper_object=T_gripper_object,
+                )
+
         if not all_tsrs:
-            self.feedback_message = f"No drop-zone TSRs for {[b for b, _ in objects]}"
+            self.feedback_message = f"No placement TSRs for destination '{target}'"
             return Status.FAILURE
 
         self.bb.set(f"{self.ns}/place_tsrs", all_tsrs)

@@ -636,7 +636,7 @@ class Geodude:
 
         Example::
 
-            robot.find_objects()         # ['can_0', 'can_1', 'potted_meat_can_0']
+            robot.find_objects()         # ['can_0', 'can_1', 'spam_can_0']
             robot.find_objects("can")    # ['can_0', 'can_1']
         """
         from geodude.bt.nodes import _find_scene_objects

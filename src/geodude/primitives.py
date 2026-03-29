@@ -159,23 +159,26 @@ def pickup(
             return False
         return True
 
-    def _pickup_details(side: str) -> tuple[list[str], str | None, bool, bool]:
+    def _pickup_details(side: str) -> tuple[list[str], str | None, bool, bool, str | None]:
         """Get attempted objects, the specific object reached, and grasp result.
 
         Returns:
-            (attempted_objects, reached_object, plan_succeeded, grasp_succeeded)
+            (attempted_objects, reached_object, plan_succeeded, grasp_succeeded,
+             plan_failure_reason)
         """
         ns = f"/{side}"
         attempted: list[str] = []
         reached: str | None = None
         planned = False
         grasped = False
+        plan_reason: str | None = None
         try:
             bb = py_trees.blackboard.Client(name=f"pickup_report{ns}")
             bb.register_key(key=f"{ns}/tsr_to_object", access=Access.READ)
             bb.register_key(key=f"{ns}/object_name", access=Access.READ)
             bb.register_key(key=f"{ns}/grasped", access=Access.READ)
             bb.register_key(key=f"{ns}/path", access=Access.READ)
+            bb.register_key(key=f"{ns}/plan_failure_reason", access=Access.READ)
             mapping = bb.get(f"{ns}/tsr_to_object")
             if mapping:
                 attempted = sorted(set(mapping))
@@ -184,21 +187,25 @@ def pickup(
                 reached = obj
             planned = bb.get(f"{ns}/path") is not None
             grasped = bool(bb.get(f"{ns}/grasped"))
+            plan_reason = bb.get(f"{ns}/plan_failure_reason")
         except (KeyError, RuntimeError):
             pass
-        return attempted, reached, planned, grasped
+        return attempted, reached, planned, grasped, plan_reason
 
     def _report_failure(sides_tried: list[str]) -> None:
         all_attempted: set[str] = set()
         plan_failures: list[str] = []
         grasp_failures: list[str] = []
         for side in sides_tried:
-            attempted, reached, planned, grasped = _pickup_details(side)
+            attempted, reached, planned, grasped, plan_reason = _pickup_details(side)
             all_attempted.update(attempted)
             if reached and planned and not grasped:
                 grasp_failures.append(f"{reached} ({side} arm)")
             elif reached and not planned:
-                plan_failures.append(f"{reached} ({side} arm)")
+                detail = f"{reached} ({side} arm)"
+                if plan_reason:
+                    detail += f": {plan_reason}"
+                plan_failures.append(detail)
 
         if grasp_failures:
             msg = f"Pickup failed: reached {', '.join(grasp_failures)} but grasp failed"
@@ -206,7 +213,7 @@ def pickup(
         elif plan_failures:
             logger.warning(
                 "Pickup failed: could not plan to %s",
-                ", ".join(plan_failures),
+                "; ".join(plan_failures),
             )
         elif all_attempted:
             logger.warning(

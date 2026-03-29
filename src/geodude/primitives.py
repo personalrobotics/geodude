@@ -178,7 +178,7 @@ def pickup(
         ns = f"/{side}"
         attempted: list[str] = []
         reached: str | None = None
-        planned = False
+        plan_failed = False
         grasped = False
         plan_reason: str | None = None
         try:
@@ -186,7 +186,6 @@ def pickup(
             bb.register_key(key=f"{ns}/tsr_to_object", access=Access.READ)
             bb.register_key(key=f"{ns}/object_name", access=Access.READ)
             bb.register_key(key=f"{ns}/grasped", access=Access.READ)
-            bb.register_key(key=f"{ns}/path", access=Access.READ)
             bb.register_key(key=f"{ns}/plan_failure_reason", access=Access.READ)
             mapping = bb.get(f"{ns}/tsr_to_object")
             if mapping:
@@ -194,12 +193,12 @@ def pickup(
             obj = bb.get(f"{ns}/object_name")
             if obj:
                 reached = obj
-            planned = bb.get(f"{ns}/path") is not None
-            grasped = bool(bb.get(f"{ns}/grasped"))
             plan_reason = bb.get(f"{ns}/plan_failure_reason")
+            plan_failed = plan_reason is not None
+            grasped = bool(bb.get(f"{ns}/grasped"))
         except (KeyError, RuntimeError):
             pass
-        return attempted, reached, planned, grasped, plan_reason
+        return attempted, reached, not plan_failed, grasped, plan_reason
 
     def _report_failure(sides_tried: list[str]) -> None:
         all_attempted: set[str] = set()

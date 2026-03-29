@@ -24,7 +24,7 @@ def start_console(
     *,
     physics: bool = False,
     viewer: bool = False,
-    model_name: str = "claude-sonnet-4-20250514",
+    model_name: str = "claude-haiku-4-5-20251001",
     demo_module: ModuleType | None = None,
     objects: dict | None = None,
     fixtures: dict | None = None,
@@ -46,10 +46,12 @@ def start_console(
             return None
         try:
             from geodude.chat import ChatSession
+            sc = demo_module.scene.get("spawn_count") if demo_module and hasattr(demo_module, "scene") else None
             chat_session = ChatSession(
                 robot, mode=mode, model_name=model_name,
                 original_objects=objects or {},
                 original_fixtures=fixtures or {},
+                spawn_count=sc,
             )
         except ImportError:
             print("Install chat dependencies: uv sync --extra chat")

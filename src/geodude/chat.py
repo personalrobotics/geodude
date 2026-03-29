@@ -213,13 +213,22 @@ def _build_tools() -> list[dict]:
         {
             "name": "reset_scene",
             "description": (
-                "Reset the scene: re-spawn all original objects at random positions "
-                "on the worktop, release any grasped objects, and return arms to home. "
-                "Use when the user wants to start over or put objects back."
+                "Reset the scene: release grasps, return arms to home, re-spawn objects "
+                "at random worktop positions. With no arguments, re-spawns the demo's "
+                "default number of random objects. Pass 'objects' to customize, e.g. "
+                '{"can": 2, "cracker_box": 1} for exactly 2 cans and 1 cracker box.'
             ),
             "input_schema": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "objects": {
+                        "type": "object",
+                        "description": (
+                            "Custom object counts, e.g. {\"can\": 2, \"sugar_box\": 1}. "
+                            "Omit to use the demo's default random selection."
+                        ),
+                    },
+                },
                 "required": [],
             },
         },
@@ -241,6 +250,7 @@ def _execute_tool(
     original_objects: dict[str, int] | None = None,
     original_fixtures: dict[str, list[list[float]]] | None = None,
     mode: str = "kinematic",
+    spawn_count: int | None = None,
 ) -> str:
     """Execute a tool call and return the result as a string."""
     if name == "pickup":
@@ -323,7 +333,14 @@ def _execute_tool(
         robot.reset()
         fixture_types = set(original_fixtures.keys()) if original_fixtures else set()
         from geodude.demo_loader import _spawn_manipulable_objects
-        _spawn_manipulable_objects(robot, original_objects, fixture_types)
+
+        custom_objects = args.get("objects")
+        if custom_objects:
+            _spawn_manipulable_objects(robot, custom_objects, fixture_types)
+        else:
+            _spawn_manipulable_objects(
+                robot, original_objects, fixture_types, spawn_count=spawn_count,
+            )
         n = len(robot.find_objects())
         return f"Success: scene reset with {n} objects"
 
@@ -480,7 +497,7 @@ You are the control interface for Geodude, a bimanual robot.
 - Each gripper is a parallel-jaw gripper that can grasp objects by closing on them
 - Placing into a container (bin, tote) drops the object from above and removes it from the scene
 - Placing on a surface (worktop, box top, cylinder end) sets the object down gently — it stays in the scene
-- To re-spawn removed objects, use reset_scene — this re-spawns all original objects at new random positions
+- To re-spawn objects, use reset_scene — with no arguments it re-spawns the demo's default random selection. Pass objects like {"can": 2, "sugar_box": 1} for a custom scene.
 - The gripper is either open or closed — there is no partial close
 
 ## Objects and destinations
@@ -552,9 +569,10 @@ class ChatSession:
         robot: Geodude,
         *,
         mode: str = "kinematic",
-        model_name: str = "claude-sonnet-4-20250514",
+        model_name: str = "claude-haiku-4-5-20251001",
         original_objects: dict[str, int] | None = None,
         original_fixtures: dict[str, list[list[float]]] | None = None,
+        spawn_count: int | None = None,
     ):
         try:
             import anthropic
@@ -569,6 +587,7 @@ class ChatSession:
         self.model_name = model_name
         self.original_objects = original_objects or {}
         self.original_fixtures = original_fixtures or {}
+        self.spawn_count = spawn_count
         self.client = anthropic.Anthropic()
         self.tools = _build_tools()
         self.api_reference = _api_reference(robot)
@@ -634,6 +653,7 @@ class ChatSession:
                             original_objects=self.original_objects,
                             original_fixtures=self.original_fixtures,
                             mode=self.mode,
+                            spawn_count=self.spawn_count,
                         )
                 except Exception as e:
                     result = f"Error executing {tc.name}: {e}"

@@ -143,17 +143,17 @@ class _ArmScope:
         return self._arm.has_ft_sensor
 
     @property
-    def gripper(self):
-        """The arm's gripper (RobotiqGripper or similar)."""
+    def gripper(self) -> RobotiqGripper:
+        """The arm's gripper."""
         return self._arm.gripper
 
     @property
-    def config(self):
+    def config(self) -> ArmConfig:
         """Arm configuration (joint names, limits, ee_site, etc.)."""
         return self._arm.config
 
     @property
-    def grasp_manager(self):
+    def grasp_manager(self) -> GraspManager:
         """GraspManager for grasp state queries."""
         return self._arm.grasp_manager
 

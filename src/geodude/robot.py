@@ -101,6 +101,10 @@ class _ArmScope:
         """Wrist F/T reading [fx,fy,fz,tx,ty,tz] in world frame."""
         return self._arm.get_ft_wrench_world()
 
+    def tare_ft(self):
+        """Zero the F/T sensor at the current reading."""
+        return self._arm.tare_ft()
+
     def get_joint_positions(self):
         """Current joint positions (rad)."""
         return self._arm.get_joint_positions()
@@ -776,9 +780,11 @@ class Geodude:
         if self._context is not None:
             self._context.hold()
 
-        # Release grasps
+        # Release grasps and clear F/T tare
         for obj in list(self.grasp_manager.grasped.keys()):
             self.grasp_manager.mark_released(obj)
+        for arm in [self._left_arm, self._right_arm]:
+            arm._ft_tare_offset = np.zeros(6)
 
         # Hide all objects
         if self._env.registry is not None:

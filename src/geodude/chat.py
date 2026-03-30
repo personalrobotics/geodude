@@ -655,12 +655,32 @@ class ChatSession:
         return "\n".join(parts)
 
     def _trim_history(self) -> None:
-        """Trim conversation history to the last N messages."""
-        if len(self.messages) > self._max_history_messages:
-            self.messages = self.messages[-self._max_history_messages:]
-            # Ensure we start with a user message (API requirement)
-            while self.messages and self.messages[0]["role"] != "user":
-                self.messages.pop(0)
+        """Trim conversation history, preserving tool_use/tool_result pairs.
+
+        Finds safe cut points — user messages that are plain strings (not
+        tool_result lists). Keeps the last few complete turns.
+        """
+        if len(self.messages) <= self._max_history_messages:
+            return
+
+        # Find safe cut points: indices of user messages with plain string content
+        # (these start a new turn, not a tool_result continuation)
+        safe_cuts = []
+        for i, msg in enumerate(self.messages):
+            if msg["role"] == "user" and isinstance(msg["content"], str):
+                safe_cuts.append(i)
+
+        # Keep the last few turns by cutting at the appropriate safe point
+        target_start = len(self.messages) - self._max_history_messages
+        # Find the nearest safe cut at or after target_start
+        cut = None
+        for idx in safe_cuts:
+            if idx >= target_start:
+                cut = idx
+                break
+
+        if cut is not None and cut > 0:
+            self.messages = self.messages[cut:]
 
     def _run_conversation(self) -> str:
         """Inner conversation loop. Raises on API errors."""

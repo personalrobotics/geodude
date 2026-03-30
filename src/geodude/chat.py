@@ -760,9 +760,9 @@ class ChatSession:
                 })
 
                 # Log action summary for history trimming context
-                args_str = json.dumps(tc.input) if tc.input else ""
-                outcome = "ok" if "Success" in result else "failed"
-                self.action_log.append(f"{tc.name}({args_str}): {outcome}")
+                # Use the first line of the result (e.g., "Success: pickup({'target': 'can'})")
+                first_line = result.split("\n")[0].strip()
+                self.action_log.append(first_line)
 
             # Refresh scene state after tool execution
             scene_state = _scene_summary(self.robot)

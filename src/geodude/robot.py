@@ -153,6 +153,11 @@ class _ArmScope:
         return self._arm.config
 
     @property
+    def grasp_manager(self):
+        """GraspManager for grasp state queries."""
+        return self._arm.grasp_manager
+
+    @property
     def ee_site_id(self) -> int:
         """MuJoCo site ID for the end-effector."""
         return self._arm.ee_site_id

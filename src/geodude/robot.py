@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import random
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 import mujoco
 import numpy as np
@@ -68,39 +68,90 @@ class _ArmScope:
     for tab completion (Jedi uses static analysis and can't follow __getattr__).
     """
 
-    # Type annotations for delegated Arm methods — enables IPython tab completion.
-    # These don't create attributes; they just inform static analysis tools.
-    get_ee_pose: Callable
-    get_ft_wrench: Callable
-    get_ft_wrench_world: Callable
-    get_joint_positions: Callable
-    get_joint_velocities: Callable
-    get_joint_limits: Callable
-    forward_kinematics: Callable
-    plan_to_pose: Callable
-    plan_to_poses: Callable
-    plan_to_configuration: Callable
-    plan_to_configurations: Callable
-    plan_to_tsrs: Callable
-    retime: Callable
-    has_ft_sensor: bool
-    gripper: object
-    ik_solver: object
-    ee_site_id: int
-    config: object
-
     def __init__(self, robot: "Geodude", side: str):
         self._robot = robot
         self._side = side
 
+    @property
+    def _arm(self):
+        return self._robot._resolve_arm(self._side)
+
     def __getattr__(self, name):
         # Delegate unknown attributes to the underlying Arm
-        return getattr(self._robot._resolve_arm(self._side), name)
+        return getattr(self._arm, name)
 
     def __dir__(self):
         # Combine _ArmScope methods + Arm methods for tab completion
-        arm = self._robot._resolve_arm(self._side)
-        return sorted(set(super().__dir__()) | set(dir(arm)))
+        return sorted(set(super().__dir__()) | set(dir(self._arm)))
+
+    # -- Delegated Arm methods (explicit for IPython tab completion) --
+    # IPython's runtime completer only sees methods defined on the class,
+    # not __getattr__ delegated ones. These thin wrappers make the key
+    # methods tab-completable.
+
+    def get_ee_pose(self):
+        """Current end-effector pose as 4x4 homogeneous transform."""
+        return self._arm.get_ee_pose()
+
+    def get_ft_wrench(self):
+        """Wrist F/T reading [fx,fy,fz,tx,ty,tz] in sensor local frame."""
+        return self._arm.get_ft_wrench()
+
+    def get_ft_wrench_world(self):
+        """Wrist F/T reading [fx,fy,fz,tx,ty,tz] in world frame."""
+        return self._arm.get_ft_wrench_world()
+
+    def get_joint_positions(self):
+        """Current joint positions (rad)."""
+        return self._arm.get_joint_positions()
+
+    def get_joint_velocities(self):
+        """Current joint velocities (rad/s)."""
+        return self._arm.get_joint_velocities()
+
+    def get_joint_limits(self):
+        """Joint position limits as (lower, upper) arrays."""
+        return self._arm.get_joint_limits()
+
+    def forward_kinematics(self, q):
+        """Compute end-effector pose for a given joint configuration."""
+        return self._arm.forward_kinematics(q)
+
+    def plan_to_pose(self, pose, **kwargs):
+        """Plan a collision-free path to an end-effector pose."""
+        return self._arm.plan_to_pose(pose, **kwargs)
+
+    def plan_to_configuration(self, q_goal, **kwargs):
+        """Plan a collision-free path to a joint configuration."""
+        return self._arm.plan_to_configuration(q_goal, **kwargs)
+
+    def plan_to_tsrs(self, goal_tsrs, **kwargs):
+        """Plan a collision-free path to a TSR-defined goal region."""
+        return self._arm.plan_to_tsrs(goal_tsrs, **kwargs)
+
+    def retime(self, path, **kwargs):
+        """Retime a joint path into a smooth trajectory."""
+        return self._arm.retime(path, **kwargs)
+
+    @property
+    def has_ft_sensor(self) -> bool:
+        """Whether this arm has a wrist F/T sensor configured."""
+        return self._arm.has_ft_sensor
+
+    @property
+    def gripper(self):
+        """The arm's gripper (RobotiqGripper or similar)."""
+        return self._arm.gripper
+
+    @property
+    def config(self):
+        """Arm configuration (joint names, limits, ee_site, etc.)."""
+        return self._arm.config
+
+    @property
+    def ee_site_id(self) -> int:
+        """MuJoCo site ID for the end-effector."""
+        return self._arm.ee_site_id
 
     def pickup(self, target: str | None = None, **kwargs) -> bool:
         return self._robot.pickup(target, arm=self._side, **kwargs)

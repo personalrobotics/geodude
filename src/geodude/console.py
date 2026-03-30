@@ -83,6 +83,7 @@ def start_console(
         _spawn_manipulable_objects(robot, objects or {}, fixture_types, spawn_count=spawn_count)
         if chat_session is not None:
             chat_session.messages.clear()
+            chat_session.action_log.clear()
         print("Scene reset.")
 
     def demos() -> None:

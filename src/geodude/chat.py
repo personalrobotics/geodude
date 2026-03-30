@@ -594,6 +594,8 @@ class ChatSession:
         self.tools = _build_tools()
         self.api_reference = _api_reference(robot)
         self.messages: list[dict] = []
+        self.action_log: list[str] = []
+        self._max_history_messages: int = 8  # ~4 turns of user+assistant
 
         # Token usage tracking
         self.total_input_tokens: int = 0
@@ -616,6 +618,7 @@ class ChatSession:
             # On error, remove the failed user message and reset cleanly
             logger.warning("Chat error: %s. Resetting conversation.", e, exc_info=True)
             self.messages.clear()
+            self.action_log.clear()
             response_text = f"Error: {e}. Conversation reset."
 
         return response_text
@@ -642,6 +645,23 @@ class ChatSession:
         lines.append(f"Total cost:    ${total_cost:.4f}")
         return "\n".join(lines)
 
+    def _build_dynamic_context(self, scene_state: str) -> str:
+        """Build the dynamic (uncached) system context."""
+        parts = [_SCENE_STATE_PREFIX + scene_state]
+        if self.action_log:
+            parts.append("\nRecent actions:\n" + "\n".join(
+                f"  - {a}" for a in self.action_log[-20:]  # cap at 20 entries
+            ))
+        return "\n".join(parts)
+
+    def _trim_history(self) -> None:
+        """Trim conversation history to the last N messages."""
+        if len(self.messages) > self._max_history_messages:
+            self.messages = self.messages[-self._max_history_messages:]
+            # Ensure we start with a user message (API requirement)
+            while self.messages and self.messages[0]["role"] != "user":
+                self.messages.pop(0)
+
     def _run_conversation(self) -> str:
         """Inner conversation loop. Raises on API errors."""
         response_text = ""
@@ -649,6 +669,8 @@ class ChatSession:
         scene_state = _scene_summary(self.robot)
 
         while True:
+            self._trim_history()
+
             static_system = SYSTEM_PROMPT.format(
                 api_reference=self.api_reference,
             )
@@ -664,7 +686,7 @@ class ChatSession:
                     },
                     {
                         "type": "text",
-                        "text": _SCENE_STATE_PREFIX + scene_state,
+                        "text": self._build_dynamic_context(scene_state),
                     },
                 ],
                 tools=self.tools,
@@ -716,6 +738,11 @@ class ChatSession:
                     "tool_use_id": tc.id,
                     "content": result,
                 })
+
+                # Log action summary for history trimming context
+                args_str = json.dumps(tc.input) if tc.input else ""
+                outcome = "ok" if "Success" in result else "failed"
+                self.action_log.append(f"{tc.name}({args_str}): {outcome}")
 
             # Refresh scene state after tool execution
             scene_state = _scene_summary(self.robot)

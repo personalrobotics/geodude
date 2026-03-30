@@ -177,6 +177,14 @@ IPython:
   whos                              — list all variables
 """)
 
+    def token_usage() -> None:
+        """Print LLM token usage and estimated cost for this session."""
+        s = _get_chat()
+        if s is None:
+            print("Chat not initialized.")
+            return
+        print(s.token_usage())
+
     # -- Build namespace -----------------------------------------------------
     user_ns: dict = {
         "robot": robot,
@@ -186,6 +194,7 @@ IPython:
         "demos": demos,
         "save_demo": save_demo,
         "reset": reset,
+        "token_usage": token_usage,
     }
 
     if demo_module is not None:

@@ -595,6 +595,13 @@ class ChatSession:
         self.api_reference = _api_reference(robot)
         self.messages: list[dict] = []
 
+        # Token usage tracking
+        self.total_input_tokens: int = 0
+        self.total_output_tokens: int = 0
+        self.total_cache_read_tokens: int = 0
+        self.total_cache_creation_tokens: int = 0
+        self.total_api_calls: int = 0
+
     def send(self, user_input: str) -> str:
         """Send a message to the LLM and execute any tool calls.
 
@@ -612,6 +619,28 @@ class ChatSession:
             response_text = f"Error: {e}. Conversation reset."
 
         return response_text
+
+    def token_usage(self) -> str:
+        """Return a summary of token usage and estimated cost."""
+        # Haiku 4.5 pricing: $1/M input, $5/M output
+        # Cache read: $0.10/M, cache creation: $1.25/M
+        input_cost = self.total_input_tokens * 1.0 / 1_000_000
+        output_cost = self.total_output_tokens * 5.0 / 1_000_000
+        cache_read_cost = self.total_cache_read_tokens * 0.10 / 1_000_000
+        cache_create_cost = self.total_cache_creation_tokens * 1.25 / 1_000_000
+        total_cost = input_cost + output_cost + cache_read_cost + cache_create_cost
+
+        lines = [
+            f"API calls: {self.total_api_calls}",
+            f"Input tokens:  {self.total_input_tokens:,} (${input_cost:.4f})",
+            f"Output tokens: {self.total_output_tokens:,} (${output_cost:.4f})",
+        ]
+        if self.total_cache_read_tokens:
+            lines.append(f"Cache read:    {self.total_cache_read_tokens:,} (${cache_read_cost:.4f})")
+        if self.total_cache_creation_tokens:
+            lines.append(f"Cache create:  {self.total_cache_creation_tokens:,} (${cache_create_cost:.4f})")
+        lines.append(f"Total cost:    ${total_cost:.4f}")
+        return "\n".join(lines)
 
     def _run_conversation(self) -> str:
         """Inner conversation loop. Raises on API errors."""
@@ -641,6 +670,14 @@ class ChatSession:
                 tools=self.tools,
                 messages=self.messages,
             )
+
+            # Track token usage
+            self.total_api_calls += 1
+            usage = response.usage
+            self.total_input_tokens += usage.input_tokens
+            self.total_output_tokens += usage.output_tokens
+            self.total_cache_read_tokens += getattr(usage, 'cache_read_input_tokens', 0) or 0
+            self.total_cache_creation_tokens += getattr(usage, 'cache_creation_input_tokens', 0) or 0
 
             assistant_content = response.content
             self.messages.append({"role": "assistant", "content": assistant_content})

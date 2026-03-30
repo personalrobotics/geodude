@@ -232,11 +232,25 @@ IPython:
     with robot.sim(physics=physics, headless=not viewer) as ctx:
         user_ns["ctx"] = ctx
 
+        from IPython.terminal.prompts import Prompts, Token
+
+        class GeodudePrompts(Prompts):
+            def in_prompt_tokens(self, cli=None):
+                return [
+                    (Token.Prompt, f"Geodude [{mode}] [{self.shell.execution_count}]: "),
+                ]
+
+            def out_prompt_tokens(self, cli=None):
+                return [
+                    (Token.OutPrompt, f"Out[{self.shell.execution_count}]: "),
+                ]
+
         shell = InteractiveShellEmbed(
             header=banner,
             user_ns=user_ns,
             colors="neutral",
         )
+        shell.prompts = GeodudePrompts(shell)
 
         @shell.register_magic_function
         def chat_magic(line):

@@ -241,9 +241,14 @@ def pickup(
     import random
     sides = ["right", "left"]
     random.shuffle(sides)
-    for side in sides:
+    for i, side in enumerate(sides):
         if _try_pickup(side):
             return True
+        # Before trying the other arm, ensure this arm is home
+        # so it doesn't block the workspace
+        if i < len(sides) - 1:
+            from geodude.primitives import go_home
+            go_home(robot, arm=side)
 
     _report_failure(sides)
     return False

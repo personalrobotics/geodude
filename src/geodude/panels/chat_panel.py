@@ -131,7 +131,7 @@ class ChatPanel(PanelBase):
                         lines.append(f'<div style="margin:4px 0;"><b style="color:#1a6dd4;">You:</b> {_esc(text)}</div>')
                     elif msg.startswith("**Geodude:**"):
                         text = msg[12:].strip()
-                        lines.append(f'<div style="margin:4px 0;"><b style="color:#1a8a4a;">Geodude:</b> {_esc(text)}</div>')
+                        lines.append(f'<div style="margin:4px 0;"><b style="color:#1a8a4a;">Geodude:</b> {_md_to_html(text)}</div>')
                     elif msg.startswith("`") and msg.endswith("`"):
                         text = msg[1:-1]
                         lines.append(f'<div style="margin:2px 0;font-family:monospace;font-size:12px;color:#666;">{_esc(text)}</div>')
@@ -153,3 +153,18 @@ class ChatPanel(PanelBase):
 def _esc(text: str) -> str:
     """Escape HTML special characters."""
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _md_to_html(text: str) -> str:
+    """Minimal markdown → HTML for LLM responses."""
+    import re
+    text = _esc(text)
+    # **bold**
+    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+    # `code`
+    text = re.sub(r'`(.+?)`', r'<code style="background:#e0e0e0;padding:1px 4px;border-radius:3px;">\1</code>', text)
+    # Numbered lists: lines starting with "1. ", "2. " etc.
+    text = re.sub(r'^(\d+)\.\s', r'<br>\1. ', text, flags=re.MULTILINE)
+    # Line breaks
+    text = text.replace('\n', '<br>')
+    return text

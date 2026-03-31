@@ -259,7 +259,7 @@ IPython:
                         SensorChannel(torque_adr + 1, "Ty", "#9b59b6"),
                         SensorChannel(torque_adr + 2, "Tz", "#1abc9c"),
                     ],
-                    window_seconds=10.0,
+                    window_seconds=5.0,
                     y_label="N / Nm",
                 ))
 

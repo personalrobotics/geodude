@@ -237,7 +237,11 @@ IPython:
     viser_viewer = None
     if viser:
         from mj_viser import MujocoViewer
-        viser_viewer = MujocoViewer(robot.model, robot.data)
+        viser_viewer = MujocoViewer(
+            robot.model, robot.data,
+            show_sim_controls=False,
+            show_visibility=False,
+        )
 
         # Add F/T sensor panels (if sensors configured)
         from mj_viser import SensorChannel, SensorPanel

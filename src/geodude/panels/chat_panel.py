@@ -29,6 +29,7 @@ class ChatPanel(PanelBase):
         self._lock = threading.Lock()
         self._running = False
         self._stop_requested = False
+        self._update_counter = 0
 
     def name(self) -> str:
         return "Chat"
@@ -58,6 +59,10 @@ class ChatPanel(PanelBase):
             def _(_: viser.GuiEvent) -> None:
                 _do_send()
 
+            # Enter key in non-multiline text fires on_update
+            @self._input.on_update
+            def _(_: viser.GuiEvent) -> None:
+                _do_send()
 
             @self._stop_btn.on_click
             def _(_: viser.GuiEvent) -> None:
@@ -139,13 +144,17 @@ class ChatPanel(PanelBase):
                         lines.append(f'<div style="margin:2px 0;color:#888;font-style:italic;">{_esc(msg)}</div>')
                 inner = "\n".join(lines)
 
+        self._update_counter += 1
+        uid = self._update_counter
         html = (
-            f'<div id="chat-scroll" style="max-height:400px;overflow-y:auto;'
+            f'<div id="chat-scroll-{uid}" style="max-height:400px;overflow-y:auto;'
             f'padding:8px;background:#f5f5f5;border-radius:6px;font-size:13px;'
             f'color:#222;">'
             f'{inner}</div>'
-            f'<script>var el=document.getElementById("chat-scroll");'
-            f'if(el)el.scrollTop=el.scrollHeight;</script>'
+            f'<script>'
+            f'(function(){{var el=document.getElementById("chat-scroll-{uid}");'
+            f'if(el)el.scrollTop=el.scrollHeight;}})()'
+            f'</script>'
         )
         self._history_html.content = html
 

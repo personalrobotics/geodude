@@ -270,7 +270,8 @@ IPython:
                 from geodude.panels.chat_panel import ChatPanel
                 viser_viewer.add_panel(ChatPanel(chat_session))
 
-        viser_viewer.launch_passive()
+        viser_viewer.launch_passive(open_browser=False)
+        print(f"  Viser viewer: http://localhost:8080")
 
     # Pass viser viewer to SimContext so executors can sync it during trajectories
     sim_viewer = viser_viewer if viser else None

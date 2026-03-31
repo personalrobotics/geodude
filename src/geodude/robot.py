@@ -791,11 +791,24 @@ class Geodude:
         for arm in [self._left_arm, self._right_arm]:
             arm._ft_tare_offset = np.zeros(6)
 
-        # Hide ALL registered objects (not just active — keyframe reset puts
-        # inactive objects at origin instead of hide position)
+        # Hide all objects: active ones via registry, inactive ones manually
+        # (keyframe reset puts inactive objects at origin instead of hide pos)
         if self._env.registry is not None:
-            for name in list(self._env.registry.objects):
+            for name in list(self._env.registry.active_objects):
                 self._env.registry.hide(name)
+            # Move inactive instances to hide position
+            hide_pos = self._env.hide_pos
+            for obj_data in self._env.registry.objects.values():
+                for name in obj_data.get("instances", []):
+                    if name not in self._env.registry.active_objects:
+                        body_id = mujoco.mj_name2id(
+                            self.model, mujoco.mjtObj.mjOBJ_BODY, name,
+                        )
+                        if body_id >= 0:
+                            jnt_id = self.model.body_jntadr[body_id]
+                            if jnt_id >= 0:
+                                qpos_adr = self.model.jnt_qposadr[jnt_id]
+                                self.data.qpos[qpos_adr:qpos_adr + 3] = hide_pos
 
         # Re-setup scene (fixtures + robot pose — calls forward() internally)
         self.setup_scene(fixtures=getattr(self, "_fixtures", None))

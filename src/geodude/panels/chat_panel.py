@@ -58,11 +58,6 @@ class ChatPanel(PanelBase):
             def _(_: viser.GuiEvent) -> None:
                 _do_send()
 
-            @self._input.on_update
-            def _(_: viser.GuiEvent) -> None:
-                # Enter key triggers on_update — send if non-empty
-                if self._input.value.strip() and not self._running:
-                    _do_send()
 
             @self._stop_btn.on_click
             def _(_: viser.GuiEvent) -> None:
@@ -127,27 +122,27 @@ class ChatPanel(PanelBase):
             return
         with self._lock:
             if not self._messages:
-                inner = '<em style="color:#888;">No messages yet.</em>'
+                inner = '<em style="color:#999;">No messages yet.</em>'
             else:
                 lines = []
                 for msg in self._messages:
-                    # Simple markdown-like rendering
                     if msg.startswith("**You:**"):
                         text = msg[8:].strip()
-                        lines.append(f'<div style="margin:4px 0;"><b style="color:#4a9eff;">You:</b> {_esc(text)}</div>')
+                        lines.append(f'<div style="margin:4px 0;"><b style="color:#1a6dd4;">You:</b> {_esc(text)}</div>')
                     elif msg.startswith("**Geodude:**"):
                         text = msg[12:].strip()
-                        lines.append(f'<div style="margin:4px 0;"><b style="color:#2ecc71;">Geodude:</b> {_esc(text)}</div>')
+                        lines.append(f'<div style="margin:4px 0;"><b style="color:#1a8a4a;">Geodude:</b> {_esc(text)}</div>')
                     elif msg.startswith("`") and msg.endswith("`"):
                         text = msg[1:-1]
-                        lines.append(f'<div style="margin:2px 0;font-family:monospace;font-size:12px;color:#aaa;">{_esc(text)}</div>')
+                        lines.append(f'<div style="margin:2px 0;font-family:monospace;font-size:12px;color:#666;">{_esc(text)}</div>')
                     else:
-                        lines.append(f'<div style="margin:2px 0;color:#ccc;font-style:italic;">{_esc(msg)}</div>')
+                        lines.append(f'<div style="margin:2px 0;color:#888;font-style:italic;">{_esc(msg)}</div>')
                 inner = "\n".join(lines)
 
         html = (
             f'<div id="chat-scroll" style="max-height:400px;overflow-y:auto;'
-            f'padding:8px;background:#1a1a2e;border-radius:6px;font-size:13px;">'
+            f'padding:8px;background:#f5f5f5;border-radius:6px;font-size:13px;'
+            f'color:#222;">'
             f'{inner}</div>'
             f'<script>var el=document.getElementById("chat-scroll");'
             f'if(el)el.scrollTop=el.scrollHeight;</script>'

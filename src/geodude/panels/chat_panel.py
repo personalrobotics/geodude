@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import threading
 import time
 from dataclasses import dataclass, field
@@ -102,13 +103,7 @@ class ChatPanel(PanelBase):
         self._add_entry(thinking)
         self._render()
 
-        # Capture cost before/after
-        cost_before = (
-            self._chat.total_input_tokens * 1.0
-            + self._chat.total_output_tokens * 5.0
-            + self._chat.total_cache_read_tokens * 0.10
-            + self._chat.total_cache_creation_tokens * 1.25
-        ) / 1_000_000
+        cost_before = self._chat.estimated_cost()
 
         # Capture tool call prints
         import builtins
@@ -149,14 +144,7 @@ class ChatPanel(PanelBase):
                 kind="tools", text="", tool_lines=list(self._current_tools),
             ))
 
-        # Cost
-        cost_after = (
-            self._chat.total_input_tokens * 1.0
-            + self._chat.total_output_tokens * 5.0
-            + self._chat.total_cache_read_tokens * 0.10
-            + self._chat.total_cache_creation_tokens * 1.25
-        ) / 1_000_000
-        turn_cost = cost_after - cost_before
+        turn_cost = self._chat.estimated_cost() - cost_before
 
         # Bot response
         if response:
@@ -196,7 +184,7 @@ class ChatPanel(PanelBase):
                     f'<div style="margin:6px 0;padding:6px 8px;'
                     f'background:#e8f0fe;border-radius:6px;">'
                     f'<b style="color:#1a6dd4;">You</b>{ts_html}<br>'
-                    f'{_esc(entry.text)}</div>'
+                    f'{html.escape(entry.text)}</div>'
                 )
             elif entry.kind == "bot":
                 cost_html = ""
@@ -215,7 +203,7 @@ class ChatPanel(PanelBase):
                 n = len(entry.tool_lines)
                 summary = f"{n} action{'s' if n != 1 else ''}"
                 detail = "".join(
-                    f'<div style="margin:1px 0;">{_esc(l)}</div>'
+                    f'<div style="margin:1px 0;">{html.escape(l)}</div>'
                     for l in entry.tool_lines
                 )
                 lines.append(
@@ -229,7 +217,7 @@ class ChatPanel(PanelBase):
             elif entry.kind == "status":
                 lines.append(
                     f'<div style="margin:4px 0;color:#888;font-style:italic;'
-                    f'font-size:12px;">{_esc(entry.text)}</div>'
+                    f'font-size:12px;">{html.escape(entry.text)}</div>'
                 )
 
         inner = "\n".join(lines)
@@ -240,13 +228,9 @@ class ChatPanel(PanelBase):
         )
 
 
-def _esc(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
 def _md_to_html(text: str) -> str:
     import re
-    text = _esc(text)
+    text = html.escape(text)
     text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
     text = re.sub(
         r'`(.+?)`',

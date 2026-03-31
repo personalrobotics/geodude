@@ -594,7 +594,7 @@ class ChatSession:
         self.tools = _build_tools()
         self.api_reference = _api_reference(robot)
         self.messages: list[dict] = []
-        self.action_log: list[str] = []
+        self.action_log: list[str] = []  # Trimmed to last 20 on each API call
         self._max_history_messages: int = 8  # ~4 turns of user+assistant
 
         # Token usage tracking
@@ -623,25 +623,29 @@ class ChatSession:
 
         return response_text
 
+    def estimated_cost(self) -> float:
+        """Total estimated cost in USD for this session."""
+        # Haiku 4.5 pricing per million tokens
+        return (
+            self.total_input_tokens * 1.0
+            + self.total_output_tokens * 5.0
+            + self.total_cache_read_tokens * 0.10
+            + self.total_cache_creation_tokens * 1.25
+        ) / 1_000_000
+
     def token_usage(self) -> str:
         """Return a summary of token usage and estimated cost."""
-        # Haiku 4.5 pricing: $1/M input, $5/M output
-        # Cache read: $0.10/M, cache creation: $1.25/M
-        input_cost = self.total_input_tokens * 1.0 / 1_000_000
-        output_cost = self.total_output_tokens * 5.0 / 1_000_000
-        cache_read_cost = self.total_cache_read_tokens * 0.10 / 1_000_000
-        cache_create_cost = self.total_cache_creation_tokens * 1.25 / 1_000_000
-        total_cost = input_cost + output_cost + cache_read_cost + cache_create_cost
+        total_cost = self.estimated_cost()
 
         lines = [
             f"API calls: {self.total_api_calls}",
-            f"Input tokens:  {self.total_input_tokens:,} (${input_cost:.4f})",
-            f"Output tokens: {self.total_output_tokens:,} (${output_cost:.4f})",
+            f"Input tokens:  {self.total_input_tokens:,}",
+            f"Output tokens: {self.total_output_tokens:,}",
         ]
         if self.total_cache_read_tokens:
-            lines.append(f"Cache read:    {self.total_cache_read_tokens:,} (${cache_read_cost:.4f})")
+            lines.append(f"Cache read:    {self.total_cache_read_tokens:,}")
         if self.total_cache_creation_tokens:
-            lines.append(f"Cache create:  {self.total_cache_creation_tokens:,} (${cache_create_cost:.4f})")
+            lines.append(f"Cache create:  {self.total_cache_creation_tokens:,}")
         lines.append(f"Total cost:    ${total_cost:.4f}")
         return "\n".join(lines)
 
@@ -763,6 +767,8 @@ class ChatSession:
                 # Use the first line of the result (e.g., "Success: pickup({'target': 'can'})")
                 first_line = result.split("\n")[0].strip()
                 self.action_log.append(first_line)
+                if len(self.action_log) > 20:
+                    self.action_log = self.action_log[-20:]
 
             # Refresh scene state after tool execution
             scene_state = _scene_summary(self.robot)

@@ -254,6 +254,13 @@ class Geodude:
         self._left_arm = self._create_arm(self.config.left_arm, "left")
         self._right_arm = self._create_arm(self.config.right_arm, "right")
 
+        # Cache freejoint qpos addresses (for hide-all in reset)
+        self._freejoint_qpos_addrs = [
+            self.model.jnt_qposadr[i]
+            for i in range(self.model.njnt)
+            if self.model.jnt_type[i] == mujoco.mjtJoint.mjJNT_FREE
+        ]
+
         # Create bases (if configured)
         self._left_base: VentionBase | None = None
         self._right_base: VentionBase | None = None
@@ -796,10 +803,8 @@ class Geodude:
         # activate the ones that should be visible.
         if self._env.registry is not None:
             hide_pos = self._env.hide_pos
-            for i in range(self.model.njnt):
-                if self.model.jnt_type[i] == mujoco.mjtJoint.mjJNT_FREE:
-                    qpos_adr = self.model.jnt_qposadr[i]
-                    self.data.qpos[qpos_adr:qpos_adr + 3] = hide_pos
+            for qpos_adr in self._freejoint_qpos_addrs:
+                self.data.qpos[qpos_adr:qpos_adr + 3] = hide_pos
             # Clear the registry's active state
             for name in list(self._env.registry.active_objects):
                 self._env.registry.hide(name)

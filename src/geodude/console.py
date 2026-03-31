@@ -243,13 +243,14 @@ IPython:
             show_visibility=False,
         )
 
-        # Add F/T sensor panels (if sensors configured)
+        # Build sensor panels (not added via add_panel — we'll set them up in tabs)
         from mj_viser import SensorChannel, SensorPanel
+        sensor_panels = []
         for side, arm in [("Left", robot._left_arm), ("Right", robot._right_arm)]:
             if arm.has_ft_sensor:
                 force_adr = arm._ft_force_adr
                 torque_adr = arm._ft_torque_adr
-                viser_viewer.add_panel(SensorPanel(
+                sensor_panels.append(SensorPanel(
                     title=f"{side} F/T",
                     channels=[
                         SensorChannel(force_adr + 0, "Fx", "#e74c3c"),
@@ -261,16 +262,40 @@ IPython:
                     ],
                     window_seconds=5.0,
                     y_label="N / Nm",
+                    aspect=1.2,
                 ))
 
-        # Add chat panel if API key is available
+        # Build chat panel
+        chat_panel = None
         if os.environ.get("ANTHROPIC_API_KEY"):
             chat_session = _get_chat()
             if chat_session is not None:
                 from geodude.panels.chat_panel import ChatPanel
-                viser_viewer.add_panel(ChatPanel(chat_session))
+                chat_panel = ChatPanel(chat_session)
 
+        # Set up tabbed layout — panels inside tabs to avoid vertical overflow.
+        # We call setup() manually inside tab contexts, then register for
+        # on_sync via _panels list (bypassing add_panel which would re-setup).
+        gui = viser_viewer._server.gui
+        tabs = gui.add_tab_group()
+
+        all_panels = []
+        if chat_panel is not None:
+            with tabs.add_tab("Chat"):
+                chat_panel.setup(gui, viser_viewer)
+            all_panels.append(chat_panel)
+        if sensor_panels:
+            with tabs.add_tab("Sensors"):
+                for sp in sensor_panels:
+                    sp.setup(gui, viser_viewer)
+                    all_panels.append(sp)
+
+        # Build scene (no panels registered via add_panel — we set them up above)
         viser_viewer.launch_passive(open_browser=False)
+
+        # Register panels for on_sync after launch
+        viser_viewer._panels.extend(all_panels)
+
         print(f"  Viser viewer: http://localhost:8080")
 
     # Pass viser viewer to SimContext so executors can sync it during trajectories

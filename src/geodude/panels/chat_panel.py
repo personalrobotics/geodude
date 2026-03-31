@@ -24,8 +24,11 @@ class ChatPanel(PanelBase):
         self._history_md: viser.GuiMarkdownHandle | None = None
         self._input: viser.GuiTextHandle | None = None
         self._send_btn: viser.GuiButtonHandle | None = None
+        self._stop_btn: viser.GuiButtonHandle | None = None
         self._messages: list[str] = []
         self._lock = threading.Lock()
+        self._running = False
+        self._stop_requested = False
 
     def name(self) -> str:
         return "Chat"
@@ -37,11 +40,15 @@ class ChatPanel(PanelBase):
             self._send_btn = gui.add_button(
                 "Send", color="green", icon=viser.Icon.SEND,
             )
+            self._stop_btn = gui.add_button(
+                "Stop", color="red", icon=viser.Icon.PLAYER_STOP,
+                visible=False,
+            )
 
             @self._send_btn.on_click
             def _(_: viser.GuiEvent) -> None:
                 msg = self._input.value.strip()
-                if not msg:
+                if not msg or self._running:
                     return
                 self._input.value = ""
                 # Run chat in a thread so the UI stays responsive
@@ -49,43 +56,52 @@ class ChatPanel(PanelBase):
                     target=self._send_message, args=(msg, viewer), daemon=True,
                 ).start()
 
+            @self._stop_btn.on_click
+            def _(_: viser.GuiEvent) -> None:
+                self._stop_requested = True
+                self._append("*(stopped by user)*")
+                self._update_display()
+
     def on_sync(self, viewer: MujocoViewer) -> None:
         # Chat history is updated via _send_message, nothing needed per-frame
         pass
 
     def _send_message(self, message: str, viewer: MujocoViewer) -> None:
         """Send a message to the LLM and update the chat history."""
+        self._running = True
+        self._stop_requested = False
+        self._send_btn.visible = False
+        self._stop_btn.visible = True
+
         self._append(f"**You:** {message}")
         self._update_display()
 
         # Monkey-patch print to capture tool call output
-        original_print = __builtins__["print"] if isinstance(__builtins__, dict) else __builtins__.print
-        tool_lines: list[str] = []
+        import builtins
+        original_print = builtins.print
 
         def _capture_print(*args, **kwargs):
             text = " ".join(str(a) for a in args)
             # Capture tool call lines (→ and ✓/✗)
-            if text.strip().startswith("\u2192") or text.strip().startswith("\u2713") or text.strip().startswith("\u2717"):
-                tool_lines.append(text.strip())
-                self._append(f"`{text.strip()}`")
+            stripped = text.strip()
+            if stripped.startswith("\u2192") or stripped.startswith("\u2713") or stripped.startswith("\u2717"):
+                self._append(f"`{stripped}`")
                 self._update_display()
-            # Also call original print for terminal
             original_print(*args, **kwargs)
 
         try:
-            if isinstance(__builtins__, dict):
-                __builtins__["print"] = _capture_print
-            else:
-                import builtins
-                builtins.print = _capture_print
-
+            builtins.print = _capture_print
             response = self._chat.send(message)
+        except Exception as e:
+            response = f"Error: {e}"
         finally:
-            if isinstance(__builtins__, dict):
-                __builtins__["print"] = original_print
-            else:
-                import builtins
-                builtins.print = original_print
+            builtins.print = original_print
+            self._running = False
+            self._send_btn.visible = True
+            self._stop_btn.visible = False
+
+        if self._stop_requested:
+            return
 
         if response:
             self._append(f"**Geodude:** {response}")

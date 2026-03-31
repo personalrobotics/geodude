@@ -37,28 +37,67 @@ class ChatPanel(PanelBase):
     def setup(self, gui: viser.GuiApi, viewer: MujocoViewer) -> None:
         with gui.add_folder("Chat", order=10):
             self._history_html = gui.add_html("")
-            self._input = gui.add_text("Message", initial_value="", hint="e.g. 'pick up a can'")
-            self._send_btn = gui.add_button(
-                "Send", color="green", icon=viser.Icon.SEND,
+
+            # Custom HTML input with Enter key support
+            self._input_html = gui.add_html(
+                '<div style="display:flex;gap:6px;margin:4px 0;">'
+                '<input id="chat-input" type="text" placeholder="e.g. pick up a can" '
+                'style="flex:1;padding:6px 10px;border:1px solid #ccc;border-radius:4px;'
+                'font-size:13px;outline:none;" />'
+                '<button id="chat-send" style="padding:6px 14px;background:#2ecc71;'
+                'color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px;">'
+                'Send</button>'
+                '<button id="chat-stop" style="padding:6px 14px;background:#e74c3c;'
+                'color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px;'
+                'display:none;">Stop</button>'
+                '</div>'
             )
+
+            # Hidden Viser text field as JS→Python bridge
+            self._bridge = gui.add_text("_bridge", initial_value="", visible=False)
+
+            # JS: Enter key or Send button → write to bridge field
+            self._js_html = gui.add_html(
+                '<script>'
+                'var inp=document.getElementById("chat-input");'
+                'var btn=document.getElementById("chat-send");'
+                'if(inp&&btn){'
+                '  inp.addEventListener("keydown",function(e){'
+                '    if(e.key==="Enter"&&inp.value.trim()){'
+                '      e.preventDefault();'
+                '      var el=document.querySelector(\'[data-label="_bridge"] input\');'
+                '      if(el){var nv=new Event("input",{bubbles:true});'
+                '        el.value=inp.value;el.dispatchEvent(nv);'
+                '        el.dispatchEvent(new Event("change",{bubbles:true}));'
+                '        inp.value="";}}'
+                '  });'
+                '  btn.addEventListener("click",function(){'
+                '    if(inp.value.trim()){'
+                '      var el=document.querySelector(\'[data-label="_bridge"] input\');'
+                '      if(el){var nv=new Event("input",{bubbles:true});'
+                '        el.value=inp.value;el.dispatchEvent(nv);'
+                '        el.dispatchEvent(new Event("change",{bubbles:true}));'
+                '        inp.value="";}}'
+                '  });'
+                '}'
+                '</script>'
+            )
+
             self._stop_btn = gui.add_button(
                 "Stop", color="red", icon=viser.Icon.PLAYER_STOP,
                 visible=False,
             )
 
-            self._last_sent = ""
-
             def _do_send() -> None:
-                msg = self._input.value.strip()
-                if not msg or self._running or msg == self._last_sent:
+                msg = self._bridge.value.strip()
+                if not msg or self._running:
                     return
-                self._last_sent = msg
-                self._input.value = ""
+                self._bridge.value = ""
                 threading.Thread(
                     target=self._send_message, args=(msg, viewer), daemon=True,
                 ).start()
 
-            @self._send_btn.on_click
+            @self._bridge.on_update
             def _(_: viser.GuiEvent) -> None:
                 _do_send()
 

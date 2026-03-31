@@ -134,9 +134,10 @@ robot.pickup("can", arm="right")  # equivalent to above
 The primary way to use Geodude. IPython REPL with tab completion, optional LLM chat, and a demo system.
 
 ```bash
-geodude --demo recycling                              # headless console
-geodude --list-demos                                  # see available demos
-uv run mjpython -m geodude --demo recycling --viewer  # with MuJoCo viewer
+uv run python -m geodude --demo recycling                # headless console
+uv run python -m geodude --demo recycling --viser        # browser viewer (http://localhost:8080)
+uv run mjpython -m geodude --demo recycling --viewer     # native MuJoCo viewer (macOS: requires mjpython)
+uv run python -m geodude --list-demos                    # see available demos
 ```
 
 ### Python API
@@ -268,6 +269,7 @@ uv run pytest tests/ -v
 - [tsr](https://github.com/personalrobotics/tsr) — Task Space Regions + grasp generation
 - [pycbirrt](https://github.com/personalrobotics/pycbirrt) — CBiRRT motion planner
 - [mj_environment](https://github.com/personalrobotics/mj_environment) — MuJoCo environment wrapper
+- [mj_viser](https://github.com/personalrobotics/mj_viser) — Browser-based viewer (optional, for `--viser`)
 - [asset_manager](https://github.com/personalrobotics/asset_manager) — Object metadata loader
 
 **External:**

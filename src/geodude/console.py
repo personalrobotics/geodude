@@ -239,6 +239,26 @@ IPython:
         from mj_viser import MujocoViewer
         viser_viewer = MujocoViewer(robot.model, robot.data)
 
+        # Add F/T sensor panels (if sensors configured)
+        from mj_viser import SensorChannel, SensorPanel
+        for side, arm in [("Left", robot._left_arm), ("Right", robot._right_arm)]:
+            if arm.has_ft_sensor:
+                force_adr = arm._ft_force_adr
+                torque_adr = arm._ft_torque_adr
+                viser_viewer.add_panel(SensorPanel(
+                    title=f"{side} F/T",
+                    channels=[
+                        SensorChannel(force_adr + 0, "Fx", "#e74c3c"),
+                        SensorChannel(force_adr + 1, "Fy", "#2ecc71"),
+                        SensorChannel(force_adr + 2, "Fz", "#3498db"),
+                        SensorChannel(torque_adr + 0, "Tx", "#e67e22"),
+                        SensorChannel(torque_adr + 1, "Ty", "#9b59b6"),
+                        SensorChannel(torque_adr + 2, "Tz", "#1abc9c"),
+                    ],
+                    window_seconds=10.0,
+                    y_label="N / Nm",
+                ))
+
         # Add chat panel if API key is available
         if os.environ.get("ANTHROPIC_API_KEY"):
             chat_session = _get_chat()

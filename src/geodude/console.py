@@ -238,6 +238,14 @@ IPython:
     if viser:
         from mj_viser import MujocoViewer
         viser_viewer = MujocoViewer(robot.model, robot.data)
+
+        # Add chat panel if API key is available
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            chat_session = _get_chat()
+            if chat_session is not None:
+                from geodude.panels.chat_panel import ChatPanel
+                viser_viewer.add_panel(ChatPanel(chat_session))
+
         viser_viewer.launch_passive()
 
     # Pass viser viewer to SimContext so executors can sync it during trajectories

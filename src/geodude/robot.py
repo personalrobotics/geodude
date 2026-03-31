@@ -791,9 +791,10 @@ class Geodude:
         for arm in [self._left_arm, self._right_arm]:
             arm._ft_tare_offset = np.zeros(6)
 
-        # Hide all objects
+        # Hide ALL registered objects (not just active — keyframe reset puts
+        # inactive objects at origin instead of hide position)
         if self._env.registry is not None:
-            for name in list(self._env.registry.active_objects):
+            for name in list(self._env.registry.objects):
                 self._env.registry.hide(name)
 
         # Re-setup scene (fixtures + robot pose — calls forward() internally)

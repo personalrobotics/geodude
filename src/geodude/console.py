@@ -252,6 +252,7 @@ IPython:
                 torque_adr = arm._ft_torque_adr
                 sensor_panels.append(SensorPanel(
                     title=f"{side} F/T",
+                    use_folder=False,
                     channels=[
                         SensorChannel(force_adr + 0, "Fx", "#e74c3c"),
                         SensorChannel(force_adr + 1, "Fy", "#2ecc71"),

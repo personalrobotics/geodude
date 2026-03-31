@@ -21,7 +21,7 @@ class ChatPanel(PanelBase):
 
     def __init__(self, chat_session: ChatSession) -> None:
         self._chat = chat_session
-        self._history_md: viser.GuiMarkdownHandle | None = None
+        self._history_html: viser.GuiHtmlHandle | None = None
         self._input: viser.GuiTextHandle | None = None
         self._send_btn: viser.GuiButtonHandle | None = None
         self._stop_btn: viser.GuiButtonHandle | None = None
@@ -35,7 +35,7 @@ class ChatPanel(PanelBase):
 
     def setup(self, gui: viser.GuiApi, viewer: MujocoViewer) -> None:
         with gui.add_folder("Chat", order=10):
-            self._history_md = gui.add_markdown("*No messages yet.*")
+            self._history_html = gui.add_html("")
             self._input = gui.add_text("Message", initial_value="", hint="e.g. 'pick up a can'")
             self._send_btn = gui.add_button(
                 "Send", color="green", icon=viser.Icon.SEND,
@@ -45,16 +45,24 @@ class ChatPanel(PanelBase):
                 visible=False,
             )
 
-            @self._send_btn.on_click
-            def _(_: viser.GuiEvent) -> None:
+            def _do_send() -> None:
                 msg = self._input.value.strip()
                 if not msg or self._running:
                     return
                 self._input.value = ""
-                # Run chat in a thread so the UI stays responsive
                 threading.Thread(
                     target=self._send_message, args=(msg, viewer), daemon=True,
                 ).start()
+
+            @self._send_btn.on_click
+            def _(_: viser.GuiEvent) -> None:
+                _do_send()
+
+            @self._input.on_update
+            def _(_: viser.GuiEvent) -> None:
+                # Enter key triggers on_update — send if non-empty
+                if self._input.value.strip() and not self._running:
+                    _do_send()
 
             @self._stop_btn.on_click
             def _(_: viser.GuiEvent) -> None:
@@ -115,8 +123,38 @@ class ChatPanel(PanelBase):
                 self._messages = self._messages[-50:]
 
     def _update_display(self) -> None:
-        if self._history_md is None:
+        if self._history_html is None:
             return
         with self._lock:
-            md = "\n\n".join(self._messages) if self._messages else "*No messages yet.*"
-        self._history_md.content = md
+            if not self._messages:
+                inner = '<em style="color:#888;">No messages yet.</em>'
+            else:
+                lines = []
+                for msg in self._messages:
+                    # Simple markdown-like rendering
+                    if msg.startswith("**You:**"):
+                        text = msg[8:].strip()
+                        lines.append(f'<div style="margin:4px 0;"><b style="color:#4a9eff;">You:</b> {_esc(text)}</div>')
+                    elif msg.startswith("**Geodude:**"):
+                        text = msg[12:].strip()
+                        lines.append(f'<div style="margin:4px 0;"><b style="color:#2ecc71;">Geodude:</b> {_esc(text)}</div>')
+                    elif msg.startswith("`") and msg.endswith("`"):
+                        text = msg[1:-1]
+                        lines.append(f'<div style="margin:2px 0;font-family:monospace;font-size:12px;color:#aaa;">{_esc(text)}</div>')
+                    else:
+                        lines.append(f'<div style="margin:2px 0;color:#ccc;font-style:italic;">{_esc(msg)}</div>')
+                inner = "\n".join(lines)
+
+        html = (
+            f'<div id="chat-scroll" style="max-height:400px;overflow-y:auto;'
+            f'padding:8px;background:#1a1a2e;border-radius:6px;font-size:13px;">'
+            f'{inner}</div>'
+            f'<script>var el=document.getElementById("chat-scroll");'
+            f'if(el)el.scrollTop=el.scrollHeight;</script>'
+        )
+        self._history_html.content = html
+
+
+def _esc(text: str) -> str:
+    """Escape HTML special characters."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

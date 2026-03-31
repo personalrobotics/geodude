@@ -125,7 +125,7 @@ class ChatPanel(PanelBase):
                 inner = '<em style="color:#999;">No messages yet.</em>'
             else:
                 lines = []
-                for msg in self._messages:
+                for msg in reversed(self._messages):
                     if msg.startswith("**You:**"):
                         text = msg[8:].strip()
                         lines.append(f'<div style="margin:4px 0;"><b style="color:#1a6dd4;">You:</b> {_esc(text)}</div>')
@@ -139,17 +139,11 @@ class ChatPanel(PanelBase):
                         lines.append(f'<div style="margin:2px 0;color:#888;font-style:italic;">{_esc(msg)}</div>')
                 inner = "\n".join(lines)
 
-        self._update_counter += 1
-        uid = self._update_counter
         html = (
-            f'<div id="chat-scroll-{uid}" style="max-height:400px;overflow-y:auto;'
+            f'<div style="max-height:400px;overflow-y:auto;'
             f'padding:8px;background:#f5f5f5;border-radius:6px;font-size:13px;'
             f'color:#222;">'
             f'{inner}</div>'
-            f'<script>'
-            f'(function(){{var el=document.getElementById("chat-scroll-{uid}");'
-            f'if(el)el.scrollTop=el.scrollHeight;}})()'
-            f'</script>'
         )
         self._history_html.content = html
 

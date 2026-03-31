@@ -59,11 +59,6 @@ class ChatPanel(PanelBase):
             def _(_: viser.GuiEvent) -> None:
                 _do_send()
 
-            # Enter key in non-multiline text fires on_update
-            @self._input.on_update
-            def _(_: viser.GuiEvent) -> None:
-                _do_send()
-
             @self._stop_btn.on_click
             def _(_: viser.GuiEvent) -> None:
                 self._stop_requested = True

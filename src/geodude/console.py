@@ -24,6 +24,7 @@ def start_console(
     *,
     physics: bool = False,
     viewer: bool = False,
+    viser: bool = False,
     model_name: str = "claude-haiku-4-5-20251001",
     demo_module: ModuleType | None = None,
     objects: dict | None = None,
@@ -212,7 +213,10 @@ IPython:
     demo_name = getattr(demo_module, "__name__", "").rsplit(".", 1)[-1] if demo_module else None
     demo_str = f" | demo: {demo_name}" if demo_name else ""
 
-    banner = f"\n{'=' * 60}\n  Geodude [{mode}] | 2 arms | {n_objects} objects{demo_str}\n"
+    viewer_str = " | viser" if viser else " | viewer" if viewer else ""
+    banner = f"\n{'=' * 60}\n  Geodude [{mode}] | 2 arms | {n_objects} objects{demo_str}{viewer_str}\n"
+    if viser:
+        banner += f"  Browser: http://localhost:8080\n"
     if os.environ.get("ANTHROPIC_API_KEY"):
         banner += f"  LLM: {model_name}\n"
     banner += (
@@ -229,8 +233,23 @@ IPython:
     # -- Launch IPython inside sim context -----------------------------------
     from IPython.terminal.embed import InteractiveShellEmbed
 
+    # Launch viser viewer if requested (runs alongside sim context)
+    viser_viewer = None
+    if viser:
+        from mj_viser import MujocoViewer
+        viser_viewer = MujocoViewer(robot.model, robot.data)
+        viser_viewer.launch_passive()
+
     with robot.sim(physics=physics, headless=not viewer) as ctx:
         user_ns["ctx"] = ctx
+
+        # Hook viser sync into the context's sync method
+        if viser_viewer is not None:
+            _original_sync = ctx.sync
+            def _synced_sync():
+                _original_sync()
+                viser_viewer.sync()
+            ctx.sync = _synced_sync
 
         from IPython.terminal.prompts import Prompts, Token
 

@@ -791,8 +791,16 @@ class Geodude:
         for arm in [self._left_arm, self._right_arm]:
             arm._ft_tare_offset = np.zeros(6)
 
-        # Hide all objects
+        # Move ALL freejoint bodies to hide position. The keyframe reset put
+        # them at the origin; setup_scene and _spawn_manipulable_objects will
+        # activate the ones that should be visible.
         if self._env.registry is not None:
+            hide_pos = self._env.hide_pos
+            for i in range(self.model.njnt):
+                if self.model.jnt_type[i] == mujoco.mjtJoint.mjJNT_FREE:
+                    qpos_adr = self.model.jnt_qposadr[i]
+                    self.data.qpos[qpos_adr:qpos_adr + 3] = hide_pos
+            # Clear the registry's active state
             for name in list(self._env.registry.active_objects):
                 self._env.registry.hide(name)
 

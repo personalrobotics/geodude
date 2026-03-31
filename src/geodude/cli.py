@@ -3,7 +3,8 @@
 Usage::
 
     geodude --demo recycling              # headless (default)
-    geodude --demo recycling --viewer     # viewer (requires mjpython on macOS)
+    geodude --demo recycling --viewer     # native MuJoCo viewer (requires mjpython)
+    geodude --demo recycling --viser      # browser viewer (http://localhost:8080)
     geodude --list-demos
 """
 
@@ -20,7 +21,8 @@ def main() -> None:
     )
     parser.add_argument("--demo", type=str, default=None, help="Demo name or path")
     parser.add_argument("--physics", action="store_true", help="Physics simulation")
-    parser.add_argument("--viewer", action="store_true", help="Launch MuJoCo viewer")
+    parser.add_argument("--viewer", action="store_true", help="Launch native MuJoCo viewer (requires mjpython)")
+    parser.add_argument("--viser", action="store_true", help="Launch browser viewer at http://localhost:8080")
     parser.add_argument("--objects", type=str, default=None, help='JSON, e.g. \'{"can": 4}\'')
     parser.add_argument("--model", type=str, default="claude-sonnet-4-20250514", help="LLM model")
     parser.add_argument("--list-demos", action="store_true", help="List demos and exit")
@@ -45,6 +47,7 @@ def main() -> None:
         robot,
         physics=args.physics,
         viewer=args.viewer,
+        viser=args.viser,
         model_name=args.model,
         demo_module=demo_module,
         objects=objects,

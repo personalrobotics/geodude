@@ -240,16 +240,10 @@ IPython:
         viser_viewer = MujocoViewer(robot.model, robot.data)
         viser_viewer.launch_passive()
 
-    with robot.sim(physics=physics, headless=not viewer) as ctx:
+    # Pass viser viewer to SimContext so executors can sync it during trajectories
+    sim_viewer = viser_viewer if viser else None
+    with robot.sim(physics=physics, headless=not viewer, viewer=sim_viewer) as ctx:
         user_ns["ctx"] = ctx
-
-        # Hook viser sync into the context's sync method
-        if viser_viewer is not None:
-            _original_sync = ctx.sync
-            def _synced_sync():
-                _original_sync()
-                viser_viewer.sync()
-            ctx.sync = _synced_sync
 
         from IPython.terminal.prompts import Prompts, Token
 

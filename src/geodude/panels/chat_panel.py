@@ -46,16 +46,23 @@ class ChatPanel(PanelBase):
                 visible=False,
             )
 
+            self._last_sent = ""
+
             def _do_send() -> None:
                 msg = self._input.value.strip()
-                if not msg or self._running:
+                if not msg or self._running or msg == self._last_sent:
                     return
+                self._last_sent = msg
                 self._input.value = ""
                 threading.Thread(
                     target=self._send_message, args=(msg, viewer), daemon=True,
                 ).start()
 
             @self._send_btn.on_click
+            def _(_: viser.GuiEvent) -> None:
+                _do_send()
+
+            @self._input.on_update
             def _(_: viser.GuiEvent) -> None:
                 _do_send()
 

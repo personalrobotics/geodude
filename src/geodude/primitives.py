@@ -220,11 +220,14 @@ def pickup(
             all_attempted.update(attempted)
             if reached and planned and not grasped:
                 grasp_failures.append(f"{reached} ({side} arm)")
+                _set_hud_action(robot, side, f"✗ pickup: grasp failed")
             elif reached and not planned:
                 detail = f"{reached} ({side} arm)"
+                short = plan_reason.split(":")[0] if plan_reason else "plan failed"
                 if plan_reason:
                     detail += f": {plan_reason}"
                 plan_failures.append(detail)
+                _set_hud_action(robot, side, f"✗ pickup: {short}")
 
         if grasp_failures:
             msg = f"Pickup failed: reached {', '.join(grasp_failures)} but grasp failed"
@@ -326,7 +329,8 @@ def place(
 
         detail = f": {reason}" if reason else ""
         logger.info("Place failed: %s arm could not place at '%s'%s", arm, destination, detail)
-        _set_hud_action(robot, arm, f"✗ place({desc})")
+        short_reason = reason.split(":")[0] if reason else "failed"
+        _set_hud_action(robot, arm, f"✗ place({desc}): {short_reason}")
     else:
         _set_hud_action(robot, arm, f"✓ place({desc})")
 

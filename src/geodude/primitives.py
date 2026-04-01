@@ -427,6 +427,8 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
         verbose = robot.config.debug.verbose
 
     robot.clear_abort()
+    if robot.is_abort_requested():
+        logger.warning("go_home: abort flag set even after clear!")
     try:
         return _go_home_inner(robot, ctx, arm=arm, verbose=verbose)
     except KeyboardInterrupt:
@@ -457,8 +459,10 @@ def _go_home_inner(
     success = True
     for side, arm_obj in arms:
         if "ready" not in robot.named_poses or side not in robot.named_poses["ready"]:
+            logger.warning("go_home: no 'ready' pose for %s arm, skipping", side)
             continue
         ready = np.array(robot.named_poses["ready"][side])
+        logger.info("go_home: planning %s arm to ready...", side)
         try:
             path = arm_obj.plan_to_configuration(ready, abort_fn=abort_fn)
         except Exception as e:

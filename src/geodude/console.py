@@ -280,6 +280,19 @@ IPython:
         # We call setup() manually inside tab contexts, then register for
         # on_sync via _panels list (bypassing add_panel which would re-setup).
         gui = viser_viewer._server.gui
+
+        # Stop button — above tabs so it's always visible
+        stop_btn = gui.add_button("Stop", color="red")
+
+        @stop_btn.on_click
+        def _on_stop(event):
+            robot.request_abort()
+            from geodude.panels.status_hud import StatusHud
+            hud = getattr(robot, "_status_hud", None)
+            if hud is not None:
+                hud.set_action("left", "⊘ STOP")
+                hud.set_action("right", "⊘ STOP")
+
         tabs = gui.add_tab_group()
 
         all_panels = []

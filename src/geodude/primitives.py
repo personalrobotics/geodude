@@ -84,7 +84,7 @@ def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
 
     bb = py_trees.blackboard.Client(name=f"primitives{ns}")
     keys = [
-        "/context",
+        "/context", "/abort_fn",
         f"{ns}/robot",
         f"{ns}/arm", f"{ns}/arm_name",
         f"{ns}/grasp_tsrs", f"{ns}/place_tsrs",
@@ -102,6 +102,7 @@ def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
             pass  # already registered by another client
 
     bb.set("/context", ctx)
+    bb.set("/abort_fn", robot.is_abort_requested)
     bb.set(f"{ns}/robot", robot)
     bb.set(f"{ns}/arm", arm)
     bb.set(f"{ns}/arm_name", arm.config.name)
@@ -135,7 +136,7 @@ def _tick_tree(root: py_trees.behaviour.Behaviour, verbose: bool = False) -> boo
     if root.status != Status.SUCCESS:
         tip = root.tip()
         if tip is not None and tip.feedback_message:
-            logger.info("%s: %s", tip.name, tip.feedback_message)
+            logger.warning("%s: %s", tip.name, tip.feedback_message)
 
     return root.status == Status.SUCCESS
 
@@ -170,11 +171,33 @@ def pickup(
     if verbose is None:
         verbose = robot.config.debug.verbose
 
+    robot.clear_abort()
+    try:
+        return _pickup_inner(robot, target, arm=arm, verbose=verbose)
+    except KeyboardInterrupt:
+        robot.request_abort()
+        logger.warning("Pickup interrupted by user")
+        for side in ("left", "right"):
+            _set_hud_action(robot, side, "⊘ interrupted")
+        _sync_viewer(robot)
+        return False
+    finally:
+        robot.clear_abort()
+
+
+def _pickup_inner(
+    robot: Geodude,
+    target: str | None = None,
+    *,
+    arm: str | None = None,
+    verbose: bool = False,
+) -> bool:
+    """Core pickup logic (separated for KeyboardInterrupt wrapping)."""
     # Quick check: are there any matching objects?
     from geodude.bt.nodes import _find_scene_objects
     if not _find_scene_objects(robot, target):
         desc = f"'{target}'" if target else "any object"
-        logger.info("Pickup failed: no graspable objects found for %s", desc)
+        logger.warning("Pickup failed: no graspable objects found for %s", desc)
         return False
 
     def _try_pickup(side: str) -> bool:
@@ -241,20 +264,20 @@ def pickup(
 
         if grasp_failures:
             msg = f"Pickup failed: reached {', '.join(grasp_failures)} but grasp failed"
-            logger.info(msg)
+            logger.warning(msg)
         elif plan_failures:
-            logger.info(
+            logger.warning(
                 "Pickup failed: could not plan to %s",
                 "; ".join(plan_failures),
             )
         elif all_attempted:
-            logger.info(
+            logger.warning(
                 "Pickup failed: could not plan to %s",
                 ", ".join(sorted(all_attempted)),
             )
         else:
             desc = f"'{target}'" if target else "any object"
-            logger.info("Pickup failed: no graspable %s found", desc)
+            logger.warning("Pickup failed: no graspable %s found", desc)
 
     if arm is not None:
         if _try_pickup(arm):
@@ -271,6 +294,10 @@ def pickup(
         if _try_pickup(side):
             _sync_viewer(robot)
             return True
+        # Stop immediately if abort was requested
+        if robot.is_abort_requested():
+            _sync_viewer(robot)
+            return False
         # Before trying the other arm, ensure this arm is home
         # so it doesn't block the workspace
         if i < len(sides) - 1:
@@ -316,12 +343,33 @@ def place(
                 arm = side
                 break
         if arm is None:
-            logger.info("Place failed: no arm is holding an object")
+            logger.warning("Place failed: no arm is holding an object")
             return False
 
     if verbose is None:
         verbose = robot.config.debug.verbose
 
+    robot.clear_abort()
+    try:
+        return _place_inner(robot, destination, arm=arm, verbose=verbose)
+    except KeyboardInterrupt:
+        robot.request_abort()
+        logger.warning("Place interrupted by user")
+        _set_hud_action(robot, arm, "⊘ interrupted")
+        _sync_viewer(robot)
+        return False
+    finally:
+        robot.clear_abort()
+
+
+def _place_inner(
+    robot: Geodude,
+    destination: str | None = None,
+    *,
+    arm: str,
+    verbose: bool = False,
+) -> bool:
+    """Core place logic (separated for KeyboardInterrupt wrapping)."""
     # Capture held object before the tree releases the grasp
     held = list(robot.grasp_manager.get_grasped_by(arm))
     held_object = held[0] if held else None
@@ -342,7 +390,7 @@ def place(
             reason = None
 
         detail = f": {reason}" if reason else ""
-        logger.info("Place failed: %s arm could not place at '%s'%s", arm, destination, detail)
+        logger.warning("Place failed: %s arm could not place at '%s'%s", arm, destination, detail)
         short_reason = reason.split(":")[0] if reason else "failed"
         _set_hud_action(robot, arm, f"✗ place({desc}): {short_reason}")
     else:
@@ -378,6 +426,25 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
     if verbose is None:
         verbose = robot.config.debug.verbose
 
+    robot.clear_abort()
+    try:
+        return _go_home_inner(robot, ctx, arm=arm, verbose=verbose)
+    except KeyboardInterrupt:
+        robot.request_abort()
+        logger.warning("go_home interrupted by user")
+        return False
+    finally:
+        robot.clear_abort()
+
+
+def _go_home_inner(
+    robot: Geodude,
+    ctx,
+    *,
+    arm: str | None = None,
+    verbose: bool = False,
+) -> bool:
+    """Core go_home logic (separated for KeyboardInterrupt wrapping)."""
     from mj_manipulator.cartesian import CartesianController
 
     if arm is not None:
@@ -385,19 +452,23 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
     else:
         arms = [("left", robot._left_arm), ("right", robot._right_arm)]
 
+    abort_fn = robot.is_abort_requested
+
     success = True
     for side, arm_obj in arms:
         if "ready" not in robot.named_poses or side not in robot.named_poses["ready"]:
+            logger.warning("go_home: no 'ready' pose for %s arm, skipping", side)
             continue
         ready = np.array(robot.named_poses["ready"][side])
         try:
-            path = arm_obj.plan_to_configuration(ready)
+            path = arm_obj.plan_to_configuration(ready, abort_fn=abort_fn)
         except Exception as e:
-            logger.info("go_home %s arm: initial plan failed: %s", side, e)
+            logger.warning("go_home %s arm: plan failed: %s", side, e)
             path = None
 
         if path is None:
             # Retract up first, then retry
+            logger.warning("go_home %s arm: retract up and retry", side)
             arm_name = arm_obj.config.name
 
             def _step_fn(q, qd):
@@ -407,20 +478,20 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
             ctrl.move(
                 np.array([0.0, 0.0, 0.10, 0.0, 0.0, 0.0]),
                 dt=0.008, max_distance=0.10,
+                stop_condition=abort_fn,
             )
             try:
-                path = arm_obj.plan_to_configuration(ready)
+                path = arm_obj.plan_to_configuration(ready, abort_fn=abort_fn)
             except Exception as e:
-                logger.info("go_home %s arm: retry after retract failed: %s", side, e)
+                logger.warning("go_home %s arm: retry failed: %s", side, e)
                 path = None
+
 
         if path is not None:
             traj = arm_obj.retime(path)
             ctx.execute(traj)
         else:
-            if verbose:
-                logger.debug("go_home: %s arm failed to plan", side)
-            logger.info("Could not plan %s arm to ready", side)
+            logger.warning("go_home: could not plan %s arm to ready", side)
             success = False
     # Return bases to starting height (0.25 midpoint)
     for _, arm_obj in arms:

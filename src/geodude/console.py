@@ -291,11 +291,19 @@ IPython:
                     sp.setup(gui, viser_viewer)
                     all_panels.append(sp)
 
+        # Status HUD overlay
+        from geodude.panels.status_hud import StatusHud
+        status_hud = StatusHud(robot, mode)
+        all_panels.append(status_hud)
+
         # Build scene (no panels registered via add_panel — we set them up above)
         viser_viewer.launch_passive(open_browser=False)
 
         # Register panels for on_sync after launch
         viser_viewer._panels.extend(all_panels)
+
+        # Initialize HUD after launch
+        status_hud.setup(viser_viewer._server.gui, viser_viewer)
 
         print(f"  Viser viewer: http://localhost:8080")
 

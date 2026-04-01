@@ -294,6 +294,10 @@ def _pickup_inner(
         if _try_pickup(side):
             _sync_viewer(robot)
             return True
+        # Stop immediately if abort was requested
+        if robot.is_abort_requested():
+            _sync_viewer(robot)
+            return False
         # Before trying the other arm, ensure this arm is home
         # so it doesn't block the workspace
         if i < len(sides) - 1:

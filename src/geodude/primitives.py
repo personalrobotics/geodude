@@ -31,6 +31,13 @@ logger = logging.getLogger(__name__)
 _CONTAINER_TYPES = frozenset(("open_box", "tote"))
 
 
+def _set_hud_action(robot, arm: str, text: str) -> None:
+    """Update the HUD status for an arm (no-op if HUD not active)."""
+    hud = getattr(robot, "_status_hud", None)
+    if hud is not None:
+        hud.set_action(arm, text)
+
+
 def _is_container_destination(destination: str | None) -> bool:
     """Check if a destination name refers to a container (bin, tote).
 
@@ -164,8 +171,12 @@ def pickup(
         ns = f"/{side}"
         bb = _setup_blackboard(robot, ns)
         bb.set(f"{ns}/object_name", target)
+        desc = target or "any"
+        _set_hud_action(robot, side, f"⟳ pickup({desc})")
         if not _tick_tree(geodude_pickup(ns), verbose=verbose):
+            _set_hud_action(robot, side, f"✗ pickup({desc})")
             return False
+        _set_hud_action(robot, side, f"✓ pickup({desc})")
         return True
 
     def _pickup_details(side: str) -> tuple[list[str], str | None, bool, bool, str | None]:
@@ -301,9 +312,23 @@ def place(
     ns = f"/{arm}"
     bb = _setup_blackboard(robot, ns)
     bb.set(f"{ns}/destination", destination)
+    desc = destination or "any"
+    _set_hud_action(robot, arm, f"⟳ place({desc})")
     ok = _tick_tree(geodude_place(ns), verbose=verbose)
     if not ok:
-        logger.info("Place failed: %s arm could not place at '%s'", arm, destination)
+        # Read failure reason from blackboard
+        try:
+            _bb = py_trees.blackboard.Client(name=f"place_report{ns}")
+            _bb.register_key(key=f"{ns}/plan_failure_reason", access=Access.READ)
+            reason = _bb.get(f"{ns}/plan_failure_reason")
+        except (KeyError, RuntimeError):
+            reason = None
+
+        detail = f": {reason}" if reason else ""
+        logger.info("Place failed: %s arm could not place at '%s'%s", arm, destination, detail)
+        _set_hud_action(robot, arm, f"✗ place({desc})")
+    else:
+        _set_hud_action(robot, arm, f"✓ place({desc})")
 
     # Hide object only if placed into a container (recycled) — surface placements stay
     if ok and held_object and _is_container_destination(destination):

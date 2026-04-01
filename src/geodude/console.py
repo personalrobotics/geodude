@@ -293,9 +293,10 @@ IPython:
                     sp.setup(gui, viser_viewer)
                     all_panels.append(sp)
 
-        # Status HUD overlay
+        # Status HUD overlay — store on robot so primitives can update it
         from geodude.panels.status_hud import StatusHud
         status_hud = StatusHud(robot, mode)
+        robot._status_hud = status_hud
         all_panels.append(status_hud)
 
         # Build scene (no panels registered via add_panel — we set them up above)

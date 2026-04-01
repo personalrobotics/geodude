@@ -135,7 +135,7 @@ def _tick_tree(root: py_trees.behaviour.Behaviour, verbose: bool = False) -> boo
 
     if root.status != Status.SUCCESS:
         tip = root.tip()
-        if tip is not None and tip.feedback_message:
+        if tip is not None and tip.feedback_message and tip.feedback_message != "Aborted":
             logger.warning("%s: %s", tip.name, tip.feedback_message)
 
     return root.status == Status.SUCCESS

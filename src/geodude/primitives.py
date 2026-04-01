@@ -38,6 +38,16 @@ def _set_hud_action(robot, arm: str, text: str) -> None:
         hud.set_action(arm, text)
 
 
+def _sync_viewer(robot) -> None:
+    """Force a viewer sync so HUD updates are visible immediately."""
+    ctx = robot._active_context
+    if ctx is not None and hasattr(ctx, 'sync'):
+        try:
+            ctx.sync()
+        except Exception:
+            pass
+
+
 def _is_container_destination(destination: str | None) -> bool:
     """Check if a destination name refers to a container (bin, tote).
 
@@ -248,8 +258,10 @@ def pickup(
 
     if arm is not None:
         if _try_pickup(arm):
+            _sync_viewer(robot)
             return True
         _report_failure([arm])
+        _sync_viewer(robot)
         return False
 
     import random
@@ -257,6 +269,7 @@ def pickup(
     random.shuffle(sides)
     for i, side in enumerate(sides):
         if _try_pickup(side):
+            _sync_viewer(robot)
             return True
         # Before trying the other arm, ensure this arm is home
         # so it doesn't block the workspace
@@ -265,6 +278,7 @@ def pickup(
             go_home(robot, arm=side)
 
     _report_failure(sides)
+    _sync_viewer(robot)
     return False
 
 
@@ -333,6 +347,9 @@ def place(
         _set_hud_action(robot, arm, f"✗ place({desc}): {short_reason}")
     else:
         _set_hud_action(robot, arm, f"✓ place({desc})")
+
+    # Force viewer sync so HUD updates immediately
+    _sync_viewer(robot)
 
     # Hide object only if placed into a container (recycled) — surface placements stay
     if ok and held_object and _is_container_destination(destination):

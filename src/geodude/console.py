@@ -85,6 +85,8 @@ def start_console(
         if chat_session is not None:
             chat_session.messages.clear()
             chat_session.action_log.clear()
+        if viser_viewer is not None:
+            viser_viewer._scene_mgr.clear_selection()
         print("Scene reset.")
 
     def demos() -> None:

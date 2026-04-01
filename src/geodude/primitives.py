@@ -93,7 +93,7 @@ def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
         f"{ns}/path", f"{ns}/trajectory",
         f"{ns}/twist", f"{ns}/distance",
         f"{ns}/goal_tsr_index", f"{ns}/tsr_to_object",
-        f"{ns}/plan_failure_reason",
+        f"{ns}/tsr_to_destination", f"{ns}/plan_failure_reason",
     ]
     for key in keys:
         try:
@@ -111,7 +111,8 @@ def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
     # Clear stale results from previous runs
     for stale_key in [
         "path", "trajectory", "grasped", "grasp_tsrs", "place_tsrs",
-        "tsr_to_object", "goal_tsr_index", "plan_failure_reason",
+        "tsr_to_object", "tsr_to_destination", "goal_tsr_index",
+        "plan_failure_reason",
     ]:
         bb.set(f"{ns}/{stale_key}", None)
 
@@ -399,12 +400,26 @@ def _place_inner(
     # Force viewer sync so HUD updates immediately
     _sync_viewer(robot)
 
-    # Hide object only if placed into a container (recycled) — surface placements stay
-    if ok and held_object and _is_container_destination(destination):
-        if robot.env.registry.is_active(held_object):
-            robot.env.registry.hide(held_object)
-            robot.forward()
-            _sync_viewer(robot)
+    # Hide object only if placed into a container (recycled) — surface placements stay.
+    # When destination=None, the BT resolves the target — read it from the blackboard.
+    if ok and held_object:
+        resolved_dest = destination
+        if resolved_dest is None:
+            try:
+                _bb = py_trees.blackboard.Client(name=f"place_dest{ns}")
+                _bb.register_key(key=f"{ns}/tsr_to_destination", access=Access.READ)
+                _bb.register_key(key=f"{ns}/goal_tsr_index", access=Access.READ)
+                mapping = _bb.get(f"{ns}/tsr_to_destination")
+                idx = _bb.get(f"{ns}/goal_tsr_index")
+                if mapping and idx is not None and idx < len(mapping):
+                    resolved_dest = mapping[idx]
+            except (KeyError, RuntimeError):
+                pass
+        if _is_container_destination(resolved_dest):
+            if robot.env.registry.is_active(held_object):
+                robot.env.registry.hide(held_object)
+                robot.forward()
+                _sync_viewer(robot)
 
     return ok
 

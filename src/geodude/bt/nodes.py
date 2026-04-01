@@ -569,6 +569,7 @@ class GeneratePlaceTSRs(py_trees.behaviour.Behaviour):
         self.bb.register_key(key=f"{ns}/destination", access=Access.READ)
         self.bb.register_key(key=f"{ns}/robot", access=Access.READ)
         self.bb.register_key(key=f"{ns}/place_tsrs", access=Access.WRITE)
+        self.bb.register_key(key=f"{ns}/tsr_to_destination", access=Access.WRITE)
 
     def update(self) -> Status:
         robot = self.bb.get(f"{self.ns}/robot")
@@ -582,6 +583,7 @@ class GeneratePlaceTSRs(py_trees.behaviour.Behaviour):
         T_gripper_object = _get_grasp_transform(robot)
 
         all_tsrs = []
+        tsr_to_dest = []
 
         # Special case: "worktop" targets the worktop surface directly
         if target == "worktop":
@@ -592,10 +594,12 @@ class GeneratePlaceTSRs(py_trees.behaviour.Behaviour):
                     robot, surface_pose, hx, hy, held_type,
                     T_gripper_object=T_gripper_object,
                 )
+                tsr_to_dest = ["worktop"] * len(all_tsrs)
             if not all_tsrs:
                 self.feedback_message = "No worktop surface found"
                 return Status.FAILURE
             self.bb.set(f"{self.ns}/place_tsrs", all_tsrs)
+            self.bb.set(f"{self.ns}/tsr_to_destination", tsr_to_dest)
             return Status.SUCCESS
 
         # Find matching destinations from scene objects
@@ -605,6 +609,8 @@ class GeneratePlaceTSRs(py_trees.behaviour.Behaviour):
                 robot, body_name, dest_type, held_height=held_height,
                 T_gripper_object=T_gripper_object,
             )
+            for _ in tsrs:
+                tsr_to_dest.append(body_name)
             all_tsrs.extend(tsrs)
 
         # No-destination fallback: try worktop if no container TSRs were found
@@ -612,16 +618,20 @@ class GeneratePlaceTSRs(py_trees.behaviour.Behaviour):
             wt = _get_worktop_surface(robot)
             if wt is not None:
                 surface_pose, hx, hy = wt
-                all_tsrs = _generate_surface_place_tsrs(
+                worktop_tsrs = _generate_surface_place_tsrs(
                     robot, surface_pose, hx, hy, held_type,
                     T_gripper_object=T_gripper_object,
                 )
+                for _ in worktop_tsrs:
+                    tsr_to_dest.append("worktop")
+                all_tsrs.extend(worktop_tsrs)
 
         if not all_tsrs:
             self.feedback_message = f"No placement TSRs for destination '{target}'"
             return Status.FAILURE
 
         self.bb.set(f"{self.ns}/place_tsrs", all_tsrs)
+        self.bb.set(f"{self.ns}/tsr_to_destination", tsr_to_dest)
         return Status.SUCCESS
 
 

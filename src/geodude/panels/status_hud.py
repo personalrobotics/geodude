@@ -34,6 +34,14 @@ class StatusHud(PanelBase):
         self._viewer = viewer
         viewer.set_hud("status", self._build_status(), "bottom-left")
 
+        self._stop_btn = gui.add_button("⏹ Stop", color="red")
+
+        @self._stop_btn.on_click
+        def _on_stop(event: viser.GuiEvent) -> None:
+            self._robot.request_abort()
+            self._last_action["left"] = "⊘ STOP"
+            self._last_action["right"] = "⊘ STOP"
+
     def on_sync(self, viewer: MujocoViewer) -> None:
         viewer.set_hud("status", self._build_status(), "bottom-left")
 

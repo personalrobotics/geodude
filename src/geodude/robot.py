@@ -284,6 +284,26 @@ class Geodude:
         # Active execution context (set by sim() context manager)
         self._context: SimContext | None = None
 
+        # Abort flag (thread-safe, shared between terminal and Viser)
+        import threading
+        self._abort_event = threading.Event()
+
+    # -----------------------------------------------------------------
+    # Abort mechanism
+    # -----------------------------------------------------------------
+
+    def request_abort(self) -> None:
+        """Signal all running operations to stop."""
+        self._abort_event.set()
+
+    def clear_abort(self) -> None:
+        """Clear the abort flag (call before starting a new operation)."""
+        self._abort_event.clear()
+
+    def is_abort_requested(self) -> bool:
+        """Check if an abort has been requested."""
+        return self._abort_event.is_set()
+
     def _create_arm(self, spec: GeodudeArmSpec, name: str) -> Arm:
         """Create an mj_manipulator Arm from a GeodudeArmSpec."""
         joint_names = self.config.joint_names(spec)
@@ -464,6 +484,7 @@ class Geodude:
             physics=physics, headless=headless,
             viewer=viewer, viewer_fps=viewer_fps,
             entities=entities,
+            abort_fn=self.is_abort_requested,
         )
         return _GeodudeSimContext(inner, self)
 

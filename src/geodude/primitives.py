@@ -84,7 +84,7 @@ def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
 
     bb = py_trees.blackboard.Client(name=f"primitives{ns}")
     keys = [
-        "/context",
+        "/context", "/abort_fn",
         f"{ns}/robot",
         f"{ns}/arm", f"{ns}/arm_name",
         f"{ns}/grasp_tsrs", f"{ns}/place_tsrs",
@@ -102,6 +102,7 @@ def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
             pass  # already registered by another client
 
     bb.set("/context", ctx)
+    bb.set("/abort_fn", robot.is_abort_requested)
     bb.set(f"{ns}/robot", robot)
     bb.set(f"{ns}/arm", arm)
     bb.set(f"{ns}/arm_name", arm.config.name)
@@ -170,6 +171,28 @@ def pickup(
     if verbose is None:
         verbose = robot.config.debug.verbose
 
+    robot.clear_abort()
+    try:
+        return _pickup_inner(robot, target, arm=arm, verbose=verbose)
+    except KeyboardInterrupt:
+        robot.request_abort()
+        logger.info("Pickup interrupted by user")
+        for side in ("left", "right"):
+            _set_hud_action(robot, side, "⊘ interrupted")
+        _sync_viewer(robot)
+        return False
+    finally:
+        robot.clear_abort()
+
+
+def _pickup_inner(
+    robot: Geodude,
+    target: str | None = None,
+    *,
+    arm: str | None = None,
+    verbose: bool = False,
+) -> bool:
+    """Core pickup logic (separated for KeyboardInterrupt wrapping)."""
     # Quick check: are there any matching objects?
     from geodude.bt.nodes import _find_scene_objects
     if not _find_scene_objects(robot, target):
@@ -322,6 +345,27 @@ def place(
     if verbose is None:
         verbose = robot.config.debug.verbose
 
+    robot.clear_abort()
+    try:
+        return _place_inner(robot, destination, arm=arm, verbose=verbose)
+    except KeyboardInterrupt:
+        robot.request_abort()
+        logger.info("Place interrupted by user")
+        _set_hud_action(robot, arm, "⊘ interrupted")
+        _sync_viewer(robot)
+        return False
+    finally:
+        robot.clear_abort()
+
+
+def _place_inner(
+    robot: Geodude,
+    destination: str | None = None,
+    *,
+    arm: str,
+    verbose: bool = False,
+) -> bool:
+    """Core place logic (separated for KeyboardInterrupt wrapping)."""
     # Capture held object before the tree releases the grasp
     held = list(robot.grasp_manager.get_grasped_by(arm))
     held_object = held[0] if held else None
@@ -378,6 +422,25 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
     if verbose is None:
         verbose = robot.config.debug.verbose
 
+    robot.clear_abort()
+    try:
+        return _go_home_inner(robot, ctx, arm=arm, verbose=verbose)
+    except KeyboardInterrupt:
+        robot.request_abort()
+        logger.info("go_home interrupted by user")
+        return False
+    finally:
+        robot.clear_abort()
+
+
+def _go_home_inner(
+    robot: Geodude,
+    ctx,
+    *,
+    arm: str | None = None,
+    verbose: bool = False,
+) -> bool:
+    """Core go_home logic (separated for KeyboardInterrupt wrapping)."""
     from mj_manipulator.cartesian import CartesianController
 
     if arm is not None:
@@ -385,13 +448,15 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
     else:
         arms = [("left", robot._left_arm), ("right", robot._right_arm)]
 
+    abort_fn = robot.is_abort_requested
+
     success = True
     for side, arm_obj in arms:
         if "ready" not in robot.named_poses or side not in robot.named_poses["ready"]:
             continue
         ready = np.array(robot.named_poses["ready"][side])
         try:
-            path = arm_obj.plan_to_configuration(ready)
+            path = arm_obj.plan_to_configuration(ready, abort_fn=abort_fn)
         except Exception as e:
             logger.info("go_home %s arm: initial plan failed: %s", side, e)
             path = None
@@ -407,9 +472,10 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
             ctrl.move(
                 np.array([0.0, 0.0, 0.10, 0.0, 0.0, 0.0]),
                 dt=0.008, max_distance=0.10,
+                stop_condition=abort_fn,
             )
             try:
-                path = arm_obj.plan_to_configuration(ready)
+                path = arm_obj.plan_to_configuration(ready, abort_fn=abort_fn)
             except Exception as e:
                 logger.info("go_home %s arm: retry after retract failed: %s", side, e)
                 path = None

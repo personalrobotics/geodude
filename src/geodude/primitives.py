@@ -486,6 +486,7 @@ def _go_home_inner(
                 logger.warning("go_home %s arm: retry failed: %s", side, e)
                 path = None
 
+
         if path is not None:
             traj = arm_obj.retime(path)
             ctx.execute(traj)

@@ -404,6 +404,7 @@ def _place_inner(
         if robot.env.registry.is_active(held_object):
             robot.env.registry.hide(held_object)
             robot.forward()
+            _sync_viewer(robot)
 
     return ok
 

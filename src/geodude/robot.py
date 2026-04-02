@@ -137,6 +137,10 @@ class _ArmScope:
         """Retime a joint path into a smooth trajectory."""
         return self._arm.retime(path, **kwargs)
 
+    def check_collisions(self):
+        """Check current configuration for collisions. Prints a summary."""
+        return self._arm.check_collisions()
+
     @property
     def has_ft_sensor(self) -> bool:
         """Whether this arm has a wrist F/T sensor configured."""

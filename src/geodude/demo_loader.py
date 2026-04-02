@@ -272,17 +272,27 @@ def _spawn_manipulable_objects(
 
         for _ in range(count):
             tsr = templates[0].instantiate(table_surface)
-            pos = tsr.sample()[:3, 3]
-            name = robot.env.registry.activate(obj_type, pos=list(pos))
+            T = tsr.sample()
+            name = robot.env.registry.activate(obj_type, pos=list(T[:3, 3]))
             mujoco.mj_forward(robot.model, robot.data)
 
             body_id = mujoco.mj_name2id(robot.model, mujoco.mjtObj.mjOBJ_BODY, name)
             jnt_id = robot.model.body_jntadr[body_id]
             qpos_adr = robot.model.jnt_qposadr[jnt_id]
+
+            # Apply full pose from TSR sample (includes randomized yaw)
+            quat = np.zeros(4)
+            mujoco.mju_mat2Quat(quat, T[:3, :3].flatten())
+            robot.data.qpos[qpos_adr + 3 : qpos_adr + 7] = quat
+            mujoco.mj_forward(robot.model, robot.data)
+
             for _ in range(50):
                 if not _has_object_collision(robot.model, robot.data, name):
                     break
-                robot.data.qpos[qpos_adr : qpos_adr + 3] = tsr.sample()[:3, 3]
+                T = tsr.sample()
+                robot.data.qpos[qpos_adr : qpos_adr + 3] = T[:3, 3]
+                mujoco.mju_mat2Quat(quat, T[:3, :3].flatten())
+                robot.data.qpos[qpos_adr + 3 : qpos_adr + 7] = quat
                 mujoco.mj_forward(robot.model, robot.data)
 
     # Final sync — updates viewer with all placed objects

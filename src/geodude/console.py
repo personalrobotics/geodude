@@ -77,7 +77,7 @@ def start_console(
         nonlocal chat_session
         from geodude.demo_loader import _spawn_manipulable_objects
         robot.request_abort()  # stop teleop thread before touching MuJoCo data
-        import time; time.sleep(0.05)  # let teleop loop exit
+        import time; time.sleep(0.1)  # let teleop loop exit
         robot.reset()
         robot.clear_abort()
         fixture_types = set(fixtures.keys()) if fixtures else set()

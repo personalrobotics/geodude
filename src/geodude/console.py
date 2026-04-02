@@ -76,7 +76,10 @@ def start_console(
         """Reset the demo — robot to ready, objects re-scattered, chat history cleared."""
         nonlocal chat_session
         from geodude.demo_loader import _spawn_manipulable_objects
+        robot.request_abort()  # stop teleop thread before touching MuJoCo data
+        import time; time.sleep(0.05)  # let teleop loop exit
         robot.reset()
+        robot.clear_abort()
         fixture_types = set(fixtures.keys()) if fixtures else set()
         spawn_count = None
         if demo_module and hasattr(demo_module, "scene"):

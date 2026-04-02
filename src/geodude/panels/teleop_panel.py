@@ -43,4 +43,5 @@ def create_teleop_panel(
         gripper_body_prefix=f"{side}_ur5e/gripper/",
         arm_label=f"{side.title()} Arm",
         abort_fn=robot.is_abort_requested,
+        clear_abort_fn=robot.clear_abort,
     )

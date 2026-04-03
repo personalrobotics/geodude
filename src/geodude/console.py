@@ -331,14 +331,15 @@ IPython:
     with robot.sim(physics=physics, headless=not viewer, viewer=sim_viewer) as ctx:
         user_ns["ctx"] = ctx
 
-        # Teleop panel (needs ctx, so created after sim context)
+        # Teleop panels (needs ctx, so created after sim context)
         if viser and viser_viewer is not None:
             from geodude.panels.teleop_panel import create_teleop_panel
             gui = viser_viewer._server.gui
-            teleop_panel = create_teleop_panel(robot, ctx, side="right")
             with tabs.add_tab("Teleop"):
-                teleop_panel.setup(gui, viser_viewer)
-            viser_viewer._panels.append(teleop_panel)
+                for side in ("right", "left"):
+                    teleop_panel = create_teleop_panel(robot, ctx, side=side)
+                    teleop_panel.setup(gui, viser_viewer)
+                    viser_viewer._panels.append(teleop_panel)
 
         from IPython.terminal.prompts import Prompts, Token
 

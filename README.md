@@ -179,6 +179,16 @@ Geodude: Scene reset with 4 objects.
 
 The LLM sees planning diagnostics behind the scenes (IK failures, collision details, grasp results) and adjusts its strategy automatically.
 
+### Teleop
+
+With `--viser`, the browser viewer includes a Teleop tab for interactive arm control. Drag a 6DOF gizmo to move the arm in real-time — both arms can be controlled simultaneously.
+
+- **Activate/Deactivate** per arm with ghost hand preview
+- **Toggle Gripper** to grasp/release objects
+- **Safety modes**: Allow (move + flag collisions) or Reject (block colliding configs)
+- **Record** demonstrations for ML training
+- **Snap to EE** to reset the gizmo to the current arm position
+
 ### Creating demos
 
 Demos are Python files in `src/geodude/demos/`. Create one interactively with `save_demo('name')`, or write a file:

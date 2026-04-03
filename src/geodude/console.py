@@ -76,7 +76,10 @@ def start_console(
         """Reset the demo — robot to ready, objects re-scattered, chat history cleared."""
         nonlocal chat_session
         from geodude.demo_loader import _spawn_manipulable_objects
+        robot.request_abort()  # stop teleop thread before touching MuJoCo data
+        import time; time.sleep(0.1)  # let teleop loop exit
         robot.reset()
+        robot.clear_abort()
         fixture_types = set(fixtures.keys()) if fixtures else set()
         spawn_count = None
         if demo_module and hasattr(demo_module, "scene"):
@@ -327,6 +330,16 @@ IPython:
     sim_viewer = viser_viewer if viser else None
     with robot.sim(physics=physics, headless=not viewer, viewer=sim_viewer) as ctx:
         user_ns["ctx"] = ctx
+
+        # Teleop panels (needs ctx, so created after sim context)
+        if viser and viser_viewer is not None:
+            from geodude.panels.teleop_panel import create_teleop_panel
+            gui = viser_viewer._server.gui
+            with tabs.add_tab("Teleop"):
+                for side in ("right", "left"):
+                    teleop_panel = create_teleop_panel(robot, ctx, side=side)
+                    teleop_panel.setup(gui, viser_viewer)
+                    viser_viewer._panels.append(teleop_panel)
 
         from IPython.terminal.prompts import Prompts, Token
 

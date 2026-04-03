@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from geodude.robot import Geodude
     from mj_manipulator.sim_context import SimContext
-    from mj_viser import MujocoViewer, TeleopPanel
+    from mj_viser import TeleopPanel
 
 
 def create_teleop_panel(

@@ -244,6 +244,7 @@ IPython:
         from mj_viser import MujocoViewer
         viser_viewer = MujocoViewer(
             robot.model, robot.data,
+            label="Geodude",
             show_sim_controls=False,
             show_visibility=False,
         )

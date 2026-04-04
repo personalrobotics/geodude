@@ -109,6 +109,10 @@ class _ArmScope:
         """Current joint positions (rad)."""
         return self._arm.get_joint_positions()
 
+    def set_joint_positions(self, q):
+        """Set joint positions directly (sim only). Use plan_to_configuration() on hardware."""
+        return self._arm.set_joint_positions(q)
+
     def get_joint_velocities(self):
         """Current joint velocities (rad/s)."""
         return self._arm.get_joint_velocities()

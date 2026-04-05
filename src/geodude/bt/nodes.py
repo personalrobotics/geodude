@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Geodude-specific behavior tree leaf nodes.
 
 These nodes handle TSR generation from prl_assets geometry, so the
@@ -39,7 +42,7 @@ def _find_scene_objects(robot, target: str | None) -> list[tuple[str, str]]:
     gm = robot.grasp_manager
 
     # Collect all visible body names in the scene
-    registry = robot.env.registry if hasattr(robot.env, 'registry') else None
+    registry = robot.env.registry if hasattr(robot.env, "registry") else None
     all_bodies = []
     for i in range(model.nbody):
         name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, i)
@@ -128,6 +131,7 @@ def _generate_tsrs_for_object(robot, body_name: str, obj_type: str) -> list:
         T_bottom[:3, 3] -= local_z * (size[2] / 2)
         # Try each grasp mode — some may fail for thin objects
         import logging
+
         _logger = logging.getLogger(__name__)
         templates = []
         for grasp_fn in [
@@ -141,14 +145,20 @@ def _generate_tsrs_for_object(robot, body_name: str, obj_type: str) -> list:
             except ValueError as e:
                 _logger.info(
                     "%s: skipping %s — %s (size=%.0f×%.0f×%.0fmm)",
-                    body_name, grasp_fn.__name__, e,
-                    size[0] * 1000, size[1] * 1000, size[2] * 1000,
+                    body_name,
+                    grasp_fn.__name__,
+                    e,
+                    size[0] * 1000,
+                    size[1] * 1000,
+                    size[2] * 1000,
                 )
         if not templates:
             _logger.warning(
-                "%s: no valid grasps — object too small for gripper "
-                "(size=%.0f×%.0f×%.0fmm)",
-                body_name, size[0] * 1000, size[1] * 1000, size[2] * 1000,
+                "%s: no valid grasps — object too small for gripper (size=%.0f×%.0f×%.0fmm)",
+                body_name,
+                size[0] * 1000,
+                size[1] * 1000,
+                size[2] * 1000,
             )
         return [t.instantiate(T_bottom) for t in templates]
 
@@ -168,6 +178,7 @@ def _get_held_object_height(robot) -> float:
     assets = AssetManager(str(OBJECTS_DIR))
     # Extract type from instance name (e.g. "cracker_box_0" -> "cracker_box")
     import re
+
     m = re.match(r"^(.+?)_(\d+)$", obj_name)
     if not m:
         return 0.0
@@ -184,7 +195,10 @@ def _get_held_object_height(robot) -> float:
 
 
 def _generate_container_drop_tsrs(
-    robot, body_name: str, dest_type: str, held_height: float = 0.0,
+    robot,
+    body_name: str,
+    dest_type: str,
+    held_height: float = 0.0,
 ) -> list:
     """Generate drop-zone TSRs for a container from prl_assets geometry."""
     from asset_manager import AssetManager
@@ -307,6 +321,7 @@ def _generate_surface_place_tsrs(
     #   Tw_e_corrected = Tw_e_object @ inv(T_site_object)
     if T_gripper_object is not None:
         import dataclasses
+
         T_object_gripper = np.linalg.inv(T_gripper_object)
         template = dataclasses.replace(template, Tw_e=template.Tw_e @ T_object_gripper)
 
@@ -324,7 +339,8 @@ _UPWARD_THRESHOLD = 0.95  # dot(normal, [0,0,1]) > this ≈ <18° from vertical
 
 
 def _get_upward_faces(
-    dest_pose: np.ndarray, gp: dict,
+    dest_pose: np.ndarray,
+    gp: dict,
 ) -> list[tuple[np.ndarray, float, float]]:
     """Enumerate flat faces of a destination object that currently point upward.
 
@@ -401,7 +417,10 @@ def _get_upward_faces(
 
 
 def _generate_place_tsrs(
-    robot, body_name: str, dest_type: str, held_height: float = 0.0,
+    robot,
+    body_name: str,
+    dest_type: str,
+    held_height: float = 0.0,
     T_gripper_object: np.ndarray | None = None,
 ) -> list:
     """Generate placement TSRs — dispatches between container drop and surface placement."""
@@ -434,7 +453,11 @@ def _generate_place_tsrs(
     all_tsrs = []
     for surface_pose, hx, hy in faces:
         tsrs = _generate_surface_place_tsrs(
-            robot, surface_pose, hx, hy, held_type,
+            robot,
+            surface_pose,
+            hx,
+            hy,
+            held_type,
             T_gripper_object=T_gripper_object,
         )
         all_tsrs.extend(tsrs)
@@ -591,7 +614,11 @@ class GeneratePlaceTSRs(py_trees.behaviour.Behaviour):
             if wt is not None:
                 surface_pose, hx, hy = wt
                 all_tsrs = _generate_surface_place_tsrs(
-                    robot, surface_pose, hx, hy, held_type,
+                    robot,
+                    surface_pose,
+                    hx,
+                    hy,
+                    held_type,
                     T_gripper_object=T_gripper_object,
                 )
                 tsr_to_dest = ["worktop"] * len(all_tsrs)
@@ -606,7 +633,10 @@ class GeneratePlaceTSRs(py_trees.behaviour.Behaviour):
         objects = _find_scene_objects(robot, target)
         for body_name, dest_type in objects:
             tsrs = _generate_place_tsrs(
-                robot, body_name, dest_type, held_height=held_height,
+                robot,
+                body_name,
+                dest_type,
+                held_height=held_height,
                 T_gripper_object=T_gripper_object,
             )
             for _ in tsrs:
@@ -619,7 +649,11 @@ class GeneratePlaceTSRs(py_trees.behaviour.Behaviour):
             if wt is not None:
                 surface_pose, hx, hy = wt
                 worktop_tsrs = _generate_surface_place_tsrs(
-                    robot, surface_pose, hx, hy, held_type,
+                    robot,
+                    surface_pose,
+                    hx,
+                    hy,
+                    held_type,
                     T_gripper_object=T_gripper_object,
                 )
                 for _ in worktop_tsrs:
@@ -673,7 +707,8 @@ class LiftBase(py_trees.behaviour.Behaviour):
         base_traj = base.plan_to(target_h, check_collisions=True)
         if base_traj is None:
             logging.getLogger(__name__).info(
-                "Base lift to %.2fm blocked by collision", target_h,
+                "Base lift to %.2fm blocked by collision",
+                target_h,
             )
             return Status.SUCCESS  # non-critical, don't fail pickup
 

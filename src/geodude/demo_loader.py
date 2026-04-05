@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Demo discovery, loading, and scene setup.
 
 Demos are Python files with a ``scene`` dict and optional helper functions.
@@ -96,10 +99,7 @@ def load_demo(name_or_path: str) -> ModuleType:
     if name_or_path in demos:
         return load_demo(str(demos[name_or_path]))
 
-    raise ValueError(
-        f"Demo '{name_or_path}' not found. "
-        f"Available: {', '.join(demos.keys()) or 'none'}"
-    )
+    raise ValueError(f"Demo '{name_or_path}' not found. Available: {', '.join(demos.keys()) or 'none'}")
 
 
 def inject_robot(demo_module: ModuleType, robot: Geodude) -> None:
@@ -164,10 +164,7 @@ def _choose_scene() -> tuple[dict[str, int], dict[str, list[list[float]]], Modul
     # Custom scene
     from prl_assets import OBJECTS_DIR
 
-    available = sorted(
-        d.name for d in OBJECTS_DIR.iterdir()
-        if d.is_dir() and (d / "meta.yaml").exists()
-    )
+    available = sorted(d.name for d in OBJECTS_DIR.iterdir() if d.is_dir() and (d / "meta.yaml").exists())
     print(f"\nAvailable objects: {', '.join(available)}")
     print('How many of each? (e.g. "4 cans, 2 recycle_bins")')
     spec = input("> ").strip()
@@ -247,6 +244,7 @@ def _spawn_manipulable_objects(
         spawn_list = random.choices(available_types, k=spawn_count)
         # Count how many of each type to spawn
         from collections import Counter
+
         type_counts = Counter(spawn_list)
         specs = list(type_counts.items())
     else:

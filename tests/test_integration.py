@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Integration tests for geodude with geodude_assets.
 
 These tests verify the geodude package works correctly with the actual robot model.
@@ -6,8 +9,8 @@ These tests verify the geodude package works correctly with the actual robot mod
 import mujoco
 import numpy as np
 import pytest
-
 from geodude_assets import get_model_path
+
 from geodude.config import GeodudConfig
 from geodude.robot import Geodude
 
@@ -74,18 +77,18 @@ class TestGraspManagerWithRealModel:
         meshdir = str(GEODUDE_XML.parent) + "/"
         xml_content = xml_content.replace(
             '<compiler autolimits="true" angle="radian"/>',
-            f'<compiler autolimits="true" angle="radian" meshdir="{meshdir}"/>'
+            f'<compiler autolimits="true" angle="radian" meshdir="{meshdir}"/>',
         )
 
-        object_xml = '''
+        object_xml = """
     <body name="test_object" pos="0.5 0 1.0">
       <freejoint name="test_object_joint"/>
       <geom name="test_object_geom" type="box" size="0.02 0.02 0.02" mass="0.1"
             contype="1" conaffinity="1"/>
     </body>
-  </worldbody>'''
+  </worldbody>"""
 
-        modified_xml = xml_content.replace('</worldbody>', object_xml)
+        modified_xml = xml_content.replace("</worldbody>", object_xml)
         model = mujoco.MjModel.from_xml_string(modified_xml)
         data = mujoco.MjData(model)
         mujoco.mj_forward(model, data)

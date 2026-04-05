@@ -1,9 +1,11 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Tests for VentionBase class."""
 
-import numpy as np
 import pytest
 
-from geodude.config import GeodudConfig, VentionBaseConfig
+from geodude.config import VentionBaseConfig
 from geodude.robot import Geodude
 from geodude.vention_base import VentionBase
 

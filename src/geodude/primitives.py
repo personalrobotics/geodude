@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """High-level manipulation primitives for Geodude.
 
 Clean function API backed by py_trees behavior trees. Students write::
@@ -41,7 +44,7 @@ def _set_hud_action(robot, arm: str, text: str) -> None:
 def _sync_viewer(robot) -> None:
     """Force a viewer sync so HUD updates are visible immediately."""
     ctx = robot._active_context
-    if ctx is not None and hasattr(ctx, 'sync'):
+    if ctx is not None and hasattr(ctx, "sync"):
         try:
             ctx.sync()
         except Exception:
@@ -58,11 +61,12 @@ def _is_container_destination(destination: str | None) -> bool:
     if destination is None:
         return False
 
+    # Strip instance suffix (e.g. "recycle_bin_0" → "recycle_bin")
+    import re
+
     from asset_manager import AssetManager
     from prl_assets import OBJECTS_DIR
 
-    # Strip instance suffix (e.g. "recycle_bin_0" → "recycle_bin")
-    import re
     m = re.match(r"^(.+?)_(\d+)$", destination)
     obj_type = m.group(1) if m else destination
 
@@ -84,16 +88,26 @@ def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
 
     bb = py_trees.blackboard.Client(name=f"primitives{ns}")
     keys = [
-        "/context", "/abort_fn",
+        "/context",
+        "/abort_fn",
         f"{ns}/robot",
-        f"{ns}/arm", f"{ns}/arm_name",
-        f"{ns}/grasp_tsrs", f"{ns}/place_tsrs",
-        f"{ns}/timeout", f"{ns}/object_name", f"{ns}/destination",
-        f"{ns}/goal_config", f"{ns}/grasped",
-        f"{ns}/path", f"{ns}/trajectory",
-        f"{ns}/twist", f"{ns}/distance",
-        f"{ns}/goal_tsr_index", f"{ns}/tsr_to_object",
-        f"{ns}/tsr_to_destination", f"{ns}/plan_failure_reason",
+        f"{ns}/arm",
+        f"{ns}/arm_name",
+        f"{ns}/grasp_tsrs",
+        f"{ns}/place_tsrs",
+        f"{ns}/timeout",
+        f"{ns}/object_name",
+        f"{ns}/destination",
+        f"{ns}/goal_config",
+        f"{ns}/grasped",
+        f"{ns}/path",
+        f"{ns}/trajectory",
+        f"{ns}/twist",
+        f"{ns}/distance",
+        f"{ns}/goal_tsr_index",
+        f"{ns}/tsr_to_object",
+        f"{ns}/tsr_to_destination",
+        f"{ns}/plan_failure_reason",
     ]
     for key in keys:
         try:
@@ -110,8 +124,14 @@ def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
 
     # Clear stale results from previous runs
     for stale_key in [
-        "path", "trajectory", "grasped", "grasp_tsrs", "place_tsrs",
-        "tsr_to_object", "tsr_to_destination", "goal_tsr_index",
+        "path",
+        "trajectory",
+        "grasped",
+        "grasp_tsrs",
+        "place_tsrs",
+        "tsr_to_object",
+        "tsr_to_destination",
+        "goal_tsr_index",
         "plan_failure_reason",
     ]:
         bb.set(f"{ns}/{stale_key}", None)
@@ -196,6 +216,7 @@ def _pickup_inner(
     """Core pickup logic (separated for KeyboardInterrupt wrapping)."""
     # Quick check: are there any matching objects?
     from geodude.bt.nodes import _find_scene_objects
+
     if not _find_scene_objects(robot, target):
         desc = f"'{target}'" if target else "any object"
         logger.warning("Pickup failed: no graspable objects found for %s", desc)
@@ -254,7 +275,7 @@ def _pickup_inner(
             all_attempted.update(attempted)
             if reached and planned and not grasped:
                 grasp_failures.append(f"{reached} ({side} arm)")
-                _set_hud_action(robot, side, f"✗ pickup: grasp failed")
+                _set_hud_action(robot, side, "✗ pickup: grasp failed")
             elif reached and not planned:
                 detail = f"{reached} ({side} arm)"
                 short = plan_reason.split(":")[0] if plan_reason else "plan failed"
@@ -289,6 +310,7 @@ def _pickup_inner(
         return False
 
     import random
+
     sides = ["right", "left"]
     random.shuffle(sides)
     for i, side in enumerate(sides):
@@ -303,6 +325,7 @@ def _pickup_inner(
         # so it doesn't block the workspace
         if i < len(sides) - 1:
             from geodude.primitives import go_home
+
             go_home(robot, arm=side)
 
     _report_failure(sides)
@@ -493,7 +516,8 @@ def _go_home_inner(
             ctrl = CartesianController.from_arm(arm_obj, step_fn=_step_fn)
             ctrl.move(
                 np.array([0.0, 0.0, 0.10, 0.0, 0.0, 0.0]),
-                dt=0.008, max_distance=0.10,
+                dt=0.008,
+                max_distance=0.10,
                 stop_condition=abort_fn,
             )
             try:
@@ -501,7 +525,6 @@ def _go_home_inner(
             except Exception as e:
                 logger.warning("go_home %s arm: retry failed: %s", side, e)
                 path = None
-
 
         if path is not None:
             traj = arm_obj.retime(path)

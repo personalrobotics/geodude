@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """IPython console for Geodude with integrated LLM chat.
 
 Provides tab completion, introspection, demo functions, and optional
@@ -47,9 +50,12 @@ def start_console(
             return None
         try:
             from geodude.chat import ChatSession
+
             sc = demo_module.scene.get("spawn_count") if demo_module and hasattr(demo_module, "scene") else None
             chat_session = ChatSession(
-                robot, mode=mode, model_name=model_name,
+                robot,
+                mode=mode,
+                model_name=model_name,
                 original_objects=objects or {},
                 original_fixtures=fixtures or {},
                 spawn_count=sc,
@@ -76,8 +82,11 @@ def start_console(
         """Reset the demo — robot to ready, objects re-scattered, chat history cleared."""
         nonlocal chat_session
         from geodude.demo_loader import _spawn_manipulable_objects
+
         robot.request_abort()  # stop teleop thread before touching MuJoCo data
-        import time; time.sleep(0.1)  # let teleop loop exit
+        import time
+
+        time.sleep(0.1)  # let teleop loop exit
         robot.reset()
         robot.clear_abort()
         fixture_types = set(fixtures.keys()) if fixtures else set()
@@ -95,6 +104,7 @@ def start_console(
     def demos() -> None:
         """List available demos."""
         from geodude.demo_loader import list_demos
+
         list_demos()
 
     def save_demo(name: str, description: str = "") -> None:
@@ -206,6 +216,7 @@ IPython:
 
     if demo_module is not None:
         from geodude.demo_loader import get_demo_functions, inject_robot
+
         inject_robot(demo_module, robot)
         for name_fn, func in get_demo_functions(demo_module).items():
             user_ns[name_fn] = func
@@ -221,7 +232,7 @@ IPython:
     viewer_str = " | viser" if viser else " | viewer" if viewer else ""
     banner = f"\n{'=' * 60}\n  Geodude [{mode}] | 2 arms | {n_objects} objects{demo_str}{viewer_str}\n"
     if viser:
-        banner += f"  Browser: http://localhost:8080\n"
+        banner += "  Browser: http://localhost:8080\n"
     if os.environ.get("ANTHROPIC_API_KEY"):
         banner += f"  LLM: {model_name}\n"
     banner += (
@@ -242,8 +253,10 @@ IPython:
     viser_viewer = None
     if viser:
         from mj_viser import MujocoViewer
+
         viser_viewer = MujocoViewer(
-            robot.model, robot.data,
+            robot.model,
+            robot.data,
             label="Geodude",
             show_sim_controls=False,
             show_visibility=False,
@@ -251,26 +264,29 @@ IPython:
 
         # Build sensor panels (not added via add_panel — we'll set them up in tabs)
         from mj_viser import SensorChannel, SensorPanel
+
         sensor_panels = []
         for side, arm in [("Left", robot._left_arm), ("Right", robot._right_arm)]:
             if arm.has_ft_sensor:
                 force_adr = arm._ft_force_adr
                 torque_adr = arm._ft_torque_adr
-                sensor_panels.append(SensorPanel(
-                    title=f"{side} F/T",
-                    use_folder=False,
-                    channels=[
-                        SensorChannel(force_adr + 0, "Fx", "#e74c3c"),
-                        SensorChannel(force_adr + 1, "Fy", "#2ecc71"),
-                        SensorChannel(force_adr + 2, "Fz", "#3498db"),
-                        SensorChannel(torque_adr + 0, "Tx", "#e67e22"),
-                        SensorChannel(torque_adr + 1, "Ty", "#9b59b6"),
-                        SensorChannel(torque_adr + 2, "Tz", "#1abc9c"),
-                    ],
-                    window_seconds=5.0,
-                    y_label="N / Nm",
-                    aspect=1.2,
-                ))
+                sensor_panels.append(
+                    SensorPanel(
+                        title=f"{side} F/T",
+                        use_folder=False,
+                        channels=[
+                            SensorChannel(force_adr + 0, "Fx", "#e74c3c"),
+                            SensorChannel(force_adr + 1, "Fy", "#2ecc71"),
+                            SensorChannel(force_adr + 2, "Fz", "#3498db"),
+                            SensorChannel(torque_adr + 0, "Tx", "#e67e22"),
+                            SensorChannel(torque_adr + 1, "Ty", "#9b59b6"),
+                            SensorChannel(torque_adr + 2, "Tz", "#1abc9c"),
+                        ],
+                        window_seconds=5.0,
+                        y_label="N / Nm",
+                        aspect=1.2,
+                    )
+                )
 
         # Build chat panel
         chat_panel = None
@@ -278,6 +294,7 @@ IPython:
             chat_session = _get_chat()
             if chat_session is not None:
                 from geodude.panels.chat_panel import ChatPanel
+
                 chat_panel = ChatPanel(chat_session)
 
         # Set up tabbed layout — panels inside tabs to avoid vertical overflow.
@@ -291,7 +308,6 @@ IPython:
         @stop_btn.on_click
         def _on_stop(event):
             robot.request_abort()
-            from geodude.panels.status_hud import StatusHud
             hud = getattr(robot, "_status_hud", None)
             if hud is not None:
                 hud.set_action("left", "⊘ STOP")
@@ -312,6 +328,7 @@ IPython:
 
         # Status HUD overlay — store on robot so primitives can update it
         from geodude.panels.status_hud import StatusHud
+
         status_hud = StatusHud(robot, mode)
         robot._status_hud = status_hud
         all_panels.append(status_hud)
@@ -325,7 +342,7 @@ IPython:
         # Initialize HUD after launch
         status_hud.setup(viser_viewer._server.gui, viser_viewer)
 
-        print(f"  Viser viewer: http://localhost:8080")
+        print("  Viser viewer: http://localhost:8080")
 
     # Pass viser viewer to SimContext so executors can sync it during trajectories
     sim_viewer = viser_viewer if viser else None
@@ -335,6 +352,7 @@ IPython:
         # Teleop panels (needs ctx, so created after sim context)
         if viser and viser_viewer is not None:
             from geodude.panels.teleop_panel import create_teleop_panel
+
             gui = viser_viewer._server.gui
             with tabs.add_tab("Teleop"):
                 for side in ("right", "left"):

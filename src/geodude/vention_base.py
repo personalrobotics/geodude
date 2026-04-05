@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Vention linear actuator control."""
 
 from __future__ import annotations
@@ -7,7 +10,6 @@ from typing import TYPE_CHECKING
 
 import mujoco
 import numpy as np
-
 from mj_manipulator import Arm, GraspManager, Trajectory
 from mj_manipulator.trajectory import create_linear_trajectory
 
@@ -43,7 +45,9 @@ class VentionBase:
 
         # Get joint ID and qpos index
         self._joint_id = mujoco.mj_name2id(
-            model, mujoco.mjtObj.mjOBJ_JOINT, config.joint_name,
+            model,
+            mujoco.mjtObj.mjOBJ_JOINT,
+            config.joint_name,
         )
         if self._joint_id == -1:
             raise ValueError(f"Joint '{config.joint_name}' not found in model")
@@ -51,7 +55,9 @@ class VentionBase:
 
         # Get actuator ID
         self._actuator_id = mujoco.mj_name2id(
-            model, mujoco.mjtObj.mjOBJ_ACTUATOR, config.actuator_name,
+            model,
+            mujoco.mjtObj.mjOBJ_ACTUATOR,
+            config.actuator_name,
         )
         if self._actuator_id == -1:
             raise ValueError(f"Actuator '{config.actuator_name}' not found")
@@ -64,7 +70,9 @@ class VentionBase:
         """Build set of body IDs that belong to this arm including gripper."""
         for joint_name in self._arm.config.joint_names:
             joint_id = mujoco.mj_name2id(
-                self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name,
+                self.model,
+                mujoco.mjtObj.mjOBJ_JOINT,
+                joint_name,
             )
             if joint_id != -1:
                 body_id = self.model.jnt_bodyid[joint_id]
@@ -116,9 +124,7 @@ class VentionBase:
         min_h, max_h = self.config.height_range
         tolerance = 1e-3
         if not (min_h - tolerance) <= height <= (max_h + tolerance):
-            raise ValueError(
-                f"Height {height} outside valid range [{min_h}, {max_h}]"
-            )
+            raise ValueError(f"Height {height} outside valid range [{min_h}, {max_h}]")
         height = max(min_h, min(max_h, height))
         self.data.qpos[self._qpos_idx] = height
         self.data.ctrl[self._actuator_id] = height
@@ -144,9 +150,7 @@ class VentionBase:
         """
         min_h, max_h = self.config.height_range
         if not min_h <= height <= max_h:
-            raise ValueError(
-                f"Height {height} outside valid range [{min_h}, {max_h}]"
-            )
+            raise ValueError(f"Height {height} outside valid range [{min_h}, {max_h}]")
 
         current_height = self.get_height()
 
@@ -257,7 +261,9 @@ class VentionBase:
         if gm is not None:
             for obj_name in gm.grasped:
                 body_id = mujoco.mj_name2id(
-                    self.model, mujoco.mjtObj.mjOBJ_BODY, obj_name,
+                    self.model,
+                    mujoco.mjtObj.mjOBJ_BODY,
+                    obj_name,
                 )
                 if body_id >= 0:
                     grasped_bodies.add(body_id)

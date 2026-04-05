@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Tests for the unified _ArmScope interface (robot.left / robot.right)."""
 
 from geodude.robot import Geodude
@@ -65,11 +68,13 @@ class TestArmScopeCloseOpen:
     def test_close_without_context_raises(self):
         robot = Geodude()
         import pytest
+
         with pytest.raises(RuntimeError, match="No active execution context"):
             robot.left.close()
 
     def test_open_without_context_raises(self):
         robot = Geodude()
         import pytest
+
         with pytest.raises(RuntimeError, match="No active execution context"):
             robot.left.open()

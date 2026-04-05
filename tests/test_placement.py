@@ -1,14 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Tests for placement TSR generation."""
 
 import numpy as np
 import pytest
 
 from geodude.bt.nodes import (
-    _generate_surface_place_tsrs,
     _generate_place_tsrs,
+    _generate_surface_place_tsrs,
     _get_upward_faces,
 )
-
 
 # Surface at z=0.75, 60×40cm
 SURFACE_POSE = np.eye(4)
@@ -23,32 +25,52 @@ class TestGenerateSurfacePlaceTSRs:
 
     def test_cylinder_returns_one_tsr(self):
         tsrs = _generate_surface_place_tsrs(
-            None, SURFACE_POSE, SURFACE_HX, SURFACE_HY, "can",
+            None,
+            SURFACE_POSE,
+            SURFACE_HX,
+            SURFACE_HY,
+            "can",
         )
         assert len(tsrs) == 1
 
     def test_box_returns_one_tsr(self):
         tsrs = _generate_surface_place_tsrs(
-            None, SURFACE_POSE, SURFACE_HX, SURFACE_HY, "cracker_box",
+            None,
+            SURFACE_POSE,
+            SURFACE_HX,
+            SURFACE_HY,
+            "cracker_box",
         )
         assert len(tsrs) == 1
 
     def test_none_held_returns_empty(self):
         tsrs = _generate_surface_place_tsrs(
-            None, SURFACE_POSE, SURFACE_HX, SURFACE_HY, None,
+            None,
+            SURFACE_POSE,
+            SURFACE_HX,
+            SURFACE_HY,
+            None,
         )
         assert tsrs == []
 
     def test_unknown_type_returns_empty(self):
         tsrs = _generate_surface_place_tsrs(
-            None, SURFACE_POSE, SURFACE_HX, SURFACE_HY, "nonexistent_object",
+            None,
+            SURFACE_POSE,
+            SURFACE_HX,
+            SURFACE_HY,
+            "nonexistent_object",
         )
         assert tsrs == []
 
     def test_clearance_offset_applied(self):
         """Bw[2] (z-bounds) should be shifted up by the clearance buffer."""
         tsrs = _generate_surface_place_tsrs(
-            None, SURFACE_POSE, SURFACE_HX, SURFACE_HY, "can",
+            None,
+            SURFACE_POSE,
+            SURFACE_HX,
+            SURFACE_HY,
+            "can",
         )
         bw_z = tsrs[0].Bw[2]
         # Without clearance, z-bounds would be [0, 0] (object resting on surface).
@@ -59,7 +81,11 @@ class TestGenerateSurfacePlaceTSRs:
     def test_cylinder_sampled_pose_above_surface(self):
         """A sampled placement pose should put the object above the surface."""
         tsrs = _generate_surface_place_tsrs(
-            None, SURFACE_POSE, SURFACE_HX, SURFACE_HY, "can",
+            None,
+            SURFACE_POSE,
+            SURFACE_HX,
+            SURFACE_HY,
+            "can",
         )
         pose = tsrs[0].sample()
         # can: height=0.123, COM at half-height above surface + clearance
@@ -68,7 +94,11 @@ class TestGenerateSurfacePlaceTSRs:
     def test_xy_bounds_reflect_surface_with_margin(self):
         """Bw xy should be shrunk by the 5cm edge margin."""
         tsrs = _generate_surface_place_tsrs(
-            None, SURFACE_POSE, SURFACE_HX, SURFACE_HY, "can",
+            None,
+            SURFACE_POSE,
+            SURFACE_HX,
+            SURFACE_HY,
+            "can",
         )
         margin = 0.05
         expected_hx = SURFACE_HX - margin
@@ -79,7 +109,11 @@ class TestGenerateSurfacePlaceTSRs:
     def test_yaw_is_free(self):
         """Placement should allow any yaw orientation."""
         tsrs = _generate_surface_place_tsrs(
-            None, SURFACE_POSE, SURFACE_HX, SURFACE_HY, "can",
+            None,
+            SURFACE_POSE,
+            SURFACE_HX,
+            SURFACE_HY,
+            "can",
         )
         np.testing.assert_allclose(tsrs[0].Bw[5], [-np.pi, np.pi])
 
@@ -90,7 +124,11 @@ class TestGraspOffsetCorrection:
     def test_no_grasp_offset_samples_object_pose(self):
         """Without grasp offset, TSR samples the object resting pose."""
         tsrs = _generate_surface_place_tsrs(
-            None, SURFACE_POSE, SURFACE_HX, SURFACE_HY, "can",
+            None,
+            SURFACE_POSE,
+            SURFACE_HX,
+            SURFACE_HY,
+            "can",
         )
         pose_no_offset = tsrs[0].sample()
         # Should be above the surface by COM height + clearance
@@ -99,10 +137,18 @@ class TestGraspOffsetCorrection:
     def test_identity_grasp_offset_matches_no_offset(self):
         """Identity grasp transform should produce the same result."""
         tsrs_none = _generate_surface_place_tsrs(
-            None, SURFACE_POSE, SURFACE_HX, SURFACE_HY, "can",
+            None,
+            SURFACE_POSE,
+            SURFACE_HX,
+            SURFACE_HY,
+            "can",
         )
         tsrs_ident = _generate_surface_place_tsrs(
-            None, SURFACE_POSE, SURFACE_HX, SURFACE_HY, "can",
+            None,
+            SURFACE_POSE,
+            SURFACE_HX,
+            SURFACE_HY,
+            "can",
             T_gripper_object=np.eye(4),
         )
         # Tw_e should be identical since inv(I) = I
@@ -115,10 +161,18 @@ class TestGraspOffsetCorrection:
         T_gripper_object[2, 3] = -0.10  # object is 10cm below gripper
 
         tsrs_no_offset = _generate_surface_place_tsrs(
-            None, SURFACE_POSE, SURFACE_HX, SURFACE_HY, "can",
+            None,
+            SURFACE_POSE,
+            SURFACE_HX,
+            SURFACE_HY,
+            "can",
         )
         tsrs_with_offset = _generate_surface_place_tsrs(
-            None, SURFACE_POSE, SURFACE_HX, SURFACE_HY, "can",
+            None,
+            SURFACE_POSE,
+            SURFACE_HX,
+            SURFACE_HY,
+            "can",
             T_gripper_object=T_gripper_object,
         )
 
@@ -139,8 +193,10 @@ def _rotx(angle):
     """Rotation matrix around X axis."""
     c, s = np.cos(angle), np.sin(angle)
     R = np.eye(4)
-    R[1, 1] = c; R[1, 2] = -s
-    R[2, 1] = s; R[2, 2] = c
+    R[1, 1] = c
+    R[1, 2] = -s
+    R[2, 1] = s
+    R[2, 2] = c
     return R
 
 
@@ -148,8 +204,10 @@ def _roty(angle):
     """Rotation matrix around Y axis."""
     c, s = np.cos(angle), np.sin(angle)
     R = np.eye(4)
-    R[0, 0] = c;  R[0, 2] = s
-    R[2, 0] = -s; R[2, 2] = c
+    R[0, 0] = c
+    R[0, 2] = s
+    R[2, 0] = -s
+    R[2, 2] = c
     return R
 
 
@@ -157,8 +215,10 @@ def _rotz(angle):
     """Rotation matrix around Z axis."""
     c, s = np.cos(angle), np.sin(angle)
     R = np.eye(4)
-    R[0, 0] = c; R[0, 1] = -s
-    R[1, 0] = s; R[1, 1] = c
+    R[0, 0] = c
+    R[0, 1] = -s
+    R[1, 0] = s
+    R[1, 1] = c
     return R
 
 
@@ -368,11 +428,15 @@ class TestGetUpwardFacesSurfacePoseOrientation:
                     for surface_pose, _, _ in _get_upward_faces(pose, gp):
                         R = surface_pose[:3, :3]
                         np.testing.assert_allclose(
-                            R @ R.T, np.eye(3), atol=1e-9,
+                            R @ R.T,
+                            np.eye(3),
+                            atol=1e-9,
                             err_msg=f"Not orthonormal for {rot_fn.__name__}({np.degrees(angle):.0f}°), {gp['type']}",
                         )
                         np.testing.assert_allclose(
-                            np.linalg.det(R), 1.0, atol=1e-9,
+                            np.linalg.det(R),
+                            1.0,
+                            atol=1e-9,
                             err_msg=f"Not right-handed for {rot_fn.__name__}({np.degrees(angle):.0f}°), {gp['type']}",
                         )
 
@@ -448,7 +512,11 @@ class TestEndToEndSurfacePlacement:
         T_gripper_object[2, 3] = -0.08
 
         tsrs = _generate_surface_place_tsrs(
-            None, surface_pose, hx, hy, "can",
+            None,
+            surface_pose,
+            hx,
+            hy,
+            "can",
             T_gripper_object=T_gripper_object,
         )
         pose = tsrs[0].sample()

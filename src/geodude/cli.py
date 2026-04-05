@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Geodude CLI entry point.
 
 Usage::
@@ -23,13 +26,14 @@ def main() -> None:
     parser.add_argument("--physics", action="store_true", help="Physics simulation")
     parser.add_argument("--viewer", action="store_true", help="Launch native MuJoCo viewer (requires mjpython)")
     parser.add_argument("--viser", action="store_true", help="Launch browser viewer at http://localhost:8080")
-    parser.add_argument("--objects", type=str, default=None, help='JSON, e.g. \'{"can": 4}\'')
+    parser.add_argument("--objects", type=str, default=None, help="JSON, e.g. '{\"can\": 4}'")
     parser.add_argument("--model", type=str, default="claude-sonnet-4-20250514", help="LLM model")
     parser.add_argument("--list-demos", action="store_true", help="List demos and exit")
     args = parser.parse_args()
 
     if args.list_demos:
         from geodude.demo_loader import list_demos
+
         list_demos()
         sys.exit(0)
 
@@ -43,6 +47,7 @@ def main() -> None:
     robot = setup_robot(objects, fixtures, spawn_count=spawn_count)
 
     from geodude.console import start_console
+
     start_console(
         robot,
         physics=args.physics,

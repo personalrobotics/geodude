@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """LLM chat integration for Geodude robot control.
 
 Provides ChatSession for natural language → tool-use robot control.
@@ -125,8 +128,7 @@ def _build_tools() -> list[dict]:
         {
             "name": "get_objects",
             "description": (
-                "List all graspable objects in the scene with their positions. "
-                "Returns object names and xyz positions."
+                "List all graspable objects in the scene with their positions. Returns object names and xyz positions."
             ),
             "input_schema": {
                 "type": "object",
@@ -224,7 +226,7 @@ def _build_tools() -> list[dict]:
                     "objects": {
                         "type": "object",
                         "description": (
-                            "Custom object counts, e.g. {\"can\": 2, \"sugar_box\": 1}. "
+                            'Custom object counts, e.g. {"can": 2, "sugar_box": 1}. '
                             "Omit to use the demo's default random selection."
                         ),
                     },
@@ -236,9 +238,31 @@ def _build_tools() -> list[dict]:
 
 
 _PYTHON_SAFE_BUILTINS = {
-    "abs", "all", "any", "bool", "dict", "enumerate", "float", "int",
-    "isinstance", "len", "list", "map", "max", "min", "print", "range",
-    "repr", "round", "set", "sorted", "str", "sum", "tuple", "type", "zip",
+    "abs",
+    "all",
+    "any",
+    "bool",
+    "dict",
+    "enumerate",
+    "float",
+    "int",
+    "isinstance",
+    "len",
+    "list",
+    "map",
+    "max",
+    "min",
+    "print",
+    "range",
+    "repr",
+    "round",
+    "set",
+    "sorted",
+    "str",
+    "sum",
+    "tuple",
+    "type",
+    "zip",
 }
 
 
@@ -263,6 +287,7 @@ def _execute_tool(
 
     elif name == "go_home":
         from geodude.primitives import go_home
+
         ok = go_home(robot, arm=args.get("arm"))
         return f"{'Success' if ok else 'Failed'}: go_home({args})"
 
@@ -306,9 +331,11 @@ def _execute_tool(
                 return "Blocked: user denied execution in hardware mode"
 
         # Sandboxed namespace — no os, sys, subprocess
-        safe_builtins = {k: __builtins__[k] if isinstance(__builtins__, dict) else getattr(__builtins__, k)
-                         for k in _PYTHON_SAFE_BUILTINS
-                         if (k in __builtins__ if isinstance(__builtins__, dict) else hasattr(__builtins__, k))}
+        safe_builtins = {
+            k: __builtins__[k] if isinstance(__builtins__, dict) else getattr(__builtins__, k)
+            for k in _PYTHON_SAFE_BUILTINS
+            if (k in __builtins__ if isinstance(__builtins__, dict) else hasattr(__builtins__, k))
+        }
         namespace = {
             "__builtins__": safe_builtins,
             "robot": robot,
@@ -339,7 +366,10 @@ def _execute_tool(
             _spawn_manipulable_objects(robot, custom_objects, fixture_types)
         else:
             _spawn_manipulable_objects(
-                robot, original_objects, fixture_types, spawn_count=spawn_count,
+                robot,
+                original_objects,
+                fixture_types,
+                spawn_count=spawn_count,
             )
         n = len(robot.find_objects())
         return f"Success: scene reset with {n} objects"
@@ -579,10 +609,7 @@ class ChatSession:
         try:
             import anthropic
         except ImportError:
-            raise ImportError(
-                "anthropic package not installed. "
-                "Install with: uv sync --extra chat"
-            ) from None
+            raise ImportError("anthropic package not installed. Install with: uv sync --extra chat") from None
 
         self.robot = robot
         self.mode = mode
@@ -653,9 +680,13 @@ class ChatSession:
         """Build the dynamic (uncached) system context."""
         parts = [_SCENE_STATE_PREFIX + scene_state]
         if self.action_log:
-            parts.append("\nRecent actions:\n" + "\n".join(
-                f"  - {a}" for a in self.action_log[-20:]  # cap at 20 entries
-            ))
+            parts.append(
+                "\nRecent actions:\n"
+                + "\n".join(
+                    f"  - {a}"
+                    for a in self.action_log[-20:]  # cap at 20 entries
+                )
+            )
         return "\n".join(parts)
 
     def _trim_history(self) -> None:
@@ -722,8 +753,8 @@ class ChatSession:
             usage = response.usage
             self.total_input_tokens += usage.input_tokens
             self.total_output_tokens += usage.output_tokens
-            self.total_cache_read_tokens += getattr(usage, 'cache_read_input_tokens', 0) or 0
-            self.total_cache_creation_tokens += getattr(usage, 'cache_creation_input_tokens', 0) or 0
+            self.total_cache_read_tokens += getattr(usage, "cache_read_input_tokens", 0) or 0
+            self.total_cache_creation_tokens += getattr(usage, "cache_creation_input_tokens", 0) or 0
 
             assistant_content = response.content
             self.messages.append({"role": "assistant", "content": assistant_content})
@@ -743,7 +774,9 @@ class ChatSession:
                 try:
                     with log_capture:
                         result = _execute_tool(
-                            self.robot, tc.name, dict(tc.input),
+                            self.robot,
+                            tc.name,
+                            dict(tc.input),
                             original_objects=self.original_objects,
                             original_fixtures=self.original_fixtures,
                             mode=self.mode,
@@ -757,11 +790,13 @@ class ChatSession:
                     result += f"\n\nDiagnostics:\n{logs}"
                 status = "\u2713" if "Success" in result or "Error" not in result else "\u2717"
                 print(f"  {status} {result}")
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tc.id,
-                    "content": result,
-                })
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "content": result,
+                    }
+                )
 
                 # Log action summary for history trimming context
                 # Use the first line of the result (e.g., "Success: pickup({'target': 'can'})")

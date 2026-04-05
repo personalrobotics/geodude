@@ -1,12 +1,15 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Pytest fixtures for geodude tests."""
 
 import mujoco
-import numpy as np
 import pytest
 
 # geodude_assets is optional - only needed for full integration tests
 try:
     from geodude_assets import get_model_path
+
     GEODUDE_XML = get_model_path()
     GEODUDE_ASSETS_AVAILABLE = True
 except ImportError:

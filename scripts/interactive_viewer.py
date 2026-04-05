@@ -8,10 +8,12 @@ Usage:
     uv run mjpython examples/interactive_viewer.py
 """
 
+import time
+
 import mujoco
 import mujoco.viewer
-import time
 import numpy as np
+
 from geodude import Geodude
 
 

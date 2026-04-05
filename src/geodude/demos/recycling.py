@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Recycling demo — sort a random mix of objects into bins.
 
 Pool of boxes, cans, and bottles. 5 random objects spawned each run. Try:
@@ -6,8 +9,6 @@ Pool of boxes, cans, and bottles. 5 random objects spawned each run. Try:
   robot.place("recycle_bin")
   chat('clear the table')
 """
-
-import random
 
 # Pre-allocate 3 of each type (pool). Only `spawn_count` are activated per run.
 scene = {
@@ -28,9 +29,7 @@ scene = {
 }
 
 # Object types that can be spawned (everything except fixtures)
-_GRASPABLE_TYPES = [
-    k for k in scene["objects"] if k != "recycle_bin"
-]
+_GRASPABLE_TYPES = [k for k in scene["objects"] if k != "recycle_bin"]
 
 
 def sort_all():

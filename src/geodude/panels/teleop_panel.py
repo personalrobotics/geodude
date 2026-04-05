@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Geodude teleop panel — thin wrapper around mj_viser.TeleopPanel.
 
 Supplies Robotiq gripper body prefix and arm reference for left/right arms.
@@ -9,9 +12,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from geodude.robot import Geodude
     from mj_manipulator.sim_context import SimContext
     from mj_viser import TeleopPanel
+
+    from geodude.robot import Geodude
 
 
 def create_teleop_panel(

@@ -6,8 +6,15 @@ build-backend = "hatchling.build"
 name = "geodude"
 version = "0.1.0"
 description = "High-level API for programming the Geodude bimanual robot"
-# readme = "README.md"
+readme = "README.md"
 requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    {name = "Siddhartha Srinivasa", email = "siddhartha.srinivasa@gmail.com"},
+]
+maintainers = [
+    {name = "Siddhartha Srinivasa", email = "siddhartha.srinivasa@gmail.com"},
+]
 dependencies = [
     "numpy",
     "mujoco",
@@ -47,8 +54,20 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 packages = ["src/geodude"]
 
+[project.urls]
+Homepage = "https://github.com/personalrobotics/geodude"
+Repository = "https://github.com/personalrobotics/geodude"
+Issues = "https://github.com/personalrobotics/geodude/issues"
+
 [tool.ruff]
-lint.select = ["F", "E", "W", "I"]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["F", "E", "W", "I"]
 
 [tool.ruff.lint.per-file-ignores]
+"src/geodude/__init__.py" = ["F401"]
+"src/geodude/**/__init__.py" = ["F401"]
 "src/geodude/demos/*.py" = ["F821"]
+"src/geodude/chat.py" = ["E501"]
+"src/geodude/panels/chat_panel.py" = ["E501"]

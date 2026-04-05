@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Browser chat panel for LLM robot control via Viser."""
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ if TYPE_CHECKING:
 @dataclass
 class _ChatEntry:
     """A single chat entry (user message, response, or tool group)."""
+
     kind: str  # "user", "bot", "tools", "status"
     text: str
     timestamp: float = field(default_factory=time.time)
@@ -48,18 +52,24 @@ class ChatPanel(PanelBase):
         with gui.add_folder("Chat", order=10):
             self._history_html = gui.add_html("")
             self._input = gui.add_text(
-                "Message", initial_value="",
+                "Message",
+                initial_value="",
                 hint="Type message, click Send",
             )
             self._send_btn = gui.add_button(
-                "Send", color="green", icon=viser.Icon.SEND,
+                "Send",
+                color="green",
+                icon=viser.Icon.SEND,
             )
             self._stop_btn = gui.add_button(
-                "Stop", color="red", icon=viser.Icon.PLAYER_STOP,
+                "Stop",
+                color="red",
+                icon=viser.Icon.PLAYER_STOP,
                 visible=False,
             )
             self._clear_btn = gui.add_button(
-                "Clear", icon=viser.Icon.TRASH,
+                "Clear",
+                icon=viser.Icon.TRASH,
             )
 
             @self._send_btn.on_click
@@ -69,7 +79,8 @@ class ChatPanel(PanelBase):
                     return
                 self._input.value = ""
                 threading.Thread(
-                    target=self._send_message, args=(msg, viewer),
+                    target=self._send_message,
+                    args=(msg, viewer),
                     daemon=True,
                 ).start()
 
@@ -107,6 +118,7 @@ class ChatPanel(PanelBase):
 
         # Capture tool call prints
         import builtins
+
         original_print = builtins.print
 
         def _capture_print(*args, **kwargs):
@@ -115,7 +127,9 @@ class ChatPanel(PanelBase):
             if stripped.startswith("\u2192") or stripped.startswith("\u2713") or stripped.startswith("\u2717"):
                 self._current_tools.append(stripped)
                 # Update thinking to show progress
-                thinking.text = f"Working... ({len(self._current_tools)} action{'s' if len(self._current_tools) != 1 else ''})"
+                thinking.text = (
+                    f"Working... ({len(self._current_tools)} action{'s' if len(self._current_tools) != 1 else ''})"
+                )
                 self._render()
             original_print(*args, **kwargs)
 
@@ -140,17 +154,25 @@ class ChatPanel(PanelBase):
 
         # Add tool calls as a group (if any)
         if self._current_tools:
-            self._add_entry(_ChatEntry(
-                kind="tools", text="", tool_lines=list(self._current_tools),
-            ))
+            self._add_entry(
+                _ChatEntry(
+                    kind="tools",
+                    text="",
+                    tool_lines=list(self._current_tools),
+                )
+            )
 
         turn_cost = self._chat.estimated_cost() - cost_before
 
         # Bot response
         if response:
-            self._add_entry(_ChatEntry(
-                kind="bot", text=response, cost=turn_cost,
-            ))
+            self._add_entry(
+                _ChatEntry(
+                    kind="bot",
+                    text=response,
+                    cost=turn_cost,
+                )
+            )
 
         self._render()
 
@@ -170,7 +192,7 @@ class ChatPanel(PanelBase):
             self._history_html.content = (
                 '<div style="padding:12px;background:#f5f5f5;border-radius:6px;'
                 'color:#999;font-size:13px;text-align:center;">'
-                'No messages yet. Type a command and click Send.</div>'
+                "No messages yet. Type a command and click Send.</div>"
             )
             return
 
@@ -184,35 +206,29 @@ class ChatPanel(PanelBase):
                     f'<div style="margin:6px 0;padding:6px 8px;'
                     f'background:#e8f0fe;border-radius:6px;">'
                     f'<b style="color:#1a6dd4;">You</b>{ts_html}<br>'
-                    f'{html.escape(entry.text)}</div>'
+                    f"{html.escape(entry.text)}</div>"
                 )
             elif entry.kind == "bot":
                 cost_html = ""
                 if entry.cost is not None:
-                    cost_html = (
-                        f'<span style="color:#aaa;font-size:11px;'
-                        f'margin-left:6px;">(${entry.cost:.4f})</span>'
-                    )
+                    cost_html = f'<span style="color:#aaa;font-size:11px;margin-left:6px;">(${entry.cost:.4f})</span>'
                 lines.append(
                     f'<div style="margin:6px 0;padding:6px 8px;'
                     f'background:#e8f8e8;border-radius:6px;">'
                     f'<b style="color:#1a8a4a;">Geodude</b>{ts_html}{cost_html}<br>'
-                    f'{_md_to_html(entry.text)}</div>'
+                    f"{_md_to_html(entry.text)}</div>"
                 )
             elif entry.kind == "tools":
                 n = len(entry.tool_lines)
                 summary = f"{n} action{'s' if n != 1 else ''}"
-                detail = "".join(
-                    f'<div style="margin:1px 0;">{html.escape(l)}</div>'
-                    for l in entry.tool_lines
-                )
+                detail = "".join(f'<div style="margin:1px 0;">{html.escape(line)}</div>' for line in entry.tool_lines)
                 lines.append(
                     f'<details style="margin:4px 0;font-size:12px;color:#666;">'
                     f'<summary style="cursor:pointer;font-family:monospace;">'
-                    f'{summary}</summary>'
+                    f"{summary}</summary>"
                     f'<div style="padding:4px 8px;font-family:monospace;'
                     f'background:#f0f0f0;border-radius:4px;margin-top:2px;">'
-                    f'{detail}</div></details>'
+                    f"{detail}</div></details>"
                 )
             elif entry.kind == "status":
                 lines.append(
@@ -223,21 +239,22 @@ class ChatPanel(PanelBase):
         inner = "\n".join(lines)
         self._history_html.content = (
             f'<div style="max-height:400px;overflow-y:auto;'
-            f'padding:8px;background:#f5f5f5;border-radius:6px;'
+            f"padding:8px;background:#f5f5f5;border-radius:6px;"
             f'font-size:13px;color:#222;">{inner}</div>'
         )
 
 
 def _md_to_html(text: str) -> str:
     import re
+
     text = html.escape(text)
-    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
     text = re.sub(
-        r'`(.+?)`',
+        r"`(.+?)`",
         r'<code style="background:#e0e0e0;padding:1px 4px;'
         r'border-radius:3px;">\1</code>',
         text,
     )
-    text = re.sub(r'^(\d+)\.\s', r'<br>\1. ', text, flags=re.MULTILINE)
-    text = text.replace('\n', '<br>')
+    text = re.sub(r"^(\d+)\.\s", r"<br>\1. ", text, flags=re.MULTILINE)
+    text = text.replace("\n", "<br>")
     return text

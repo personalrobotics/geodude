@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Geodude-specific behavior tree subtrees.
 
 Extends mj_manipulator.bt subtrees with bimanual arm selection
@@ -7,7 +10,6 @@ and automatic TSR generation.
 from __future__ import annotations
 
 import py_trees
-
 from mj_manipulator.bt import pickup_with_recovery, place_with_recovery
 
 from geodude.bt.nodes import GenerateGrasps, GeneratePlaceTSRs, LiftBase

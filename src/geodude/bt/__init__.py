@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Geodude-specific behavior tree nodes and subtrees.
 
 Extends mj_manipulator.bt with bimanual coordination, VentionBase

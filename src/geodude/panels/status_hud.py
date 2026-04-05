@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Status HUD overlay for the Viser browser viewer."""
 
 from __future__ import annotations

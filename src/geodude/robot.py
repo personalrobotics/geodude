@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Main Geodude robot interface.
 
 Composes mj_manipulator Arms, RobotiqGrippers, and VentionBases into a
@@ -8,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import random
-from typing import TYPE_CHECKING
 
 import mujoco
 import numpy as np
@@ -19,7 +21,6 @@ from mj_manipulator import (
     PlanResult,
     RobotiqGripper,
     SimContext,
-    Trajectory,
 )
 from mj_manipulator.arms.eaik_solver import MuJoCoEAIKSolver
 from mj_manipulator.arms.ur5e import (
@@ -178,6 +179,7 @@ class _ArmScope:
 
     def go_home(self, **kwargs) -> bool:
         from geodude.primitives import go_home
+
         return go_home(self._robot, arm=self._side, **kwargs)
 
     def close(self) -> str | None:
@@ -232,8 +234,7 @@ class Geodude:
         # Load MuJoCo model via mj_environment
         if not self.config.model_path.exists():
             raise FileNotFoundError(
-                f"MuJoCo model not found: {self.config.model_path}\n"
-                "Make sure geodude_assets is available."
+                f"MuJoCo model not found: {self.config.model_path}\nMake sure geodude_assets is available."
             )
 
         if objects:
@@ -274,11 +275,17 @@ class Geodude:
         self._right_base: VentionBase | None = None
         if self.config.left_base is not None:
             self._left_base = VentionBase(
-                self.model, self.data, self.config.left_base, self._left_arm,
+                self.model,
+                self.data,
+                self.config.left_base,
+                self._left_arm,
             )
         if self.config.right_base is not None:
             self._right_base = VentionBase(
-                self.model, self.data, self.config.right_base, self._right_arm,
+                self.model,
+                self.data,
+                self.config.right_base,
+                self._right_arm,
             )
 
         # Named poses from keyframes
@@ -294,6 +301,7 @@ class Geodude:
 
         # Abort flag (thread-safe, shared between terminal and Viser)
         import threading
+
         self._abort_event = threading.Event()
 
     # -----------------------------------------------------------------
@@ -348,13 +356,18 @@ class Geodude:
 
         # Create Robotiq gripper
         gripper = RobotiqGripper(
-            self.model, self.data, name, prefix=spec.gripper_prefix,
+            self.model,
+            self.data,
+            name,
+            prefix=spec.gripper_prefix,
             grasp_manager=self.grasp_manager,
         )
 
         return Arm(
-            self._env, arm_config,
-            ik_solver=ik_solver, gripper=gripper,
+            self._env,
+            arm_config,
+            ik_solver=ik_solver,
+            gripper=gripper,
             grasp_manager=self.grasp_manager,
         )
 
@@ -373,18 +386,22 @@ class Geodude:
     @property
     def left_arm(self) -> Arm:
         import warnings
+
         warnings.warn(
             "robot.left_arm is deprecated. Use robot.left instead.",
-            DeprecationWarning, stacklevel=2,
+            DeprecationWarning,
+            stacklevel=2,
         )
         return self._left_arm
 
     @property
     def right_arm(self) -> Arm:
         import warnings
+
         warnings.warn(
             "robot.right_arm is deprecated. Use robot.right instead.",
-            DeprecationWarning, stacklevel=2,
+            DeprecationWarning,
+            stacklevel=2,
         )
         return self._right_arm
 
@@ -488,9 +505,13 @@ class Geodude:
         if self._right_base is not None:
             entities[self._right_base.config.name] = self._right_base
         inner = SimContext(
-            self.model, self.data, arms,
-            physics=physics, headless=headless,
-            viewer=viewer, viewer_fps=viewer_fps,
+            self.model,
+            self.data,
+            arms,
+            physics=physics,
+            headless=headless,
+            viewer=viewer,
+            viewer_fps=viewer_fps,
             entities=entities,
             abort_fn=self.is_abort_requested,
         )
@@ -608,8 +629,7 @@ class Geodude:
         # Try each combination
         results: list[PlanResult] = []
         for a, h in sequence:
-            result = self._plan_single(a, h, goal_tsrs=goal_tsrs, pose=pose,
-                                       timeout=timeout, seed=seed)
+            result = self._plan_single(a, h, goal_tsrs=goal_tsrs, pose=pose, timeout=timeout, seed=seed)
             if result is not None:
                 if strategy == "first":
                     return result
@@ -761,6 +781,7 @@ class Geodude:
             robot.find_objects("can")    # ['can_0', 'can_1']
         """
         from geodude.bt.nodes import _find_scene_objects
+
         return [name for name, _ in _find_scene_objects(self, target)]
 
     # -- Primitives (delegate to primitives module) --------------------------
@@ -774,6 +795,7 @@ class Geodude:
             verbose: Show BT tree status.
         """
         from geodude.primitives import pickup
+
         return pickup(self, target, **kwargs)
 
     def place(self, destination: str | None = None, **kwargs) -> bool:
@@ -785,11 +807,13 @@ class Geodude:
             verbose: Show BT tree status.
         """
         from geodude.primitives import place
+
         return place(self, destination, **kwargs)
 
     def go_home(self) -> bool:
         """Return all arms to ready configuration."""
         from geodude.primitives import go_home
+
         return go_home(self)
 
     # -- State management ----------------------------------------------------
@@ -833,7 +857,7 @@ class Geodude:
         if self._env.registry is not None:
             hide_pos = self._env.hide_pos
             for qpos_adr in self._freejoint_qpos_addrs:
-                self.data.qpos[qpos_adr:qpos_adr + 3] = hide_pos
+                self.data.qpos[qpos_adr : qpos_adr + 3] = hide_pos
             # Clear the registry's active state
             for name in list(self._env.registry.active_objects):
                 self._env.registry.hide(name)
@@ -881,13 +905,11 @@ class Geodude:
 
         import yaml
 
-        config = {
-            "objects": {
-                obj_type: {"count": count} for obj_type, count in objects.items()
-            }
-        }
+        config = {"objects": {obj_type: {"count": count} for obj_type, count in objects.items()}}
         temp_file = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False,
+            mode="w",
+            suffix=".yaml",
+            delete=False,
         )
         yaml.dump(config, temp_file)
         temp_file.close()

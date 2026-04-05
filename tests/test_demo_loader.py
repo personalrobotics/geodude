@@ -1,14 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Tests for demo discovery, loading, and scene setup."""
 
 import pytest
 
 from geodude.demo_loader import (
     discover_demos,
+    get_demo_functions,
+    inject_robot,
     load_demo,
     resolve_scene,
     setup_robot,
-    get_demo_functions,
-    inject_robot,
 )
 
 

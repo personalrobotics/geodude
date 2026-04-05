@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Robot configuration for Geodude."""
 
 from __future__ import annotations
@@ -6,8 +9,6 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-
-import numpy as np
 
 # Try to import geodude_assets for model paths, fall back to None if not installed
 try:
@@ -69,9 +70,7 @@ class VentionBaseConfig:
     actuator_name: str = ""  # MuJoCo actuator name
     height_range: tuple[float, float] = (0.0, 0.5)  # meters (min, max)
     collision_check_resolution: float = 0.01  # meters between collision checks
-    kinematic_limits: VentionKinematicLimits = field(
-        default_factory=VentionKinematicLimits.default
-    )
+    kinematic_limits: VentionKinematicLimits = field(default_factory=VentionKinematicLimits.default)
 
 
 # ---------------------------------------------------------------------------
@@ -205,10 +204,7 @@ class GeodudConfig:
     def default(cls) -> GeodudConfig:
         """Create default configuration for Geodude with Robotiq grippers."""
         if get_model_path is None:
-            raise ImportError(
-                "geodude_assets package not found. Install it with:\n"
-                "  uv add geodude_assets"
-            )
+            raise ImportError("geodude_assets package not found. Install it with:\n  uv add geodude_assets")
         return cls(
             model_path=get_model_path(),
             left_arm=GeodudeArmSpec(

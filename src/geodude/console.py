@@ -405,6 +405,6 @@ IPython:
                     if remaining > 0:
                         time.sleep(remaining)
 
-            shell.set_inputhook(_physics_inputhook)
+            shell.inputhook = _physics_inputhook
 
         shell()

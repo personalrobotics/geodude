@@ -391,10 +391,10 @@ IPython:
         # -- Continuous physics via IPython inputhook --------------------------
         # Step MuJoCo while the prompt is idle. Runs on the main thread (no
         # thread-safety issues). Same pattern as mjpython's viewer loop.
+        # Non-blocking acquire: if teleop/chat holds the lock, skip the
+        # cycle rather than blocking the prompt.
         if physics:
-            from mj_viser.teleop_panel import TeleopPanel
-
-            sim_lock = TeleopPanel._sim_lock
+            sim_lock = ctx.sim_lock
 
             def _physics_inputhook(context):
                 while not context.input_is_ready():

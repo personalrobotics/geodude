@@ -48,4 +48,5 @@ def create_teleop_panel(
         arm_label=f"{side.title()} Arm",
         abort_fn=robot.is_abort_requested,
         clear_abort_fn=robot.clear_abort,
+        sim_lock=ctx.sim_lock,
     )

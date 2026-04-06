@@ -389,10 +389,10 @@ IPython:
         shell.magics_manager.register_alias("chat", "chat_magic")
 
         # -- Continuous physics via IPython inputhook --------------------------
-        # Step MuJoCo while the prompt is idle. Runs on the main thread (no
-        # thread-safety issues). Same pattern as mjpython's viewer loop.
-        # Non-blocking acquire: if teleop/chat holds the lock, skip the
-        # cycle rather than blocking the prompt.
+        # Step MuJoCo while the prompt is idle. Uses step_idle() which
+        # applies last-set targets with zero velocity feedforward — holds
+        # position without the trajectory-level lookahead that step() uses.
+        # Non-blocking lock acquire: if teleop/chat is stepping, skip.
         if physics:
             sim_lock = ctx.sim_lock
 
@@ -401,11 +401,9 @@ IPython:
                     t0 = time.time()
                     if sim_lock.acquire(blocking=False):
                         try:
-                            ctx.step()
-                        except Exception:
+                            ctx.step_idle()
+                        finally:
                             sim_lock.release()
-                            break
-                        sim_lock.release()
                     elapsed = time.time() - t0
                     remaining = ctx.control_dt - elapsed
                     if remaining > 0:

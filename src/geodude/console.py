@@ -406,15 +406,17 @@ IPython:
 
         # -- Physics inputhook: main event loop while prompt is idle ----------
         if physics:
+            control_dt = ctx.control_dt  # 0.008s = 125 Hz
 
             def _geodude_inputhook(context):
+                t_next = time.monotonic() + control_dt
                 while not context.input_is_ready():
-                    t0 = time.time()
-                    event_loop.tick()
-                    elapsed = time.time() - t0
-                    remaining = (1.0 / 60.0) - elapsed
-                    if remaining > 0:
-                        time.sleep(remaining)
+                    now = time.monotonic()
+                    if now >= t_next:
+                        event_loop.tick()
+                        t_next = now + control_dt
+                    else:
+                        time.sleep(min(t_next - now, 0.001))
 
             shell._inputhook = _geodude_inputhook
 

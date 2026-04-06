@@ -22,6 +22,7 @@ def create_teleop_panel(
     robot: Geodude,
     ctx: SimContext,
     side: str = "right",
+    event_loop=None,
 ) -> TeleopPanel:
     """Create a TeleopPanel for a Geodude arm.
 
@@ -48,4 +49,5 @@ def create_teleop_panel(
         arm_label=f"{side.title()} Arm",
         abort_fn=robot.is_abort_requested,
         clear_abort_fn=robot.clear_abort,
+        event_loop=event_loop,
     )

@@ -13,6 +13,7 @@ import inspect
 import logging
 import os
 import textwrap
+import time
 from types import ModuleType
 from typing import TYPE_CHECKING
 
@@ -344,10 +345,24 @@ IPython:
 
         print("  Viser viewer: http://localhost:8080")
 
+    # -- Event loop: single-threaded MuJoCo access ----------------------------
+    # All mj_step/mj_forward calls happen on the main thread. Background
+    # threads (chat, viser callbacks) dispatch through the event loop.
+    from mj_manipulator.event_loop import PhysicsEventLoop
+
+    event_loop = PhysicsEventLoop()
+
     # Pass viser viewer to SimContext so executors can sync it during trajectories
     sim_viewer = viser_viewer if viser else None
-    with robot.sim(physics=physics, headless=not viewer, viewer=sim_viewer) as ctx:
+    with robot.sim(
+        physics=physics, headless=not viewer, viewer=sim_viewer, event_loop=event_loop
+    ) as ctx:
         user_ns["ctx"] = ctx
+
+        # Wire event loop idle/sync functions now that ctx exists
+        event_loop._idle_step_fn = lambda: ctx.step()
+        if viser_viewer is not None:
+            event_loop._viewer_sync_fn = lambda: viser_viewer.sync()
 
         # Teleop panels (needs ctx, so created after sim context)
         if viser and viser_viewer is not None:
@@ -356,7 +371,9 @@ IPython:
             gui = viser_viewer._server.gui
             with tabs.add_tab("Teleop"):
                 for side in ("right", "left"):
-                    teleop_panel = create_teleop_panel(robot, ctx, side=side)
+                    teleop_panel = create_teleop_panel(
+                        robot, ctx, side=side, event_loop=event_loop
+                    )
                     teleop_panel.setup(gui, viser_viewer)
                     viser_viewer._panels.append(teleop_panel)
 
@@ -386,4 +403,19 @@ IPython:
             chat(line)
 
         shell.magics_manager.register_alias("chat", "chat_magic")
+
+        # -- Physics inputhook: main event loop while prompt is idle ----------
+        if physics:
+
+            def _geodude_inputhook(context):
+                while not context.input_is_ready():
+                    t0 = time.time()
+                    event_loop.tick()
+                    elapsed = time.time() - t0
+                    remaining = (1.0 / 60.0) - elapsed
+                    if remaining > 0:
+                        time.sleep(remaining)
+
+            shell._inputhook = _geodude_inputhook
+
         shell()

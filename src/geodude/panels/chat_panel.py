@@ -49,52 +49,53 @@ class ChatPanel(PanelBase):
         return "Chat"
 
     def setup(self, gui: viser.GuiApi, viewer: MujocoViewer) -> None:
-        with gui.add_folder("Chat", order=10):
-            self._history_html = gui.add_html("")
-            self._input = gui.add_text(
-                "Message",
-                initial_value="",
-                hint="Type message, click Send",
-            )
-            self._send_btn = gui.add_button(
-                "Send",
-                color="green",
-                icon=viser.Icon.SEND,
-            )
-            self._stop_btn = gui.add_button(
-                "Stop",
-                color="red",
-                icon=viser.Icon.PLAYER_STOP,
-                visible=False,
-            )
-            self._clear_btn = gui.add_button(
-                "Clear",
-                icon=viser.Icon.TRASH,
-            )
+        # No folder wrapper — the caller (console.py) already places this
+        # inside a tab via `with tabs.add_tab("Chat"):`.
+        self._history_html = gui.add_html("")
+        self._input = gui.add_text(
+            "Message",
+            initial_value="",
+            hint="Type message, click Send",
+        )
+        self._send_btn = gui.add_button(
+            "Send",
+            color="green",
+            icon=viser.Icon.SEND,
+        )
+        self._stop_btn = gui.add_button(
+            "Stop",
+            color="red",
+            icon=viser.Icon.PLAYER_STOP,
+            visible=False,
+        )
+        self._clear_btn = gui.add_button(
+            "Clear",
+            icon=viser.Icon.TRASH,
+        )
 
-            @self._send_btn.on_click
-            def _(_: viser.GuiEvent) -> None:
-                msg = self._input.value.strip()
-                if not msg or self._running:
-                    return
-                self._input.value = ""
-                threading.Thread(
-                    target=self._send_message,
-                    args=(msg, viewer),
-                    daemon=True,
-                ).start()
+        @self._send_btn.on_click
+        def _(_: viser.GuiEvent) -> None:
+            msg = self._input.value.strip()
+            if not msg or self._running:
+                return
+            self._input.value = ""
+            threading.Thread(
+                target=self._send_message,
+                args=(msg, viewer),
+                daemon=True,
+            ).start()
 
-            @self._stop_btn.on_click
-            def _(_: viser.GuiEvent) -> None:
-                self._stop_requested = True
-                self._add_entry(_ChatEntry(kind="status", text="Stopped by user"))
-                self._render()
+        @self._stop_btn.on_click
+        def _(_: viser.GuiEvent) -> None:
+            self._stop_requested = True
+            self._add_entry(_ChatEntry(kind="status", text="Stopped by user"))
+            self._render()
 
-            @self._clear_btn.on_click
-            def _(_: viser.GuiEvent) -> None:
-                with self._lock:
-                    self._entries.clear()
-                self._render()
+        @self._clear_btn.on_click
+        def _(_: viser.GuiEvent) -> None:
+            with self._lock:
+                self._entries.clear()
+            self._render()
 
     def on_sync(self, viewer: MujocoViewer) -> None:
         pass

@@ -13,6 +13,7 @@ import inspect
 import logging
 import os
 import textwrap
+import time
 from types import ModuleType
 from typing import TYPE_CHECKING
 
@@ -386,4 +387,24 @@ IPython:
             chat(line)
 
         shell.magics_manager.register_alias("chat", "chat_magic")
+
+        # -- Continuous physics via IPython inputhook --------------------------
+        # Step MuJoCo while the prompt is idle. Runs on the main thread (no
+        # thread-safety issues). Same pattern as mjpython's viewer loop.
+        if physics:
+
+            def _physics_inputhook(context):
+                while not context.input_is_ready():
+                    t0 = time.time()
+                    try:
+                        ctx.step()
+                    except Exception:
+                        break
+                    elapsed = time.time() - t0
+                    remaining = ctx.control_dt - elapsed
+                    if remaining > 0:
+                        time.sleep(remaining)
+
+            shell.set_inputhook(_physics_inputhook)
+
         shell()

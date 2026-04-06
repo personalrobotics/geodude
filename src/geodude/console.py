@@ -392,14 +392,20 @@ IPython:
         # Step MuJoCo while the prompt is idle. Runs on the main thread (no
         # thread-safety issues). Same pattern as mjpython's viewer loop.
         if physics:
+            from mj_viser.teleop_panel import TeleopPanel
+
+            sim_lock = TeleopPanel._sim_lock
 
             def _physics_inputhook(context):
                 while not context.input_is_ready():
                     t0 = time.time()
-                    try:
-                        ctx.step()
-                    except Exception:
-                        break
+                    if sim_lock.acquire(blocking=False):
+                        try:
+                            ctx.step()
+                        except Exception:
+                            sim_lock.release()
+                            break
+                        sim_lock.release()
                     elapsed = time.time() - t0
                     remaining = ctx.control_dt - elapsed
                     if remaining > 0:

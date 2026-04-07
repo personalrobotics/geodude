@@ -486,7 +486,6 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
         verbose = robot.config.debug.verbose
 
     robot.clear_abort()
-    _deactivate_teleop_for_arms(robot)
     try:
         return _go_home_inner(robot, ctx, arm=arm, verbose=verbose)
     except KeyboardInterrupt:

@@ -309,11 +309,19 @@ class Geodude:
     # -----------------------------------------------------------------
 
     def request_abort(self) -> None:
-        """Signal all running operations to stop."""
+        """Signal all running operations to stop.
+
+        When an ownership registry is available (tick-driven mode), aborts
+        all arms via per-arm flags. Falls back to global event otherwise.
+        """
+        if self._context is not None and self._context.ownership is not None:
+            self._context.ownership.abort_all()
         self._abort_event.set()
 
     def clear_abort(self) -> None:
         """Clear the abort flag (call before starting a new operation)."""
+        if self._context is not None and self._context.ownership is not None:
+            self._context.ownership.clear_all()
         self._abort_event.clear()
 
     def is_abort_requested(self) -> bool:

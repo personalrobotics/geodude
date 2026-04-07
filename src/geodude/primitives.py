@@ -51,6 +51,24 @@ def _sync_viewer(robot) -> None:
             pass
 
 
+def _deactivate_teleop_for_arms(robot: Geodude) -> None:
+    """Deactivate teleop on all arms before a user-initiated primitive.
+
+    Called at the entry of pickup/place/go_home — the user explicitly
+    issued a command, so teleop should yield. Internal retries and
+    recovery within the primitive do NOT call this.
+    """
+    ctx = robot._active_context
+    if ctx is None or ctx.ownership is None:
+        return
+    from mj_manipulator.ownership import OwnerKind
+
+    for arm_name in ctx.ownership.arm_names:
+        kind, _ = ctx.ownership.owner_of(arm_name)
+        if kind == OwnerKind.TELEOP:
+            ctx._deactivate_teleop_for(arm_name)
+
+
 def _is_container_destination(destination: str | None) -> bool:
     """Check if a destination name refers to a container (bin, tote).
 
@@ -193,6 +211,7 @@ def pickup(
         verbose = robot.config.debug.verbose
 
     robot.clear_abort()
+    _deactivate_teleop_for_arms(robot)
     try:
         return _pickup_inner(robot, target, arm=arm, verbose=verbose)
     except KeyboardInterrupt:
@@ -374,6 +393,7 @@ def place(
         verbose = robot.config.debug.verbose
 
     robot.clear_abort()
+    _deactivate_teleop_for_arms(robot)
     try:
         return _place_inner(robot, destination, arm=arm, verbose=verbose)
     except KeyboardInterrupt:
@@ -466,6 +486,7 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
         verbose = robot.config.debug.verbose
 
     robot.clear_abort()
+    _deactivate_teleop_for_arms(robot)
     try:
         return _go_home_inner(robot, ctx, arm=arm, verbose=verbose)
     except KeyboardInterrupt:

@@ -21,11 +21,11 @@ dependencies = [
     "pyyaml",
     "py_trees>=2.2",
     "ipython>=8.0",
-    "mj-manipulator",
-    "mj_environment @ git+https://github.com/personalrobotics/mj_environment.git",
-    "geodude-assets",
-    "prl-assets",
-    "tsr",
+    "mj-manipulator @ git+https://github.com/personalrobotics/mj_manipulator.git",
+    "mj-environment @ git+https://github.com/personalrobotics/mj_environment.git",
+    "geodude-assets @ git+https://github.com/personalrobotics/geodude_assets.git",
+    "prl-assets @ git+https://github.com/personalrobotics/prl_assets.git",
+    "tsr @ git+https://github.com/personalrobotics/tsr.git",
     "eaik",
 ]
 

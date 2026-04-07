@@ -51,4 +51,5 @@ def create_teleop_panel(
         clear_abort_fn=robot.clear_abort,
         request_abort_fn=robot.request_abort,
         event_loop=event_loop,
+        ownership=ctx.ownership,
     )

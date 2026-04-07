@@ -484,6 +484,7 @@ class Geodude:
         viewer=None,
         viewer_fps: float = 30.0,
         headless: bool = False,
+        event_loop=None,
     ) -> _GeodudeSimContext:
         """Create simulation execution context.
 
@@ -514,6 +515,7 @@ class Geodude:
             viewer_fps=viewer_fps,
             entities=entities,
             abort_fn=self.is_abort_requested,
+            event_loop=event_loop,
         )
         return _GeodudeSimContext(inner, self)
 

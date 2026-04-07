@@ -354,9 +354,7 @@ IPython:
 
     # Pass viser viewer to SimContext so executors can sync it during trajectories
     sim_viewer = viser_viewer if viser else None
-    with robot.sim(
-        physics=physics, headless=not viewer, viewer=sim_viewer, event_loop=event_loop
-    ) as ctx:
+    with robot.sim(physics=physics, headless=not viewer, viewer=sim_viewer, event_loop=event_loop) as ctx:
         user_ns["ctx"] = ctx
 
         # Wire event loop idle/sync functions now that ctx exists
@@ -371,9 +369,7 @@ IPython:
             gui = viser_viewer._server.gui
             with tabs.add_tab("Teleop"):
                 for side in ("right", "left"):
-                    teleop_panel = create_teleop_panel(
-                        robot, ctx, side=side, event_loop=event_loop
-                    )
+                    teleop_panel = create_teleop_panel(robot, ctx, side=side, event_loop=event_loop)
                     teleop_panel.setup(gui, viser_viewer)
                     viser_viewer._panels.append(teleop_panel)
 

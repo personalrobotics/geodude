@@ -3,8 +3,9 @@
 
 """IPython console for Geodude with integrated LLM chat.
 
-Provides tab completion, introspection, demo functions, and optional
-natural language control via LLM.
+Delegates to mj_manipulator's generic console for physics event loop,
+viser viewer, teleop panels, and IPython shell. Adds Geodude-specific
+panels (chat, sensors, status HUD) and demo infrastructure via hooks.
 """
 
 from __future__ import annotations
@@ -34,8 +35,14 @@ def start_console(
     objects: dict | None = None,
     fixtures: dict | None = None,
 ) -> None:
-    """Launch the IPython console with robot, chat, and demo functions."""
-    import numpy as np
+    """Launch the Geodude IPython console.
+
+    Delegates to mj_manipulator.console.start_console with
+    Geodude-specific panels and namespace entries.
+    """
+    from mj_manipulator.console import start_console as _start_console
+
+    from geodude.primitives import go_home, pickup, place
 
     mode = "physics" if physics else "kinematic"
 
@@ -79,15 +86,15 @@ def start_console(
             print(f"\nGeodude [{mode}]: {response}\n")
 
     # -- Demo helpers --------------------------------------------------------
+    viser_viewer_ref = [None]  # mutable ref set by panel_setup
+
     def reset() -> None:
         """Reset the demo — robot to ready, objects re-scattered, chat history cleared."""
         nonlocal chat_session
         from geodude.demo_loader import _spawn_manipulable_objects
 
-        robot.request_abort()  # stop teleop thread before touching MuJoCo data
-        import time
-
-        time.sleep(0.1)  # let teleop loop exit
+        robot.request_abort()
+        time.sleep(0.1)
         robot.reset()
         robot.clear_abort()
         fixture_types = set(fixtures.keys()) if fixtures else set()
@@ -98,8 +105,8 @@ def start_console(
         if chat_session is not None:
             chat_session.messages.clear()
             chat_session.action_log.clear()
-        if viser_viewer is not None:
-            viser_viewer._scene_mgr.clear_selection()
+        if viser_viewer_ref[0] is not None:
+            viser_viewer_ref[0]._scene_mgr.clear_selection()
         print("Scene reset.")
 
     def demos() -> None:
@@ -115,22 +122,33 @@ def start_console(
         if not description:
             description = input("Description (one line): ").strip() or name
 
-        # Build scene dict from current config
         scene_dict = {}
         if objects:
             scene_dict["objects"] = objects
         if fixtures:
             scene_dict["fixtures"] = fixtures
 
-        # Find user-defined functions (not in initial namespace)
         user_funcs = {}
-        ip = get_ipython()  # noqa: F821 — available inside IPython
+        ip = get_ipython()  # noqa: F821
         for k, v in ip.user_ns.items():
             if (
                 callable(v)
                 and not k.startswith("_")
-                and k not in _initial_ns
-                and k not in ("chat", "commands", "demos", "save_demo", "exit", "quit", "get_ipython")
+                and k
+                not in (
+                    "chat",
+                    "commands",
+                    "demos",
+                    "save_demo",
+                    "exit",
+                    "quit",
+                    "get_ipython",
+                    "pickup",
+                    "place",
+                    "go_home",
+                    "reset",
+                    "token_usage",
+                )
             ):
                 try:
                     src = inspect.getsource(v)
@@ -138,7 +156,6 @@ def start_console(
                 except OSError:
                     print(f"  Warning: couldn't get source for '{k}', skipping")
 
-        # Write demo file
         path = DEMOS_DIR / f"{name}.py"
         with open(path, "w") as f:
             f.write(f'"""{description}"""\n\n')
@@ -151,7 +168,8 @@ def start_console(
 
     def commands() -> None:
         """Print a quick reference of available commands."""
-        print("""
+        print(
+            """
 Geodude Quick Reference
 =======================
 
@@ -193,7 +211,8 @@ IPython:
   ?robot.pickup                     — docstring
   ??robot.pickup                    — source code
   whos                              — list all variables
-""")
+"""
+        )
 
     def token_usage() -> None:
         """Print LLM token usage and estimated cost for this session."""
@@ -203,16 +222,17 @@ IPython:
             return
         print(s.token_usage())
 
-    # -- Build namespace -----------------------------------------------------
-    user_ns: dict = {
-        "robot": robot,
-        "np": np,
+    # -- Extra namespace entries -----------------------------------------------
+    extra_ns: dict = {
         "chat": chat,
         "commands": commands,
         "demos": demos,
         "save_demo": save_demo,
         "reset": reset,
         "token_usage": token_usage,
+        "pickup": lambda target=None, **kw: pickup(robot, target, **kw),
+        "place": lambda dest=None, **kw: place(robot, dest, **kw),
+        "go_home": lambda **kw: go_home(robot, **kw),
     }
 
     if demo_module is not None:
@@ -220,50 +240,14 @@ IPython:
 
         inject_robot(demo_module, robot)
         for name_fn, func in get_demo_functions(demo_module).items():
-            user_ns[name_fn] = func
+            extra_ns[name_fn] = func
 
-    # Snapshot initial namespace (for save_demo to identify user functions)
-    _initial_ns = set(user_ns.keys())
+    # -- Panel setup callback --------------------------------------------------
+    def _setup_geodude_panels(gui, viewer, robot, event_loop, tabs):
+        nonlocal chat_session
+        viser_viewer_ref[0] = viewer
 
-    # -- Banner --------------------------------------------------------------
-    n_objects = len(robot.find_objects())
-    demo_name = getattr(demo_module, "__name__", "").rsplit(".", 1)[-1] if demo_module else None
-    demo_str = f" | demo: {demo_name}" if demo_name else ""
-
-    viewer_str = " | viser" if viser else " | viewer" if viewer else ""
-    banner = f"\n{'=' * 60}\n  Geodude [{mode}] | 2 arms | {n_objects} objects{demo_str}{viewer_str}\n"
-    if viser:
-        banner += "  Browser: http://localhost:8080\n"
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        banner += f"  LLM: {model_name}\n"
-    banner += (
-        f"{'=' * 60}\n\n"
-        f"  commands()   — quick reference\n"
-        f"  chat('msg')  — LLM control\n"
-        f"  robot.<tab>  — tab completion\n"
-    )
-
-    if demo_module and demo_module.__doc__:
-        desc = demo_module.__doc__.strip()
-        banner += f"\n  {desc}\n"
-
-    # -- Launch IPython inside sim context -----------------------------------
-    from IPython.terminal.embed import InteractiveShellEmbed
-
-    # Launch viser viewer if requested (runs alongside sim context)
-    viser_viewer = None
-    if viser:
-        from mj_viser import MujocoViewer
-
-        viser_viewer = MujocoViewer(
-            robot.model,
-            robot.data,
-            label="Geodude",
-            show_sim_controls=False,
-            show_visibility=False,
-        )
-
-        # Build sensor panels (not added via add_panel — we'll set them up in tabs)
+        # Sensor panels
         from mj_viser import SensorChannel, SensorPanel
 
         sensor_panels = []
@@ -289,7 +273,7 @@ IPython:
                     )
                 )
 
-        # Build chat panel
+        # Chat panel
         chat_panel = None
         if os.environ.get("ANTHROPIC_API_KEY"):
             chat_session = _get_chat()
@@ -298,122 +282,34 @@ IPython:
 
                 chat_panel = ChatPanel(chat_session)
 
-        # Set up tabbed layout — panels inside tabs to avoid vertical overflow.
-        # We call setup() manually inside tab contexts, then register for
-        # on_sync via _panels list (bypassing add_panel which would re-setup).
-        gui = viser_viewer._server.gui
-
-        # Stop button — above tabs so it's always visible
-        stop_btn = gui.add_button("Stop", color="red")
-
-        @stop_btn.on_click
-        def _on_stop(event):
-            robot.request_abort()
-            hud = getattr(robot, "_status_hud", None)
-            if hud is not None:
-                hud.set_action("left", "⊘ STOP")
-                hud.set_action("right", "⊘ STOP")
-
-        tabs = gui.add_tab_group()
-
         all_panels = []
         if chat_panel is not None:
             with tabs.add_tab("Chat"):
-                chat_panel.setup(gui, viser_viewer)
+                chat_panel.setup(gui, viewer)
             all_panels.append(chat_panel)
         if sensor_panels:
             with tabs.add_tab("Sensors"):
                 for sp in sensor_panels:
-                    sp.setup(gui, viser_viewer)
+                    sp.setup(gui, viewer)
                     all_panels.append(sp)
 
-        # Status HUD overlay — store on robot so primitives can update it
+        # Status HUD overlay
         from geodude.panels.status_hud import StatusHud
 
         status_hud = StatusHud(robot, mode)
         robot._status_hud = status_hud
         all_panels.append(status_hud)
 
-        # Build scene (no panels registered via add_panel — we set them up above)
-        viser_viewer.launch_passive(open_browser=False)
+        viewer._panels.extend(all_panels)
+        status_hud.setup(gui, viewer)
 
-        # Register panels for on_sync after launch
-        viser_viewer._panels.extend(all_panels)
-
-        # Initialize HUD after launch
-        status_hud.setup(viser_viewer._server.gui, viser_viewer)
-
-        print("  Viser viewer: http://localhost:8080")
-
-    # -- Event loop: single-threaded MuJoCo access ----------------------------
-    # All mj_step/mj_forward calls happen on the main thread. Background
-    # threads (chat, viser callbacks) dispatch through the event loop.
-    from mj_manipulator.event_loop import PhysicsEventLoop
-
-    event_loop = PhysicsEventLoop()
-
-    # Pass viser viewer to SimContext so executors can sync it during trajectories
-    sim_viewer = viser_viewer if viser else None
-    with robot.sim(physics=physics, headless=not viewer, viewer=sim_viewer, event_loop=event_loop) as ctx:
-        user_ns["ctx"] = ctx
-
-        # Wire event loop idle/sync functions now that ctx exists
-        event_loop._idle_step_fn = lambda: ctx.step()
-        if viser_viewer is not None:
-            event_loop._viewer_sync_fn = lambda: viser_viewer.sync()
-
-        # Teleop panels (needs ctx, so created after sim context)
-        if viser and viser_viewer is not None:
-            from geodude.panels.teleop_panel import create_teleop_panel
-
-            gui = viser_viewer._server.gui
-            with tabs.add_tab("Teleop"):
-                for side in ("right", "left"):
-                    teleop_panel = create_teleop_panel(robot, ctx, side=side, event_loop=event_loop)
-                    teleop_panel.setup(gui, viser_viewer)
-                    viser_viewer._panels.append(teleop_panel)
-
-        from IPython.terminal.prompts import Prompts, Token
-
-        class GeodudePrompts(Prompts):
-            def in_prompt_tokens(self, cli=None):
-                return [
-                    (Token.Prompt, f"Geodude [{mode}] [{self.shell.execution_count}]: "),
-                ]
-
-            def out_prompt_tokens(self, cli=None):
-                return [
-                    (Token.OutPrompt, f"Out[{self.shell.execution_count}]: "),
-                ]
-
-        shell = InteractiveShellEmbed(
-            header=banner,
-            user_ns=user_ns,
-            colors="neutral",
-        )
-        shell.prompts = GeodudePrompts(shell)
-
-        @shell.register_magic_function
-        def chat_magic(line):
-            """%chat <message> — send a message to the LLM."""
-            chat(line)
-
-        shell.magics_manager.register_alias("chat", "chat_magic")
-
-        # -- Physics inputhook: main event loop while prompt is idle ----------
-        if physics:
-            control_dt = ctx.control_dt  # 0.008s = 125 Hz
-
-            def _geodude_inputhook(context):
-                t_next = time.monotonic() + control_dt
-                while not context.input_is_ready():
-                    now = time.monotonic()
-                    if now >= t_next:
-                        event_loop.tick()
-                        t_next = now + control_dt
-                    else:
-                        time.sleep(min(t_next - now, 0.001))
-
-            shell._inputhook = _geodude_inputhook
-
-        shell()
+    # -- Delegate to generic console -------------------------------------------
+    _start_console(
+        robot,
+        physics=physics,
+        viser=viser,
+        headless=not viewer,
+        robot_name="Geodude",
+        extra_ns=extra_ns,
+        panel_setup=_setup_geodude_panels if viser else None,
+    )

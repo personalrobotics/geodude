@@ -426,6 +426,20 @@ class Geodude:
         return self._env
 
     @property
+    def arms(self) -> dict[str, Arm]:
+        """All arms, keyed by side name."""
+        return {"left": self._left_arm, "right": self._right_arm}
+
+    @property
+    def grasp_source(self):
+        """GraspSource backed by prl_assets geometry."""
+        if not hasattr(self, "_grasp_source"):
+            from geodude.grasp_source import GeodueGraspSource
+
+            self._grasp_source = GeodueGraspSource(self)
+        return self._grasp_source
+
+    @property
     def named_poses(self) -> dict[str, dict[str, list[float]]]:
         return self._named_poses
 

@@ -251,9 +251,7 @@ def _pickup_inner(
 ) -> bool:
     """Core pickup logic (separated for KeyboardInterrupt wrapping)."""
     # Quick check: are there any matching objects?
-    from geodude.bt.nodes import _find_scene_objects
-
-    if not _find_scene_objects(robot, target):
+    if not robot.find_objects(target):
         desc = f"'{target}'" if target else "any object"
         logger.warning("Pickup failed: no graspable objects found for %s", desc)
         return False

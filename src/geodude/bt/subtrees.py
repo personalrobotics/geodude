@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import py_trees
 from mj_manipulator.bt import pickup_with_recovery, place_with_recovery
+from mj_manipulator.bt.nodes import GenerateGrasps, GeneratePlaceTSRs
 
-from geodude.bt.nodes import GenerateGrasps, GeneratePlaceTSRs, LiftBase
+from geodude.bt.nodes import LiftBase
 
 
 def geodude_pickup(ns: str) -> py_trees.composites.Sequence:

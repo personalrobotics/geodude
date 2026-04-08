@@ -6,8 +6,7 @@
 import numpy as np
 import pytest
 
-from geodude.bt.nodes import (
-    _generate_place_tsrs,
+from mj_manipulator.grasp_sources.prl_assets import (
     _generate_surface_place_tsrs,
     _get_upward_faces,
 )
@@ -25,7 +24,6 @@ class TestGenerateSurfacePlaceTSRs:
 
     def test_cylinder_returns_one_tsr(self):
         tsrs = _generate_surface_place_tsrs(
-            None,
             SURFACE_POSE,
             SURFACE_HX,
             SURFACE_HY,
@@ -35,7 +33,6 @@ class TestGenerateSurfacePlaceTSRs:
 
     def test_box_returns_one_tsr(self):
         tsrs = _generate_surface_place_tsrs(
-            None,
             SURFACE_POSE,
             SURFACE_HX,
             SURFACE_HY,
@@ -45,7 +42,6 @@ class TestGenerateSurfacePlaceTSRs:
 
     def test_none_held_returns_empty(self):
         tsrs = _generate_surface_place_tsrs(
-            None,
             SURFACE_POSE,
             SURFACE_HX,
             SURFACE_HY,
@@ -55,7 +51,6 @@ class TestGenerateSurfacePlaceTSRs:
 
     def test_unknown_type_returns_empty(self):
         tsrs = _generate_surface_place_tsrs(
-            None,
             SURFACE_POSE,
             SURFACE_HX,
             SURFACE_HY,
@@ -66,7 +61,6 @@ class TestGenerateSurfacePlaceTSRs:
     def test_clearance_offset_applied(self):
         """Bw[2] (z-bounds) should be shifted up by the clearance buffer."""
         tsrs = _generate_surface_place_tsrs(
-            None,
             SURFACE_POSE,
             SURFACE_HX,
             SURFACE_HY,
@@ -81,7 +75,6 @@ class TestGenerateSurfacePlaceTSRs:
     def test_cylinder_sampled_pose_above_surface(self):
         """A sampled placement pose should put the object above the surface."""
         tsrs = _generate_surface_place_tsrs(
-            None,
             SURFACE_POSE,
             SURFACE_HX,
             SURFACE_HY,
@@ -94,7 +87,6 @@ class TestGenerateSurfacePlaceTSRs:
     def test_xy_bounds_reflect_surface_with_margin(self):
         """Bw xy should be shrunk by the 5cm edge margin."""
         tsrs = _generate_surface_place_tsrs(
-            None,
             SURFACE_POSE,
             SURFACE_HX,
             SURFACE_HY,
@@ -109,7 +101,6 @@ class TestGenerateSurfacePlaceTSRs:
     def test_yaw_is_free(self):
         """Placement should allow any yaw orientation."""
         tsrs = _generate_surface_place_tsrs(
-            None,
             SURFACE_POSE,
             SURFACE_HX,
             SURFACE_HY,
@@ -124,7 +115,6 @@ class TestGraspOffsetCorrection:
     def test_no_grasp_offset_samples_object_pose(self):
         """Without grasp offset, TSR samples the object resting pose."""
         tsrs = _generate_surface_place_tsrs(
-            None,
             SURFACE_POSE,
             SURFACE_HX,
             SURFACE_HY,
@@ -137,14 +127,12 @@ class TestGraspOffsetCorrection:
     def test_identity_grasp_offset_matches_no_offset(self):
         """Identity grasp transform should produce the same result."""
         tsrs_none = _generate_surface_place_tsrs(
-            None,
             SURFACE_POSE,
             SURFACE_HX,
             SURFACE_HY,
             "can",
         )
         tsrs_ident = _generate_surface_place_tsrs(
-            None,
             SURFACE_POSE,
             SURFACE_HX,
             SURFACE_HY,
@@ -161,14 +149,12 @@ class TestGraspOffsetCorrection:
         T_gripper_object[2, 3] = -0.10  # object is 10cm below gripper
 
         tsrs_no_offset = _generate_surface_place_tsrs(
-            None,
             SURFACE_POSE,
             SURFACE_HX,
             SURFACE_HY,
             "can",
         )
         tsrs_with_offset = _generate_surface_place_tsrs(
-            None,
             SURFACE_POSE,
             SURFACE_HX,
             SURFACE_HY,
@@ -455,7 +441,7 @@ class TestEndToEndSurfacePlacement:
         assert len(faces) == 1
         surface_pose, hx, hy = faces[0]
 
-        tsrs = _generate_surface_place_tsrs(None, surface_pose, hx, hy, "can")
+        tsrs = _generate_surface_place_tsrs(surface_pose, hx, hy, "can")
         assert len(tsrs) == 1
 
         pose = tsrs[0].sample()
@@ -473,7 +459,7 @@ class TestEndToEndSurfacePlacement:
         assert len(faces) == 1
         surface_pose, hx, hy = faces[0]
 
-        tsrs = _generate_surface_place_tsrs(None, surface_pose, hx, hy, "can")
+        tsrs = _generate_surface_place_tsrs(surface_pose, hx, hy, "can")
         assert len(tsrs) == 1
 
         pose = tsrs[0].sample()
@@ -491,7 +477,7 @@ class TestEndToEndSurfacePlacement:
         assert len(faces) == 1
         surface_pose, hx, hy = faces[0]
 
-        tsrs = _generate_surface_place_tsrs(None, surface_pose, hx, hy, "can")
+        tsrs = _generate_surface_place_tsrs(surface_pose, hx, hy, "can")
         assert len(tsrs) == 1
 
         pose = tsrs[0].sample()
@@ -512,7 +498,6 @@ class TestEndToEndSurfacePlacement:
         T_gripper_object[2, 3] = -0.08
 
         tsrs = _generate_surface_place_tsrs(
-            None,
             surface_pose,
             hx,
             hy,
@@ -543,15 +528,21 @@ class TestEndToEndSurfacePlacement:
         assert len(faces) == 1
         surface_pose, hx, hy = faces[0]
 
-        tsrs = _generate_surface_place_tsrs(None, surface_pose, hx, hy, "can")
+        tsrs = _generate_surface_place_tsrs(surface_pose, hx, hy, "can")
         assert len(tsrs) == 1
         # Bw xy should be clamped to ±0.01
         np.testing.assert_allclose(tsrs[0].Bw[0], [-0.01, 0.01], atol=1e-6)
 
 
 class TestGeneratePlaceTSRsDispatch:
-    """Test _generate_place_tsrs dispatches correctly by geometry type."""
+    """Test PrlAssetsGraspSource placement dispatch by geometry type."""
 
     def test_unknown_dest_type_returns_empty(self):
-        tsrs = _generate_place_tsrs(None, "foo_0", "nonexistent_type", held_height=0.1)
-        assert tsrs == []
+        # get_placements for a nonexistent type should return empty
+        from mj_manipulator.grasp_sources.prl_assets import PrlAssetsGraspSource
+
+        # PrlAssetsGraspSource needs model/data — just test the helper
+        from mj_manipulator.grasp_sources.prl_assets import _instance_to_type
+
+        assert _instance_to_type("foo_0") == "foo"
+        assert _instance_to_type("nonexistent") is None

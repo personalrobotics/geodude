@@ -3,11 +3,14 @@
 
 """Geodude-specific behavior tree nodes and subtrees.
 
-Extends mj_manipulator.bt with bimanual coordination, VentionBase
-control, and automatic TSR generation from prl_assets geometry.
+GenerateGrasps and GeneratePlaceTSRs are now generic nodes from
+mj_manipulator. Re-exported here for backwards compatibility.
+LiftBase stays geodude-specific (VentionBase hardware).
 """
 
-from geodude.bt.nodes import GenerateGrasps, GeneratePlaceTSRs
+from mj_manipulator.bt.nodes import GenerateGrasps, GeneratePlaceTSRs
+
+from geodude.bt.nodes import LiftBase
 from geodude.bt.subtrees import (
     geodude_pickup,
     geodude_place,
@@ -16,6 +19,7 @@ from geodude.bt.subtrees import (
 __all__ = [
     "GenerateGrasps",
     "GeneratePlaceTSRs",
+    "LiftBase",
     "geodude_pickup",
     "geodude_place",
 ]

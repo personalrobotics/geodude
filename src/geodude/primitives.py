@@ -123,6 +123,8 @@ def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
         f"{ns}/robot",
         f"{ns}/arm",
         f"{ns}/arm_name",
+        f"{ns}/grasp_source",
+        f"{ns}/hand_type",
         f"{ns}/grasp_tsrs",
         f"{ns}/place_tsrs",
         f"{ns}/timeout",
@@ -151,6 +153,8 @@ def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
     bb.set(f"{ns}/robot", robot)
     bb.set(f"{ns}/arm", arm)
     bb.set(f"{ns}/arm_name", arm.config.name)
+    bb.set(f"{ns}/grasp_source", robot.grasp_source)
+    bb.set(f"{ns}/hand_type", getattr(arm.gripper, "hand_type", "robotiq"))
     bb.set(f"{ns}/timeout", robot.config.planning.timeout)
 
     # Clear stale results from previous runs

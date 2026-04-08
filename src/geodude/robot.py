@@ -804,9 +804,11 @@ class Geodude:
             robot.find_objects()         # ['can_0', 'can_1', 'spam_can_0']
             robot.find_objects("can")    # ['can_0', 'can_1']
         """
-        from geodude.bt.nodes import _find_scene_objects
-
-        return [name for name, _ in _find_scene_objects(self, target)]
+        objects = self.grasp_source.get_graspable_objects()
+        if target is not None:
+            # Filter: exact match (instance) or prefix match (type)
+            objects = [o for o in objects if o == target or o.startswith(target + "_")]
+        return objects
 
     # -- Primitives (delegate to primitives module) --------------------------
 

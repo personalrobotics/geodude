@@ -325,14 +325,8 @@ class Geodude:
         self._abort_event.clear()
 
     def is_abort_requested(self) -> bool:
-        """Check if an abort has been requested (global or any per-arm)."""
-        if self._abort_event.is_set():
-            return True
-        if self._context is not None and self._context.ownership is not None:
-            for arm_name in self._context.ownership.arm_names:
-                if self._context.ownership.is_aborted(arm_name):
-                    return True
-        return False
+        """Check if a global abort has been requested."""
+        return self._abort_event.is_set()
 
     def _create_arm(self, spec: GeodudeArmSpec, name: str) -> Arm:
         """Create an mj_manipulator Arm from a GeodudeArmSpec."""

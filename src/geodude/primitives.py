@@ -51,19 +51,31 @@ def _sync_viewer(robot) -> None:
             pass
 
 
-def _deactivate_teleop_for_arms(robot: Geodude) -> None:
-    """Deactivate teleop on all arms before a user-initiated primitive.
+def _arm_preempted(robot: Geodude, arm_name: str) -> bool:
+    """Check if an arm was taken by another controller (e.g. teleop)."""
+    ctx = robot._active_context
+    if ctx is None or ctx.ownership is None:
+        return False
+    from mj_manipulator.ownership import OwnerKind
 
-    Called at the entry of pickup/place/go_home — the user explicitly
-    issued a command, so teleop should yield. Internal retries and
-    recovery within the primitive do NOT call this.
+    kind, _ = ctx.ownership.owner_of(arm_name)
+    return kind != OwnerKind.IDLE and kind != OwnerKind.TRAJECTORY
+
+
+def _deactivate_teleop_for_arms(robot: Geodude, arms: list[str] | None = None) -> None:
+    """Deactivate teleop on specified arms (or all) before a primitive.
+
+    Args:
+        robot: Geodude instance.
+        arms: Arm names to deactivate, or None for all arms.
     """
     ctx = robot._active_context
     if ctx is None or ctx.ownership is None:
         return
     from mj_manipulator.ownership import OwnerKind
 
-    for arm_name in ctx.ownership.arm_names:
+    arm_names = arms if arms is not None else ctx.ownership.arm_names
+    for arm_name in arm_names:
         kind, _ = ctx.ownership.owner_of(arm_name)
         if kind == OwnerKind.TELEOP:
             ctx._deactivate_teleop_for(arm_name)
@@ -134,7 +146,8 @@ def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
             pass  # already registered by another client
 
     bb.set("/context", ctx)
-    bb.set("/abort_fn", robot.is_abort_requested)
+    arm_name = arm.config.name
+    bb.set("/abort_fn", lambda: robot.is_abort_requested() or _arm_preempted(robot, arm_name))
     bb.set(f"{ns}/robot", robot)
     bb.set(f"{ns}/arm", arm)
     bb.set(f"{ns}/arm_name", arm.config.name)
@@ -336,13 +349,13 @@ def _pickup_inner(
         if _try_pickup(side):
             _sync_viewer(robot)
             return True
-        # Stop immediately if abort was requested
-        if robot.is_abort_requested():
+        # Stop if abort was requested OR this arm was preempted (e.g. teleop)
+        if robot.is_abort_requested() or _arm_preempted(robot, side):
             _sync_viewer(robot)
             return False
         # Before trying the other arm, ensure this arm is home
-        # so it doesn't block the workspace
-        if i < len(sides) - 1:
+        # so it doesn't block the workspace (skip if arm was preempted)
+        if i < len(sides) - 1 and not _arm_preempted(robot, side):
             from geodude.primitives import go_home
 
             go_home(robot, arm=side)
@@ -486,6 +499,8 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
         verbose = robot.config.debug.verbose
 
     robot.clear_abort()
+    arms_to_home = [arm] if arm is not None else ["left", "right"]
+    _deactivate_teleop_for_arms(robot, arms_to_home)
     try:
         return _go_home_inner(robot, ctx, arm=arm, verbose=verbose)
     except KeyboardInterrupt:

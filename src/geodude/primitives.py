@@ -3,198 +3,39 @@
 
 """High-level manipulation primitives for Geodude.
 
-Clean function API backed by py_trees behavior trees. Students write::
-
-    robot = Geodude(objects={"can": 1, "recycle_bin": 1})
-    with robot.sim() as ctx:
-        robot.pickup("can_0")
-        robot.place("recycle_bin_0")
-        robot.go_home()
-
-Under the hood, each function builds a py_trees tree with recovery,
-ticks it to completion, and returns True/False.
+Delegates to mj_manipulator's generic primitives for core logic.
+Adds Geodude-specific behavior: VentionBase homing in go_home,
+and uses geodude_pickup/geodude_place subtrees (which include LiftBase).
 """
 
 from __future__ import annotations
 
 import logging
+import random
 from typing import TYPE_CHECKING
 
 import numpy as np
 import py_trees
-from py_trees.common import Access, Status
-
-from geodude.bt.subtrees import geodude_pickup, geodude_place
+from mj_manipulator.primitives import (
+    _arm_preempted,
+    _deactivate_teleop_for_arms,
+    _report_pickup_failure,
+    _set_hud_action,
+    _setup_blackboard,
+    _sync_viewer,
+    _tick_tree,
+)
+from py_trees.common import Access
 
 if TYPE_CHECKING:
     from geodude.robot import Geodude
 
 logger = logging.getLogger(__name__)
 
-_CONTAINER_TYPES = frozenset(("open_box", "tote"))
 
-
-def _set_hud_action(robot, arm: str, text: str) -> None:
-    """Update the HUD status for an arm (no-op if HUD not active)."""
-    hud = getattr(robot, "_status_hud", None)
-    if hud is not None:
-        hud.set_action(arm, text)
-
-
-def _sync_viewer(robot) -> None:
-    """Force a viewer sync so HUD updates are visible immediately."""
-    ctx = robot._active_context
-    if ctx is not None and hasattr(ctx, "sync"):
-        try:
-            ctx.sync()
-        except Exception:
-            pass
-
-
-def _arm_preempted(robot: Geodude, arm_name: str) -> bool:
-    """Check if an arm was taken by another controller (e.g. teleop)."""
-    ctx = robot._active_context
-    if ctx is None or ctx.ownership is None:
-        return False
-    from mj_manipulator.ownership import OwnerKind
-
-    kind, _ = ctx.ownership.owner_of(arm_name)
-    return kind != OwnerKind.IDLE and kind != OwnerKind.TRAJECTORY
-
-
-def _deactivate_teleop_for_arms(robot: Geodude, arms: list[str] | None = None) -> None:
-    """Deactivate teleop on specified arms (or all) before a primitive.
-
-    Args:
-        robot: Geodude instance.
-        arms: Arm names to deactivate, or None for all arms.
-    """
-    ctx = robot._active_context
-    if ctx is None or ctx.ownership is None:
-        return
-    from mj_manipulator.ownership import OwnerKind
-
-    arm_names = arms if arms is not None else ctx.ownership.arm_names
-    for arm_name in arm_names:
-        kind, _ = ctx.ownership.owner_of(arm_name)
-        if kind == OwnerKind.TELEOP:
-            ctx._deactivate_teleop_for(arm_name)
-
-
-def _is_container_destination(destination: str | None) -> bool:
-    """Check if a destination name refers to a container (bin, tote).
-
-    Returns True for container types where the object should be hidden
-    after placement (simulating recycling/disposal). Returns False for
-    surface destinations where the object stays in the scene.
-    """
-    if destination is None:
-        return False
-
-    # Strip instance suffix (e.g. "recycle_bin_0" → "recycle_bin")
-    import re
-
-    from asset_manager import AssetManager
-    from prl_assets import OBJECTS_DIR
-
-    m = re.match(r"^(.+?)_(\d+)$", destination)
-    obj_type = m.group(1) if m else destination
-
-    if obj_type == "worktop":
-        return False
-
-    assets = AssetManager(str(OBJECTS_DIR))
-    try:
-        gp = assets.get(obj_type)["geometric_properties"]
-        return gp.get("type") in _CONTAINER_TYPES
-    except (KeyError, TypeError):
-        return False
-
-
-def _setup_blackboard(robot: Geodude, ns: str) -> py_trees.blackboard.Client:
-    """Set up blackboard with robot state for a given arm namespace."""
-    ctx = robot._active_context
-    arm = robot._resolve_arm(ns.strip("/"))
-
-    bb = py_trees.blackboard.Client(name=f"primitives{ns}")
-    keys = [
-        "/context",
-        "/abort_fn",
-        f"{ns}/robot",
-        f"{ns}/arm",
-        f"{ns}/arm_name",
-        f"{ns}/grasp_source",
-        f"{ns}/hand_type",
-        f"{ns}/grasp_tsrs",
-        f"{ns}/place_tsrs",
-        f"{ns}/timeout",
-        f"{ns}/object_name",
-        f"{ns}/destination",
-        f"{ns}/goal_config",
-        f"{ns}/grasped",
-        f"{ns}/path",
-        f"{ns}/trajectory",
-        f"{ns}/twist",
-        f"{ns}/distance",
-        f"{ns}/goal_tsr_index",
-        f"{ns}/tsr_to_object",
-        f"{ns}/tsr_to_destination",
-        f"{ns}/plan_failure_reason",
-    ]
-    for key in keys:
-        try:
-            bb.register_key(key=key, access=Access.WRITE)
-        except KeyError:
-            pass  # already registered by another client
-
-    bb.set("/context", ctx)
-    arm_name = arm.config.name
-    bb.set("/abort_fn", lambda: robot.is_abort_requested() or _arm_preempted(robot, arm_name))
-    bb.set(f"{ns}/robot", robot)
-    bb.set(f"{ns}/arm", arm)
-    bb.set(f"{ns}/arm_name", arm.config.name)
-    bb.set(f"{ns}/grasp_source", robot.grasp_source)
-    bb.set(f"{ns}/hand_type", getattr(arm.gripper, "hand_type", "robotiq"))
-    bb.set(f"{ns}/timeout", robot.config.planning.timeout)
-
-    # Clear stale results from previous runs
-    for stale_key in [
-        "path",
-        "trajectory",
-        "grasped",
-        "grasp_tsrs",
-        "place_tsrs",
-        "tsr_to_object",
-        "tsr_to_destination",
-        "goal_tsr_index",
-        "plan_failure_reason",
-    ]:
-        bb.set(f"{ns}/{stale_key}", None)
-
-    # Home config for recovery
-    side = arm.config.name
-    if "ready" in robot.named_poses and side in robot.named_poses["ready"]:
-        bb.set(f"{ns}/goal_config", np.array(robot.named_poses["ready"][side]))
-
-    return bb
-
-
-def _tick_tree(root: py_trees.behaviour.Behaviour, verbose: bool = False) -> bool:
-    """Reset and tick a tree to completion. Returns True if SUCCESS."""
-    for node in root.iterate():
-        node.status = Status.INVALID
-    tree = py_trees.trees.BehaviourTree(root=root)
-    tree.tick()
-
-    if verbose:
-        print(py_trees.display.ascii_tree(root, show_status=True))
-
-    if root.status != Status.SUCCESS:
-        tip = root.tip()
-        if tip is not None and tip.feedback_message and tip.feedback_message != "Aborted":
-            logger.warning("%s: %s", tip.name, tip.feedback_message)
-
-    return root.status == Status.SUCCESS
+# ---------------------------------------------------------------------------
+# Pickup
+# ---------------------------------------------------------------------------
 
 
 def pickup(
@@ -206,19 +47,7 @@ def pickup(
 ) -> bool:
     """Pick up an object.
 
-    Automatically generates grasp TSRs from object geometry in prl_assets.
-
-    Args:
-        robot: Geodude instance with active execution context.
-        target: What to pick up:
-            - "can_0" — specific instance
-            - "can" — any can in the scene
-            - None — anything graspable
-        arm: "left", "right", or None (try both).
-        verbose: Show BT tree status. None = use robot.config.debug.verbose.
-
-    Returns:
-        True if pickup succeeded.
+    Uses geodude_pickup subtree (includes LiftBase for VentionBase).
     """
     ctx = robot._active_context
     if ctx is None:
@@ -249,7 +78,11 @@ def _pickup_inner(
     arm: str | None = None,
     verbose: bool = False,
 ) -> bool:
-    """Core pickup logic (separated for KeyboardInterrupt wrapping)."""
+    """Core pickup logic."""
+    from geodude.bt.subtrees import geodude_pickup
+
+    ctx = robot._active_context
+
     # Quick check: are there any matching objects?
     if not robot.find_objects(target):
         desc = f"'{target}'" if target else "any object"
@@ -257,9 +90,14 @@ def _pickup_inner(
         return False
 
     def _try_pickup(side: str) -> bool:
+        arm_obj = robot.arms[side]
         ns = f"/{side}"
-        bb = _setup_blackboard(robot, ns)
+        _setup_blackboard(robot, ctx, side, arm_obj, ns)
+
+        bb = py_trees.blackboard.Client(name=f"pickup_target{ns}")
+        bb.register_key(key=f"{ns}/object_name", access=Access.WRITE)
         bb.set(f"{ns}/object_name", target)
+
         desc = target or "any"
         _set_hud_action(robot, side, f"⟳ pickup({desc})")
         if not _tick_tree(geodude_pickup(ns), verbose=verbose):
@@ -268,103 +106,37 @@ def _pickup_inner(
         _set_hud_action(robot, side, f"✓ pickup({desc})")
         return True
 
-    def _pickup_details(side: str) -> tuple[list[str], str | None, bool, bool, str | None]:
-        """Get attempted objects, the specific object reached, and grasp result.
-
-        Returns:
-            (attempted_objects, reached_object, plan_succeeded, grasp_succeeded,
-             plan_failure_reason)
-        """
-        ns = f"/{side}"
-        attempted: list[str] = []
-        reached: str | None = None
-        plan_failed = False
-        grasped = False
-        plan_reason: str | None = None
-        try:
-            bb = py_trees.blackboard.Client(name=f"pickup_report{ns}")
-            bb.register_key(key=f"{ns}/tsr_to_object", access=Access.READ)
-            bb.register_key(key=f"{ns}/object_name", access=Access.READ)
-            bb.register_key(key=f"{ns}/grasped", access=Access.READ)
-            bb.register_key(key=f"{ns}/plan_failure_reason", access=Access.READ)
-            mapping = bb.get(f"{ns}/tsr_to_object")
-            if mapping:
-                attempted = sorted(set(mapping))
-            obj = bb.get(f"{ns}/object_name")
-            if obj:
-                reached = obj
-            plan_reason = bb.get(f"{ns}/plan_failure_reason")
-            plan_failed = plan_reason is not None
-            grasped = bool(bb.get(f"{ns}/grasped"))
-        except (KeyError, RuntimeError):
-            pass
-        return attempted, reached, not plan_failed, grasped, plan_reason
-
-    def _report_failure(sides_tried: list[str]) -> None:
-        all_attempted: set[str] = set()
-        plan_failures: list[str] = []
-        grasp_failures: list[str] = []
-        for side in sides_tried:
-            attempted, reached, planned, grasped, plan_reason = _pickup_details(side)
-            all_attempted.update(attempted)
-            if reached and planned and not grasped:
-                grasp_failures.append(f"{reached} ({side} arm)")
-                _set_hud_action(robot, side, "✗ pickup: grasp failed")
-            elif reached and not planned:
-                detail = f"{reached} ({side} arm)"
-                short = plan_reason.split(":")[0] if plan_reason else "plan failed"
-                if plan_reason:
-                    detail += f": {plan_reason}"
-                plan_failures.append(detail)
-                _set_hud_action(robot, side, f"✗ pickup: {short}")
-
-        if grasp_failures:
-            msg = f"Pickup failed: reached {', '.join(grasp_failures)} but grasp failed"
-            logger.warning(msg)
-        elif plan_failures:
-            logger.warning(
-                "Pickup failed: could not plan to %s",
-                "; ".join(plan_failures),
-            )
-        elif all_attempted:
-            logger.warning(
-                "Pickup failed: could not plan to %s",
-                ", ".join(sorted(all_attempted)),
-            )
-        else:
-            desc = f"'{target}'" if target else "any object"
-            logger.warning("Pickup failed: no graspable %s found", desc)
-
     if arm is not None:
         if _try_pickup(arm):
             _sync_viewer(robot)
             return True
-        _report_failure([arm])
+        _report_pickup_failure(robot, [arm], target)
         _sync_viewer(robot)
         return False
 
-    import random
-
     sides = ["right", "left"]
     random.shuffle(sides)
+    sides_tried = []
     for i, side in enumerate(sides):
         if _try_pickup(side):
             _sync_viewer(robot)
             return True
-        # Stop if abort was requested OR this arm was preempted (e.g. teleop)
+        sides_tried.append(side)
         if robot.is_abort_requested() or _arm_preempted(robot, side):
             _sync_viewer(robot)
             return False
-        # Before trying the other arm, ensure this arm is home
-        # so it doesn't block the workspace (skip if arm was preempted)
+        # Before trying the other arm, send this arm home
         if i < len(sides) - 1 and not _arm_preempted(robot, side):
-            from geodude.primitives import go_home
-
             go_home(robot, arm=side)
 
-    _report_failure(sides)
+    _report_pickup_failure(robot, sides_tried, target)
     _sync_viewer(robot)
     return False
+
+
+# ---------------------------------------------------------------------------
+# Place
+# ---------------------------------------------------------------------------
 
 
 def place(
@@ -374,33 +146,16 @@ def place(
     arm: str | None = None,
     verbose: bool | None = None,
 ) -> bool:
-    """Place the held object at a destination.
-
-    Automatically generates drop-zone TSRs from destination geometry in prl_assets.
-
-    Args:
-        robot: Geodude instance with active execution context.
-        destination: Where to place:
-            - "recycle_bin_0" — specific instance
-            - "recycle_bin" — any recycle bin in scene
-            - None — any valid destination
-        arm: "left", "right", or None (auto-detect holding arm).
-        verbose: Show BT tree status. None = use robot.config.debug.verbose.
-
-    Returns:
-        True if place succeeded.
-    """
+    """Place the held object."""
     ctx = robot._active_context
     if ctx is None:
         raise RuntimeError("No active execution context. Use 'with robot.sim() as ctx:'")
 
-    # Find which arm is holding
     if arm is None:
-        for side in ("left", "right"):
-            if robot.grasp_manager.get_grasped_by(side):
-                arm = side
-                break
-        if arm is None:
+        held = robot.holding()
+        if held:
+            arm = held[0]
+        else:
             logger.warning("Place failed: no arm is holding an object")
             return False
 
@@ -423,76 +178,54 @@ def place(
 
 def _place_inner(
     robot: Geodude,
-    destination: str | None = None,
+    destination: str | None,
     *,
     arm: str,
     verbose: bool = False,
 ) -> bool:
-    """Core place logic (separated for KeyboardInterrupt wrapping)."""
-    # Capture held object before the tree releases the grasp
-    held = list(robot.grasp_manager.get_grasped_by(arm))
-    held_object = held[0] if held else None
+    """Core place logic."""
+    from mj_manipulator.primitives import _maybe_hide_in_container
 
+    from geodude.bt.subtrees import geodude_place
+
+    ctx = robot._active_context
+    arm_obj = robot.arms[arm]
     ns = f"/{arm}"
-    bb = _setup_blackboard(robot, ns)
+    _setup_blackboard(robot, ctx, arm, arm_obj, ns)
+
+    bb = py_trees.blackboard.Client(name=f"place_target{ns}")
+    bb.register_key(key=f"{ns}/destination", access=Access.WRITE)
+    bb.register_key(key=f"{ns}/object_name", access=Access.WRITE)
     bb.set(f"{ns}/destination", destination)
-    desc = destination or "any"
+
+    held_name = None
+    if arm_obj.gripper:
+        held_name = arm_obj.gripper.held_object
+    bb.set(f"{ns}/object_name", held_name)
+
+    desc = destination or "auto"
     _set_hud_action(robot, arm, f"⟳ place({desc})")
     ok = _tick_tree(geodude_place(ns), verbose=verbose)
-    if not ok:
-        # Read failure reason from blackboard
-        try:
-            _bb = py_trees.blackboard.Client(name=f"place_report{ns}")
-            _bb.register_key(key=f"{ns}/plan_failure_reason", access=Access.READ)
-            reason = _bb.get(f"{ns}/plan_failure_reason")
-        except (KeyError, RuntimeError):
-            reason = None
 
-        detail = f": {reason}" if reason else ""
-        logger.warning("Place failed: %s arm could not place at '%s'%s", arm, destination, detail)
-        short_reason = reason.split(":")[0] if reason else "failed"
-        _set_hud_action(robot, arm, f"✗ place({desc}): {short_reason}")
-    else:
+    if ok:
         _set_hud_action(robot, arm, f"✓ place({desc})")
+        if held_name:
+            _maybe_hide_in_container(robot, ns, destination, held_name)
+    else:
+        _set_hud_action(robot, arm, f"✗ place({desc})")
+        logger.warning("Place failed for destination '%s'", destination)
 
-    # Force viewer sync so HUD updates immediately
     _sync_viewer(robot)
-
-    # Hide object only if placed into a container (recycled) — surface placements stay.
-    # When destination=None, the BT resolves the target — read it from the blackboard.
-    if ok and held_object:
-        resolved_dest = destination
-        if resolved_dest is None:
-            try:
-                _bb = py_trees.blackboard.Client(name=f"place_dest{ns}")
-                _bb.register_key(key=f"{ns}/tsr_to_destination", access=Access.READ)
-                _bb.register_key(key=f"{ns}/goal_tsr_index", access=Access.READ)
-                mapping = _bb.get(f"{ns}/tsr_to_destination")
-                idx = _bb.get(f"{ns}/goal_tsr_index")
-                if mapping and idx is not None and idx < len(mapping):
-                    resolved_dest = mapping[idx]
-            except (KeyError, RuntimeError):
-                pass
-        if _is_container_destination(resolved_dest):
-            if robot.env.registry.is_active(held_object):
-                robot.env.registry.hide(held_object)
-                robot.forward()
-                _sync_viewer(robot)
-
     return ok
 
 
+# ---------------------------------------------------------------------------
+# Go home (with VentionBase homing)
+# ---------------------------------------------------------------------------
+
+
 def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = None) -> bool:
-    """Return arms to ready configuration.
-
-    Args:
-        robot: Geodude instance with active execution context.
-        arm: "left", "right", or None (both arms).
-        verbose: Show debug info.
-
-    Returns:
-        True if all specified arms returned to ready.
-    """
+    """Return arms to ready, including VentionBase homing."""
     ctx = robot._active_context
     if ctx is None:
         raise RuntimeError("No active execution context. Use 'with robot.sim() as ctx:'")
@@ -520,7 +253,7 @@ def _go_home_inner(
     arm: str | None = None,
     verbose: bool = False,
 ) -> bool:
-    """Core go_home logic (separated for KeyboardInterrupt wrapping)."""
+    """Core go_home with VentionBase homing."""
     from mj_manipulator.cartesian import CartesianController
 
     if arm is not None:
@@ -528,7 +261,8 @@ def _go_home_inner(
     else:
         arms = [("left", robot._left_arm), ("right", robot._right_arm)]
 
-    abort_fn = robot.is_abort_requested
+    def abort_fn():
+        return robot.is_abort_requested()
 
     success = True
     for side, arm_obj in arms:
@@ -543,7 +277,6 @@ def _go_home_inner(
             path = None
 
         if path is None:
-            # Retract up first, then retry
             logger.warning("go_home %s arm: retract up and retry", side)
             arm_name = arm_obj.config.name
 
@@ -553,7 +286,7 @@ def _go_home_inner(
             ctrl = CartesianController.from_arm(arm_obj, step_fn=_step_fn)
             ctrl.move(
                 np.array([0.0, 0.0, 0.10, 0.0, 0.0, 0.0]),
-                dt=0.008,
+                dt=ctx.control_dt,
                 max_distance=0.10,
                 stop_condition=abort_fn,
             )
@@ -569,7 +302,8 @@ def _go_home_inner(
         else:
             logger.warning("go_home: could not plan %s arm to ready", side)
             success = False
-    # Return bases to starting height (0.25 midpoint)
+
+    # Return bases to starting height (Geodude-specific)
     for _, arm_obj in arms:
         base = robot._get_base_for_arm(arm_obj)
         if base is not None and abs(base.get_height() - 0.25) > 0.01:

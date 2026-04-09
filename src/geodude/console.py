@@ -293,15 +293,8 @@ IPython:
                     sp.setup(gui, viewer)
                     all_panels.append(sp)
 
-        # Status HUD overlay
-        from geodude.panels.status_hud import StatusHud
-
-        status_hud = StatusHud(robot, mode)
-        robot._status_hud = status_hud
-        all_panels.append(status_hud)
-
+        # Status HUD is created by the generic console (mj_manipulator.status_hud)
         viewer._panels.extend(all_panels)
-        status_hud.setup(gui, viewer)
 
     # -- Delegate to generic console -------------------------------------------
     _start_console(

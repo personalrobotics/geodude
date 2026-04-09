@@ -5,7 +5,6 @@
 
 import numpy as np
 import pytest
-
 from mj_manipulator.grasp_sources.prl_assets import (
     _generate_surface_place_tsrs,
     _get_upward_faces,
@@ -539,7 +538,6 @@ class TestGeneratePlaceTSRsDispatch:
 
     def test_unknown_dest_type_returns_empty(self):
         # get_placements for a nonexistent type should return empty
-        from mj_manipulator.grasp_sources.prl_assets import PrlAssetsGraspSource
 
         # PrlAssetsGraspSource needs model/data — just test the helper
         from mj_manipulator.grasp_sources.prl_assets import _instance_to_type

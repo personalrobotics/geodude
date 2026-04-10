@@ -13,22 +13,38 @@ The right place for them is here in geodude, which declares both
 ``mj_manipulator`` and ``geodude_assets`` as dependencies.
 """
 
+import mujoco
 import pytest
-from mj_environment import Environment
 from mj_manipulator.grasp_manager import GraspManager
 from mj_manipulator.grippers.robotiq import RobotiqGripper
 from mj_manipulator.protocols import Gripper
 
 # geodude_assets is optional — skip the whole module cleanly if it's
 # not importable (e.g. running the test file against a standalone
-# mj_manipulator checkout).
+# geodude checkout without the asset package).
 try:
     import geodude_assets
 except ImportError:
     pytest.skip("geodude_assets not available", allow_module_level=True)
 
 
-_ROBOTIQ_SCENE = geodude_assets.MODELS_DIR / "robotiq_2f140" / "scene.xml"
+# Load the bare 2F-140 model directly via MuJoCo rather than wrapping
+# it in mj_environment.Environment, because:
+#
+#  1. RobotiqGripper only needs a MjModel + MjData pair — the Environment
+#     wrapper's asset-management features (object spawning, scene config,
+#     placement) aren't exercised by these unit-level tests.
+#
+#  2. Environment(path) builds an in-memory XML string and an explicit
+#     mesh-asset dict at construction time, which has subtle interactions
+#     with the meshdir="assets" relative-path resolution in scene.xml
+#     that broke under pip-install-from-git in CI.
+#     mujoco.MjModel.from_xml_path() resolves meshdir natively against
+#     the file's directory, with no string-buffering layer to confuse it.
+#
+# Use 2f140.xml (the gripper-only model) rather than scene.xml so there
+# are no extra worldbody/lighting/floor things to worry about.
+_ROBOTIQ_XML = geodude_assets.MODELS_DIR / "robotiq_2f140" / "2f140.xml"
 
 
 # ---------------------------------------------------------------------------
@@ -37,19 +53,19 @@ _ROBOTIQ_SCENE = geodude_assets.MODELS_DIR / "robotiq_2f140" / "scene.xml"
 
 
 @pytest.fixture
-def robotiq_env():
-    if not _ROBOTIQ_SCENE.exists():
-        pytest.skip(f"Robotiq scene not found at {_ROBOTIQ_SCENE}")
-    return Environment(str(_ROBOTIQ_SCENE))
+def robotiq_model_data():
+    if not _ROBOTIQ_XML.exists():
+        pytest.skip(f"Robotiq XML not found at {_ROBOTIQ_XML}")
+    model = mujoco.MjModel.from_xml_path(str(_ROBOTIQ_XML))
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    return model, data
 
 
 @pytest.fixture
-def robotiq_gripper(robotiq_env):
-    return RobotiqGripper(
-        robotiq_env.model,
-        robotiq_env.data,
-        "test_arm",
-    )
+def robotiq_gripper(robotiq_model_data):
+    model, data = robotiq_model_data
+    return RobotiqGripper(model, data, "test_arm")
 
 
 # ---------------------------------------------------------------------------
@@ -89,11 +105,12 @@ class TestRobotiqGripperConstruction:
         assert not robotiq_gripper.is_holding
         assert robotiq_gripper.held_object is None
 
-    def test_invalid_actuator_raises(self, robotiq_env):
+    def test_invalid_actuator_raises(self, robotiq_model_data):
+        model, data = robotiq_model_data
         with pytest.raises(ValueError, match="not found"):
             RobotiqGripper(
-                robotiq_env.model,
-                robotiq_env.data,
+                model,
+                data,
                 "arm",
                 prefix="nonexistent/",
             )
@@ -142,11 +159,12 @@ class TestRobotiqGripperKinematic:
 
 
 class TestRobotiqGripperGraspManager:
-    def test_is_holding_with_grasp_manager(self, robotiq_env):
-        gm = GraspManager(robotiq_env.model, robotiq_env.data)
+    def test_is_holding_with_grasp_manager(self, robotiq_model_data):
+        model, data = robotiq_model_data
+        gm = GraspManager(model, data)
         gripper = RobotiqGripper(
-            robotiq_env.model,
-            robotiq_env.data,
+            model,
+            data,
             "arm",
             grasp_manager=gm,
         )
@@ -167,12 +185,13 @@ class TestRobotiqGripperGraspManager:
 
 
 class TestUR5eIntegration:
-    def test_ur5e_with_gripper_constructs(self, robotiq_env):
+    def test_ur5e_with_gripper_constructs(self, robotiq_model_data):
         """RobotiqGripper satisfies the Gripper protocol when constructed
-        against the 2F-140 scene, ready to be attached to a UR5e arm."""
+        against the 2F-140 model, ready to be attached to a UR5e arm."""
+        model, data = robotiq_model_data
         gripper = RobotiqGripper(
-            robotiq_env.model,
-            robotiq_env.data,
+            model,
+            data,
             "ur5e",
         )
         assert isinstance(gripper, Gripper)

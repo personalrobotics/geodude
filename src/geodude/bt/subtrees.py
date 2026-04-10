@@ -19,6 +19,13 @@ from geodude.bt.nodes import LiftBase
 def geodude_pickup(ns: str) -> py_trees.composites.Sequence:
     """Generate grasp TSRs then pickup with recovery.
 
+    Geodude's UR5e is mounted on a Vention linear base with generous vertical
+    clearance, so post-grasp retraction is done by :class:`LiftBase` (base up)
+    rather than by a cartesian arm lift. We pass ``with_lift=False`` to skip
+    the default ``SafeRetract`` in the generic pickup — doing both would be
+    redundant and would drag the arm through extra cartesian motion with no
+    benefit.
+
     Reads: ``{ns}/object_name``, ``{ns}/robot``
     (plus all blackboard keys needed by pickup_with_recovery)
     """
@@ -27,7 +34,7 @@ def geodude_pickup(ns: str) -> py_trees.composites.Sequence:
         memory=True,
         children=[
             GenerateGrasps(ns=ns),
-            pickup_with_recovery(ns),
+            pickup_with_recovery(ns, with_lift=False),
             LiftBase(ns=ns),
         ],
     )

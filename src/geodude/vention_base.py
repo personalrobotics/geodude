@@ -105,6 +105,19 @@ class VentionBase:
         return [self._actuator_id]
 
     @property
+    def arm_body_ids(self) -> set[int]:
+        """Body IDs belonging to this base's arm (including gripper).
+
+        Useful for grasp-aware contact filtering — callers like
+        :class:`geodude.bt.nodes.LiftBase` need to distinguish "the held
+        object is touching the source surface" from "the held object is
+        touching the gripper" (which is the grasp itself, not collision).
+        Returning a copy keeps the internal set immutable to outside
+        callers.
+        """
+        return set(self._arm_body_ids)
+
+    @property
     def grasp_manager(self) -> GraspManager | None:
         """Grasp manager from the associated arm (for attached object tracking)."""
         return self._arm.grasp_manager
@@ -136,6 +149,7 @@ class VentionBase:
         arm: Arm | None = None,
         *,
         check_collisions: bool = True,
+        partial_ok: bool = False,
     ) -> Trajectory | None:
         """Plan base motion to target height.
 
@@ -144,9 +158,22 @@ class VentionBase:
             arm: Arm to check collisions against (defaults to the arm
                 this base was initialized with).
             check_collisions: If True, verify path is collision-free.
+            partial_ok: If True and a collision blocks the requested
+                path partway through, return a trajectory to the
+                longest collision-free prefix instead of None. Has no
+                effect when ``check_collisions=False``. Mirrors
+                ``mj_manipulator.cartesian_path.plan_cartesian_path``'s
+                ``partial_ok`` semantics — useful for "lift as far as
+                you can" callers like
+                :class:`geodude.bt.nodes.LiftBase`. If even the first
+                step toward ``height`` is in collision, still returns
+                ``None``.
 
         Returns:
-            Trajectory if planning succeeded, None if collision detected.
+            Trajectory to the requested height, OR (under
+            ``partial_ok``) a trajectory to the longest collision-free
+            prefix. Returns ``None`` only when no motion at all is
+            feasible.
         """
         min_h, max_h = self.config.height_range
         if not min_h <= height <= max_h:
@@ -154,12 +181,22 @@ class VentionBase:
 
         current_height = self.get_height()
 
-        if check_collisions and not self._is_path_collision_free(current_height, height):
-            return None
+        if check_collisions:
+            max_clear = self._max_collision_free_height(current_height, height)
+            if max_clear is None:
+                # Even the first step is in collision; nothing reachable.
+                return None
+            if not partial_ok and max_clear != height:
+                # Strict mode: full path must be clear.
+                return None
+            # In partial_ok mode (or full-clear strict mode), retime to max_clear.
+            target = max_clear
+        else:
+            target = height
 
         return create_linear_trajectory(
             start=current_height,
-            end=height,
+            end=target,
             vel_limit=self.config.kinematic_limits.velocity,
             acc_limit=self.config.kinematic_limits.acceleration,
             entity=self.config.name,
@@ -220,18 +257,53 @@ class VentionBase:
         return True
 
     def _is_path_collision_free(self, start: float, end: float) -> bool:
-        """Check if linear path is collision-free."""
+        """Check if a linear path is fully collision-free.
+
+        Returns True iff every sampled point along the path is
+        collision-free. Implemented in terms of
+        :meth:`_max_collision_free_height` so the two checks share
+        their walker.
+        """
+        max_clear = self._max_collision_free_height(start, end)
+        return max_clear == end
+
+    def _max_collision_free_height(self, start: float, end: float) -> float | None:
+        """Return the highest reachable height along ``start → end``.
+
+        Walks the linear path in collision-check-resolution increments.
+        At each sample, sets the base qpos and forward-kinematics the
+        arm at its current joint configuration, then checks for
+        environment collisions via :meth:`_has_arm_collision` (which is
+        grasp-aware — held objects are allowed to touch the gripper).
+
+        Returns:
+            The height of the **last sample that was collision-free**
+            along the path. If the path is fully clear, returns
+            ``end``. If not even the first sample is clear (i.e. we're
+            already in collision at ``start``), returns ``None``.
+
+        Note:
+            The returned value is at most one ``collision_check_resolution``
+            short of the actual collision boundary, because we report
+            the last clean sample rather than interpolating into the
+            blocked segment. This is a deliberately conservative choice
+            and matches how
+            ``mj_manipulator.cartesian_path.plan_cartesian_path``'s
+            ``partial_ok`` mode handles its own boundaries.
+        """
         resolution = self.config.collision_check_resolution
         distance = abs(end - start)
 
         if distance < 1e-6:
-            return True
+            return end
 
         n_steps = max(2, int(np.ceil(distance / resolution)) + 1)
         heights = np.linspace(start, end, n_steps)
 
         arm_q = self._arm.get_joint_positions().copy()
         original_height = self.get_height()
+
+        last_clear: float | None = None
 
         try:
             for h in heights:
@@ -241,8 +313,13 @@ class VentionBase:
                 mujoco.mj_forward(self.model, self.data)
 
                 if self._has_arm_collision():
-                    return False
-            return True
+                    # First sample blocked → nothing reachable.
+                    if last_clear is None:
+                        return None
+                    # Otherwise return the height of the last clean sample.
+                    return float(last_clear)
+                last_clear = h
+            return float(last_clear)
         finally:
             self.data.qpos[self._qpos_idx] = original_height
             for i, idx in enumerate(self._arm.joint_qpos_indices):

@@ -134,3 +134,103 @@ class TestVentionBaseMoveTo:
         robot = Geodude()
         success = robot.left_base.move_to(0.3, check_collisions=True)
         assert success is True
+
+
+class TestVentionBasePlanToPartialOk:
+    """Tests for ``plan_to(partial_ok=True)`` — the longest-feasible-prefix mode.
+
+    These tests use a contrived collision check (monkey-patching
+    ``_has_arm_collision``) to simulate a virtual obstacle blocking
+    the upper portion of the base's travel range. This avoids needing
+    to construct a custom MuJoCo scene with a real obstacle, which
+    would require duplicating geodude's model loading.
+    """
+
+    def test_partial_ok_full_path_clear_returns_full_trajectory(self):
+        """If the full path is collision-free, partial_ok=True returns
+        the same trajectory as the strict mode."""
+        robot = Geodude()
+        base = robot.left_base
+        base.set_height(0.0)
+
+        traj_strict = base.plan_to(0.3, check_collisions=True, partial_ok=False)
+        traj_partial = base.plan_to(0.3, check_collisions=True, partial_ok=True)
+
+        assert traj_strict is not None
+        assert traj_partial is not None
+        # Both should reach the same final height
+        assert traj_strict.positions[-1, 0] == pytest.approx(0.3, abs=1e-3)
+        assert traj_partial.positions[-1, 0] == pytest.approx(0.3, abs=1e-3)
+
+    def test_partial_ok_blocked_midway_returns_prefix(self):
+        """If a collision blocks the upper half of the path, partial_ok
+        returns a trajectory ending at the last collision-free height,
+        and strict mode returns None."""
+        robot = Geodude()
+        base = robot.left_base
+        base.set_height(0.0)
+
+        # Virtual obstacle at h > 0.15: monkey-patch the collision check
+        original_has_collision = base._has_arm_collision
+
+        def mock_has_collision():
+            return base.get_height() > 0.15
+
+        base._has_arm_collision = mock_has_collision
+        try:
+            # Strict mode: full path 0.0 → 0.3 must fail because the upper
+            # half is blocked.
+            traj_strict = base.plan_to(0.3, check_collisions=True, partial_ok=False)
+            assert traj_strict is None
+
+            # Partial mode: should return a trajectory ending somewhere
+            # at-or-below 0.15 (the monkey-patched obstacle threshold).
+            traj_partial = base.plan_to(0.3, check_collisions=True, partial_ok=True)
+            assert traj_partial is not None
+            final_h = float(traj_partial.positions[-1, 0])
+            assert 0.0 < final_h <= 0.15 + 1e-6
+        finally:
+            base._has_arm_collision = original_has_collision
+
+    def test_partial_ok_first_step_blocked_returns_none(self):
+        """If the very first sample is in collision (we're already at an
+        obstacle), partial_ok still returns None — there's nothing
+        reachable."""
+        robot = Geodude()
+        base = robot.left_base
+        base.set_height(0.0)
+
+        original_has_collision = base._has_arm_collision
+
+        def mock_has_collision():
+            # Always in collision — even the start point fails.
+            return True
+
+        base._has_arm_collision = mock_has_collision
+        try:
+            traj = base.plan_to(0.3, check_collisions=True, partial_ok=True)
+            assert traj is None
+        finally:
+            base._has_arm_collision = original_has_collision
+
+    def test_partial_ok_no_collision_check_ignores_partial(self):
+        """If check_collisions=False, partial_ok has no effect — the
+        full requested path is returned regardless."""
+        robot = Geodude()
+        base = robot.left_base
+        base.set_height(0.0)
+
+        original_has_collision = base._has_arm_collision
+
+        def always_blocked():
+            return True
+
+        base._has_arm_collision = always_blocked
+        try:
+            # Even though "everything is blocked", check_collisions=False
+            # means the walker isn't even called and we get a full trajectory.
+            traj = base.plan_to(0.3, check_collisions=False, partial_ok=True)
+            assert traj is not None
+            assert traj.positions[-1, 0] == pytest.approx(0.3, abs=1e-3)
+        finally:
+            base._has_arm_collision = original_has_collision

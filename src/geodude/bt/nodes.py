@@ -12,37 +12,51 @@ from __future__ import annotations
 
 import logging
 
-import mujoco
 import py_trees
-from mj_manipulator.contacts import iter_contacts
 from py_trees.common import Access, Status
 
 logger = logging.getLogger(__name__)
 
 
 class LiftBase(py_trees.behaviour.Behaviour):
-    """Lift the Vention base, then verify the held object is clear of any
-    source surface.
+    """Lift the Vention base, then verify the held object is still held.
 
     The point of this node is to ensure that, after a grasp, the held
-    object is no longer touching whatever it was resting on at grasp
-    time (table, plate, bin floor, etc.). The action is *always* a base
-    lift; the SUCCESS criterion is the post-condition that the held
-    object has no contact with anything other than the arm or gripper.
+    object remains in the gripper after we lift it off its source
+    surface. The action is always a base lift; the SUCCESS criterion
+    is the invariant that the gripper still believes it has the
+    object, as judged by
+    :class:`~mj_manipulator.grasp_verifier.GraspVerifier` on its
+    live sensor signals (wrist F/T for UR5e + Robotiq).
 
-    Why "always lift" rather than "only lift if we see a contact":
-    after the gripper closes via physics, friction often pulls the
-    object 1–2 mm vertically into the gripper, breaking the
-    object↔table contact for that instant. A precondition check that
-    sees zero baseline contacts and skips the lift returns SUCCESS
-    without ever moving the base — exactly the visible bug from
-    geodude#173. The lift is cheap and visible; trust the post-check
-    instead of trying to skip work based on a flaky observation.
+    Why the verifier rather than a contact query:
 
-    The lift is planned with ``partial_ok=True`` so a collision-blocked
-    upper portion still gets us as much travel as is reachable. If even
-    the first step is blocked, or the base is already at max height, we
-    skip the motion and rely on the post-check anyway.
+    - On real hardware there's no MuJoCo contact state to inspect.
+      The verifier uses signals — F/T, gripper position, joint
+      torques — that exist on both sim and real robots.
+    - After a physics grasp, friction can pull the object 1–2 mm
+      into the gripper, breaking any object↔table contact for that
+      instant. A contact-based precondition check sees nothing and
+      skips the lift; that was the visible bug from geodude#173.
+    - The invariant we care about is *\"object is still held\"*, not
+      *\"object stopped touching the table\"*. The verifier answers
+      the former directly. A dropped-during-lift object, a slipped
+      grasp, a gripper that opened too early — all of these failure
+      modes reduce to the same SUCCESS-criterion check: is the
+      verifier still happy?
+
+    Implementation:
+
+    1. **Precondition:** the arm's gripper reports ``is_holding`` —
+       i.e. the verifier thinks we have an object. FAILURE otherwise
+       (config error, BT structure bug, or grasp never succeeded).
+    2. **Action:** plan and execute the lift with
+       ``base.plan_to(target, partial_ok=True)``. If the base is
+       already at max headroom or the first step is in collision,
+       skip the motion and fall straight through to the post-check.
+    3. **Verify post-condition:** re-query ``gripper.is_holding``.
+       FAILURE if it flipped to False during the lift (object
+       dropped); SUCCESS otherwise.
 
     Reads: ``{ns}/robot``, ``{ns}/arm``, ``/context``
     """
@@ -69,20 +83,14 @@ class LiftBase(py_trees.behaviour.Behaviour):
             return Status.FAILURE
 
         gripper = arm.gripper
-        if gripper is None or gripper.held_object is None:
+        if gripper is None or not gripper.is_holding:
             logger.warning(
-                "LiftBase: no held object on arm %s — was Grasp run first?",
+                "LiftBase: gripper on %s arm does not report holding — was Grasp run first?",
                 arm.config.name,
             )
             return Status.FAILURE
 
         held_name = gripper.held_object
-        model = base.model
-        data = base.data
-        held_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, held_name)
-        if held_body_id < 0:
-            logger.warning("LiftBase: held object '%s' not found in model", held_name)
-            return Status.FAILURE
 
         # ----- Action: always attempt the lift -----
         current_h = base.get_height()
@@ -91,7 +99,7 @@ class LiftBase(py_trees.behaviour.Behaviour):
 
         if target_h - current_h < 1e-4:
             logger.warning(
-                "LiftBase: base already at max height %.3fm; skipping lift, will verify clearance",
+                "LiftBase: base already at max height %.3fm; skipping lift, will verify held state",
                 current_h,
             )
         else:
@@ -110,59 +118,14 @@ class LiftBase(py_trees.behaviour.Behaviour):
                     target_h,
                 )
 
-        # ----- Verify post-condition: no source-surface contact -----
-        mujoco.mj_forward(model, data)
-        remaining = self._compute_source_contacts(model, data, base, held_body_id)
-        if remaining:
-            still_touching = self._format_other_bodies(model, remaining, held_body_id)
+        # ----- Verify post-condition: verifier still thinks we hold it -----
+        if not gripper.is_holding:
             logger.warning(
-                "LiftBase: %s still touching %s after lift (base at %.3fm of max %.3fm)",
+                "LiftBase: %s no longer held after lift (base at %.3fm of max %.3fm)",
                 held_name,
-                ", ".join(still_touching),
                 base.get_height(),
                 max_h,
             )
             return Status.FAILURE
 
         return Status.SUCCESS
-
-    # -- Helpers --------------------------------------------------------------
-
-    @staticmethod
-    def _compute_source_contacts(
-        model: mujoco.MjModel,
-        data: mujoco.MjData,
-        base,
-        held_body_id: int,
-    ) -> set[tuple[int, int]]:
-        """Return the set of contact pairs between the held body and a
-        body that is neither the arm nor the gripper.
-
-        These are the "source surface" contacts the lift needs to
-        clear. Pairs are returned in canonical order
-        ``(min(b1, b2), max(b1, b2))`` so set membership is well defined.
-        """
-        arm_and_gripper_ids = base.arm_body_ids
-        out: set[tuple[int, int]] = set()
-        for b1, b2, _ in iter_contacts(model, data):
-            if b1 == b2:
-                continue
-            if b1 == held_body_id and b2 not in arm_and_gripper_ids:
-                out.add((min(b1, b2), max(b1, b2)))
-            elif b2 == held_body_id and b1 not in arm_and_gripper_ids:
-                out.add((min(b1, b2), max(b1, b2)))
-        return out
-
-    @staticmethod
-    def _format_other_bodies(
-        model: mujoco.MjModel,
-        pairs: set[tuple[int, int]],
-        held_body_id: int,
-    ) -> list[str]:
-        """Format the non-held body in each pair as a sorted list of names."""
-        return sorted(
-            mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, b) or f"body_{b}"
-            for pair in pairs
-            for b in pair
-            if b != held_body_id
-        )

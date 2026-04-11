@@ -28,6 +28,8 @@ from mj_manipulator.arms.ur5e import (
     UR5E_VELOCITY_LIMITS,
 )
 from mj_manipulator.config import ArmConfig, KinematicLimits
+from mj_manipulator.grasp_verifier import GraspVerifier
+from mj_manipulator.load_signals import GripperPositionSignal
 
 from geodude.config import GeodudConfig, GeodudeArmSpec, setup_logging
 from geodude.vention_base import VentionBase
@@ -371,13 +373,39 @@ class Geodude:
             grasp_manager=self.grasp_manager,
         )
 
-        return Arm(
+        arm = Arm(
             self._env,
             arm_config,
             ik_solver=ik_solver,
             gripper=gripper,
             grasp_manager=self.grasp_manager,
         )
+
+        # Attach a sensor-based grasp verifier so gripper.is_holding /
+        # gripper.held_object reflect real signals instead of stale
+        # GraspManager bookkeeping.
+        #
+        # The single primary signal is the Robotiq gripper position.
+        # With RobotiqGripper.empty_at_fully_closed=True (set in
+        # mj_manipulator after the investigation recorded in
+        # geodude#173), the verifier's decisive-negative branch fires
+        # immediately when the gripper closed on nothing — crisp,
+        # noise-free, pose-independent, motion-independent. The F/T
+        # sensor is deliberately *not* wired up as a verifier signal:
+        # it produces false LOST transitions from inertial forces
+        # during transport and stale baselines from physics settling.
+        # F/T-based monitoring would need a quiescence gate to work
+        # reliably; deferred until we actually need finer-grained
+        # drop detection than "gripper fully closed means no object".
+        #
+        # See personalrobotics/mj_manipulator#93, #98, #99, #101 for
+        # the full story.
+        gripper.grasp_verifier = GraspVerifier(
+            gripper=gripper,
+            signals=[GripperPositionSignal(gripper)],
+        )
+
+        return arm
 
     # -- Properties ----------------------------------------------------------
 

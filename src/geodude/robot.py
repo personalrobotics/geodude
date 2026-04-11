@@ -28,6 +28,8 @@ from mj_manipulator.arms.ur5e import (
     UR5E_VELOCITY_LIMITS,
 )
 from mj_manipulator.config import ArmConfig, KinematicLimits
+from mj_manipulator.grasp_verifier import GraspVerifier
+from mj_manipulator.load_signals import WristFTSignal
 
 from geodude.config import GeodudConfig, GeodudeArmSpec, setup_logging
 from geodude.vention_base import VentionBase
@@ -371,13 +373,28 @@ class Geodude:
             grasp_manager=self.grasp_manager,
         )
 
-        return Arm(
+        arm = Arm(
             self._env,
             arm_config,
             ik_solver=ik_solver,
             gripper=gripper,
             grasp_manager=self.grasp_manager,
         )
+
+        # Attach a sensor-based grasp verifier so gripper.is_holding /
+        # gripper.held_object reflect real load + position signals
+        # instead of stale GraspManager bookkeeping. Geodude uses the
+        # UR5e wrist F/T sensor as the load signal -- the Robotiq
+        # 2F-140 can grasp at full closure, so GripperPositionSignal
+        # alone can't distinguish a grasped object from an empty
+        # closure, and the F/T load drop is the decisive signal.
+        # See personalrobotics/mj_manipulator#93 and geodude#173.
+        gripper.grasp_verifier = GraspVerifier(
+            gripper=gripper,
+            signals=[WristFTSignal(arm)],
+        )
+
+        return arm
 
     # -- Properties ----------------------------------------------------------
 

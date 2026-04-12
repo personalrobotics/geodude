@@ -29,7 +29,6 @@ from mj_manipulator.arms.ur5e import (
 )
 from mj_manipulator.config import ArmConfig, KinematicLimits
 from mj_manipulator.grasp_verifier import GraspVerifier
-from mj_manipulator.load_signals import GripperPositionSignal
 
 from geodude.config import GeodudConfig, GeodudeArmSpec, setup_logging
 from geodude.vention_base import VentionBase
@@ -385,24 +384,27 @@ class Geodude:
         # gripper.held_object reflect real signals instead of stale
         # GraspManager bookkeeping.
         #
-        # The single primary signal is the Robotiq gripper position.
-        # With RobotiqGripper.empty_at_fully_closed=True (set in
-        # mj_manipulator after the investigation recorded in
-        # geodude#173), the verifier's decisive-negative branch fires
-        # immediately when the gripper closed on nothing — crisp,
-        # noise-free, pose-independent, motion-independent. The F/T
-        # sensor is deliberately *not* wired up as a verifier signal:
-        # it produces false LOST transitions from inertial forces
-        # during transport and stale baselines from physics settling.
-        # F/T-based monitoring would need a quiescence gate to work
-        # reliably; deferred until we actually need finer-grained
-        # drop detection than "gripper fully closed means no object".
+        # The grasp verifier uses no load signals — the only check is
+        # the decisive-negative branch (gripper at mechanical stop →
+        # nothing held), which reads gripper.get_actual_position()
+        # directly inside _collect_facts, not through the signal list.
         #
-        # See personalrobotics/mj_manipulator#93, #98, #99, #101 for
-        # the full story.
+        # GripperPositionSignal was previously in the signal list, but
+        # the load-drop check (|val| < |baseline| * 0.7) is wrong for
+        # position: tiny compliance drift (fingers flex ~0.06 rad
+        # under load) triggers false LOST on objects grasped at low
+        # position values (pop_tarts_case_0 at 0.209 → 0.146 drift).
+        # The object is still firmly held; the fingers just flexed.
+        #
+        # With an empty signal list, the verifier has one check:
+        # "did the gripper reach the mechanical stop?" If yes → LOST.
+        # If no → HOLDING. Delayed detection of a mid-transport drop
+        # (object falls out, fingers close to stop) is acceptable —
+        # the decisive-negative fires within a few ticks once the
+        # fingers close through the now-empty space.
         gripper.grasp_verifier = GraspVerifier(
             gripper=gripper,
-            signals=[GripperPositionSignal(gripper)],
+            signals=[],
         )
 
         return arm

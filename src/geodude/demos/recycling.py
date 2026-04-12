@@ -35,6 +35,6 @@ _GRASPABLE_TYPES = [k for k in scene["objects"] if k != "recycle_bin"]
 def sort_all():
     """Pick up and place every object into a recycle bin."""
     while robot.pickup():
-        if not robot.place("recycle_bin"):
-            robot.go_home()
+        robot.place("recycle_bin")
+        robot.go_home()
     robot.go_home()

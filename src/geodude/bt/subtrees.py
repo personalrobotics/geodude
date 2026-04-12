@@ -4,20 +4,22 @@
 """Geodude-specific behavior tree subtrees.
 
 Extends mj_manipulator.bt subtrees with bimanual arm selection
-and automatic TSR generation.
+and automatic TSR generation. These are action sequences — recovery
+on failure is handled by the primitives layer (``robot.pickup()``,
+``robot.place()``).
 """
 
 from __future__ import annotations
 
 import py_trees
-from mj_manipulator.bt import pickup_with_recovery, place_with_recovery
+from mj_manipulator.bt import pickup, place
 from mj_manipulator.bt.nodes import GenerateGrasps, GeneratePlaceTSRs
 
 from geodude.bt.nodes import LiftBase
 
 
 def geodude_pickup(ns: str) -> py_trees.composites.Sequence:
-    """Generate grasp TSRs then pickup with recovery.
+    """Generate grasp TSRs, pickup, then lift the base.
 
     Geodude's UR5e is mounted on a Vention linear base with generous vertical
     clearance, so post-grasp retraction is done by :class:`LiftBase` (base up)
@@ -27,31 +29,31 @@ def geodude_pickup(ns: str) -> py_trees.composites.Sequence:
     benefit.
 
     Reads: ``{ns}/object_name``, ``{ns}/robot``
-    (plus all blackboard keys needed by pickup_with_recovery)
+    (plus all blackboard keys needed by pickup)
     """
     return py_trees.composites.Sequence(
         name="geodude_pickup",
         memory=True,
         children=[
             GenerateGrasps(ns=ns),
-            pickup_with_recovery(ns, with_lift=False),
+            pickup(ns, with_lift=False),
             LiftBase(ns=ns),
         ],
     )
 
 
 def geodude_place(ns: str) -> py_trees.composites.Sequence:
-    """Generate placement TSRs then place with recovery.
+    """Generate placement TSRs then place.
 
     Reads: ``{ns}/destination``, ``{ns}/robot``
-    (plus all blackboard keys needed by place_with_recovery)
+    (plus all blackboard keys needed by place)
     """
     return py_trees.composites.Sequence(
         name="geodude_place",
         memory=True,
         children=[
             GeneratePlaceTSRs(ns=ns),
-            place_with_recovery(ns),
+            place(ns),
         ],
     )
 

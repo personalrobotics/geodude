@@ -19,6 +19,7 @@ import py_trees
 from mj_manipulator.primitives import (
     _arm_preempted,
     _deactivate_teleop_for_arms,
+    _recover,
     _report_pickup_failure,
     _set_hud_action,
     _setup_blackboard,
@@ -83,6 +84,14 @@ def _pickup_inner(
 
     ctx = robot._active_context
 
+    # Ensure grippers are open before planning. A closed gripper from
+    # a previous failed grasp causes start-config collisions when the
+    # planner tries to approach a new object.
+    for side_name in ("left", "right"):
+        arm_obj = robot.arms[side_name]
+        if arm_obj.gripper is not None and arm_obj.gripper.get_actual_position() > 0.1:
+            ctx.arm(side_name).release()
+
     # Quick check: are there any matching objects?
     if not robot.find_objects(target):
         desc = f"'{target}'" if target else "any object"
@@ -111,6 +120,7 @@ def _pickup_inner(
             _sync_viewer(robot)
             return True
         _report_pickup_failure(robot, [arm], target)
+        _recover(robot, ctx, [arm])
         _sync_viewer(robot)
         return False
 
@@ -130,9 +140,7 @@ def _pickup_inner(
             go_home(robot, arm=side)
 
     _report_pickup_failure(robot, sides_tried, target)
-    for side in sides_tried:
-        if not _arm_preempted(robot, side):
-            go_home(robot, arm=side)
+    _recover(robot, ctx, sides_tried)
     _sync_viewer(robot)
     return False
 
@@ -217,6 +225,7 @@ def _place_inner(
     else:
         _set_hud_action(robot, arm, f"✗ place({desc})")
         logger.warning("Place failed for destination '%s'", destination)
+        _recover(robot, ctx, [arm])
 
     _sync_viewer(robot)
     return ok
@@ -273,6 +282,16 @@ def _go_home_inner(
             logger.warning("go_home: no 'ready' pose for %s arm, skipping", side)
             continue
         ready = np.array(robot.named_poses["ready"][side])
+
+        # Release before planning home. This does two things:
+        # 1. Opens a closed gripper so the planner doesn't see
+        #    start-config collisions from closed fingers.
+        # 2. Puts the verifier in IDLE so the abort-on-drop
+        #    predicate doesn't fire during go_home's trajectory
+        #    execution (verifier was falsely going LOST from
+        #    finger compliance drift during transit).
+        ctx.arm(side).release()
+
         try:
             path = arm_obj.plan_to_configuration(ready, abort_fn=abort_fn)
         except Exception as e:

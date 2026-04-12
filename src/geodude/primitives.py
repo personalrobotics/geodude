@@ -130,6 +130,9 @@ def _pickup_inner(
             go_home(robot, arm=side)
 
     _report_pickup_failure(robot, sides_tried, target)
+    for side in sides_tried:
+        if not _arm_preempted(robot, side):
+            go_home(robot, arm=side)
     _sync_viewer(robot)
     return False
 

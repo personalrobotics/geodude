@@ -70,6 +70,13 @@ class LiftBase(py_trees.behaviour.Behaviour):
         self.bb.register_key(key=f"{ns}/robot", access=Access.READ)
         self.bb.register_key(key=f"{ns}/arm", access=Access.READ)
         self.bb.register_key(key="/context", access=Access.READ)
+        # See mj_manipulator/primitives.py _report_pickup_failure: this
+        # key is read there to distinguish grasp-verification failure
+        # from planning failure in top-level error messages.
+        try:
+            self.bb.register_key(key=f"{ns}/grasp_confirmed", access=Access.WRITE)
+        except KeyError:
+            pass
 
     def update(self) -> Status:
         robot = self.bb.get(f"{self.ns}/robot")
@@ -84,18 +91,31 @@ class LiftBase(py_trees.behaviour.Behaviour):
 
         gripper = arm.gripper
         if gripper is None or not gripper.is_holding:
+            # The verifier ran its first post-settling check during
+            # the preceding Sync / plan_and_execute ticks and
+            # rejected the grasp, OR nothing was grasped to begin
+            # with. Either way: the grasp didn't hold. Record the
+            # verdict so _report_pickup_failure can classify this as
+            # \"reached X but verifier rejected the grasp\" instead
+            # of \"could not plan to X\".
+            self.bb.set(f"{self.ns}/grasp_confirmed", False)
             logger.warning(
-                "LiftBase: gripper on %s arm does not report holding — was Grasp run first?",
+                "LiftBase: verifier on %s arm rejected the grasp (nothing to lift)",
                 arm.config.name,
             )
             return Status.FAILURE
 
+        # Precondition passed — verifier says we're holding. Record
+        # the confirmation. Subsequent failures in this node are
+        # dropped-during-lift, not grasp-close failures.
+        self.bb.set(f"{self.ns}/grasp_confirmed", True)
         held_name = gripper.held_object
 
         # ----- Action: always attempt the lift -----
         current_h = base.get_height()
         max_h = base.height_range[1]
         target_h = min(current_h + self.LIFT_AMOUNT, max_h)
+        start_h = current_h
 
         if target_h - current_h < 1e-4:
             logger.warning(
@@ -120,12 +140,26 @@ class LiftBase(py_trees.behaviour.Behaviour):
 
         # ----- Verify post-condition: verifier still thinks we hold it -----
         if not gripper.is_holding:
-            logger.warning(
-                "LiftBase: %s no longer held after lift (base at %.3fm of max %.3fm)",
-                held_name,
-                base.get_height(),
-                max_h,
-            )
+            end_h = base.get_height()
+            lift_traveled = end_h - start_h
+            if lift_traveled < 0.005:
+                # Base barely moved — the abort-on-drop predicate
+                # caught the verifier transition within a tick or two
+                # of the trajectory starting. The grasp wasn't really
+                # holding and there was nothing to transport.
+                logger.warning(
+                    "LiftBase: %s slipped immediately after grasp (base at %.3fm, did not lift)",
+                    held_name,
+                    end_h,
+                )
+            else:
+                logger.warning(
+                    "LiftBase: %s dropped during lift (base moved %.3fm to %.3fm of max %.3fm)",
+                    held_name,
+                    lift_traveled,
+                    end_h,
+                    max_h,
+                )
             return Status.FAILURE
 
         return Status.SUCCESS

@@ -119,9 +119,11 @@ class LiftBase(py_trees.behaviour.Behaviour):
 
         if target_h - current_h < 1e-4:
             logger.warning(
-                "LiftBase: base already at max height %.3fm; skipping lift, will verify held state",
+                "LiftBase: base already at max height %.3fm; cannot lift %s",
                 current_h,
+                held_name,
             )
+            return Status.FAILURE
         else:
             traj = base.plan_to(target_h, check_collisions=True, partial_ok=True)
             if traj is None:
@@ -129,6 +131,7 @@ class LiftBase(py_trees.behaviour.Behaviour):
                     "LiftBase: cannot plan any base motion from %.3fm — first step blocked",
                     current_h,
                 )
+                return Status.FAILURE
             else:
                 ctx.execute(traj)
                 logger.info(

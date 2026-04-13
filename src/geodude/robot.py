@@ -293,6 +293,28 @@ class Geodude:
         keyframe_poses = self._load_keyframe_poses()
         self._named_poses = {**self.config.named_poses, **keyframe_poses}
 
+        # Perception service — runs the full pipeline (mock detection →
+        # alias resolution → tracker → env.update) same as hardware.
+        from mj_manipulator.perception import SimPerceptionService
+
+        asset_mgr = None
+        try:
+            from asset_manager import AssetManager
+            from prl_assets import OBJECTS_DIR
+
+            asset_mgr = AssetManager(str(OBJECTS_DIR))
+        except ImportError:
+            pass
+
+        self._perception = SimPerceptionService(
+            self._env,
+            grasp_manager=self.grasp_manager,
+            asset_manager=asset_mgr,
+        )
+        # fixture_types is populated later by setup_scene when the
+        # demo config is known. Until then, refresh() preserves
+        # nothing as fixtures (empty set).
+
         # Initialize state
         mujoco.mj_forward(self.model, self.data)
         setup_logging(self.config.debug)
@@ -780,6 +802,10 @@ class Geodude:
         fixtures = fixtures or {}
         self._fixtures = fixtures
 
+        # Tell the perception service which types are fixtures so
+        # refresh() preserves them (they're not detected by perception).
+        self._perception._fixture_types = set(fixtures.keys())
+
         # 1. Activate fixtures at specified positions
         for obj_type, positions in fixtures.items():
             for pos in positions:
@@ -929,8 +955,17 @@ class Geodude:
         mujoco.mj_resetDataKeyframe(self.model, self.data, key_id)
         self.forward()
 
+    @property
+    def perception(self):
+        """Perception service for object pose queries."""
+        return self._perception
+
     def get_object_pose(self, object_name: str) -> np.ndarray:
         """Get the 4x4 pose of an object in the scene."""
+        pose = self._perception.get_pose(object_name)
+        if pose is not None:
+            return pose
+        # Fallback for non-registry bodies (fixtures, robot links)
         body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, object_name)
         if body_id == -1:
             raise ValueError(f"Object '{object_name}' not found in model")

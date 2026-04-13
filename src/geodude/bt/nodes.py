@@ -21,44 +21,25 @@ logger = logging.getLogger(__name__)
 class LiftBase(py_trees.behaviour.Behaviour):
     """Lift the Vention base, then verify the held object is still held.
 
-    The point of this node is to ensure that, after a grasp, the held
-    object remains in the gripper after we lift it off its source
-    surface. The action is always a base lift; the SUCCESS criterion
-    is the invariant that the gripper still believes it has the
-    object, as judged by
-    :class:`~mj_manipulator.grasp_verifier.GraspVerifier` on its
-    live sensor signals (wrist F/T for UR5e + Robotiq).
+    Geodude-specific node for post-grasp clearance on the Vention
+    linear base. Replaces the arm-based ``SafeRetract`` used by
+    fixed-base arms (Franka).
 
-    Why the verifier rather than a contact query:
-
-    - On real hardware there's no MuJoCo contact state to inspect.
-      The verifier uses signals — F/T, gripper position, joint
-      torques — that exist on both sim and real robots.
-    - After a physics grasp, friction can pull the object 1–2 mm
-      into the gripper, breaking any object↔table contact for that
-      instant. A contact-based precondition check sees nothing and
-      skips the lift; that was the visible bug from geodude#173.
-    - The invariant we care about is *\"object is still held\"*, not
-      *\"object stopped touching the table\"*. The verifier answers
-      the former directly. A dropped-during-lift object, a slipped
-      grasp, a gripper that opened too early — all of these failure
-      modes reduce to the same SUCCESS-criterion check: is the
-      verifier still happy?
-
-    Implementation:
-
-    1. **Precondition:** the arm's gripper reports ``is_holding`` —
-       i.e. the verifier thinks we have an object. FAILURE otherwise
-       (config error, BT structure bug, or grasp never succeeded).
-    2. **Action:** plan and execute the lift with
-       ``base.plan_to(target, partial_ok=True)``. If the base is
-       already at max headroom or the first step is in collision,
-       skip the motion and fall straight through to the post-check.
-    3. **Verify post-condition:** re-query ``gripper.is_holding``.
-       FAILURE if it flipped to False during the lift (object
-       dropped); SUCCESS otherwise.
+    The verifier's ``gripper.is_holding`` (backed by
+    :class:`~mj_manipulator.grasp_verifier.GraspVerifier`) is the
+    source of truth for both the precondition and the post-check.
+    The verifier's decisive-negative check (gripper at mechanical
+    stop = nothing held) works on both sim and real hardware.
 
     Reads: ``{ns}/robot``, ``{ns}/arm``, ``/context``
+
+    Returns SUCCESS when: base lifted and gripper still reports holding.
+    Returns FAILURE when:
+        - No base configured for the arm.
+        - Gripper does not report holding (grasp failed or never ran).
+        - Base at max height (cannot lift further).
+        - Base motion blocked by collision at the first step.
+        - Object dropped during the lift (verifier went LOST).
     """
 
     LIFT_AMOUNT = 0.15  # meters — target lift, capped at base headroom
@@ -92,7 +73,7 @@ class LiftBase(py_trees.behaviour.Behaviour):
         gripper = arm.gripper
         if gripper is None or not gripper.is_holding:
             # The verifier ran its first post-settling check during
-            # the preceding Sync / plan_and_execute ticks and
+            # the preceding pickup subtree ticks and
             # rejected the grasp, OR nothing was grasped to begin
             # with. Either way: the grasp didn't hold. Record the
             # verdict so _report_pickup_failure can classify this as

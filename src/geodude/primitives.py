@@ -132,9 +132,12 @@ def _pickup_inner(
             _sync_viewer(robot)
             return True
         sides_tried.append(side)
-        if robot.is_abort_requested() or _arm_preempted(robot, side):
+        if _arm_preempted(robot, side):
             _sync_viewer(robot)
             return False
+        # Clear abort from this arm's BT run (e.g. drop-detection
+        # abort) so the other arm gets a chance to try.
+        robot.clear_abort()
         # Before trying the other arm, send this arm home
         if i < len(sides) - 1 and not _arm_preempted(robot, side):
             go_home(robot, arm=side)

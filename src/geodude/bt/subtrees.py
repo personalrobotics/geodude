@@ -3,59 +3,49 @@
 
 """Geodude-specific behavior tree subtrees.
 
-Extends mj_manipulator.bt subtrees with bimanual arm selection
-and automatic TSR generation. These are action sequences — recovery
-on failure is handled by the primitives layer (``robot.pickup()``,
-``robot.place()``).
+Extends mj_manipulator.bt with Vention base lifting and bimanual
+arm selection. These are action sequences — recovery on failure is
+handled by the primitives layer.
 """
 
 from __future__ import annotations
 
 import py_trees
 from mj_manipulator.bt import pickup, place
-from mj_manipulator.bt.nodes import GenerateGrasps, GeneratePlaceTSRs
 
 from geodude.bt.nodes import LiftBase
 
 
 def geodude_pickup(ns: str) -> py_trees.composites.Sequence:
-    """Generate grasp TSRs, pickup, then lift the base.
+    """Pick up an object, then lift the base to clear the table.
 
-    Geodude's UR5e is mounted on a Vention linear base with generous vertical
-    clearance, so post-grasp retraction is done by :class:`LiftBase` (base up)
-    rather than by a cartesian arm lift. We pass ``with_lift=False`` to skip
-    the default ``SafeRetract`` in the generic pickup — doing both would be
-    redundant and would drag the arm through extra cartesian motion with no
-    benefit.
+    Uses the generic ``pickup(with_lift=False)`` (which finds grasps,
+    plans, moves, and closes the gripper) then appends a Vention base
+    lift instead of the arm-based retraction that fixed-base arms use.
 
     Reads: ``{ns}/object_name``, ``{ns}/robot``
     (plus all blackboard keys needed by pickup)
     """
     return py_trees.composites.Sequence(
-        name="geodude_pickup",
+        name="Geodude pickup",
         memory=True,
         children=[
-            GenerateGrasps(ns=ns),
             pickup(ns, with_lift=False),
-            LiftBase(ns=ns),
+            LiftBase(ns=ns, name="Lift base to clear table"),
         ],
     )
 
 
 def geodude_place(ns: str) -> py_trees.composites.Sequence:
-    """Generate placement TSRs then place.
+    """Find placement poses, plan, move, and release.
+
+    Uses the generic ``place()`` directly — no geodude-specific
+    modifications needed for placing.
 
     Reads: ``{ns}/destination``, ``{ns}/robot``
     (plus all blackboard keys needed by place)
     """
-    return py_trees.composites.Sequence(
-        name="geodude_place",
-        memory=True,
-        children=[
-            GeneratePlaceTSRs(ns=ns),
-            place(ns),
-        ],
-    )
+    return place(ns)
 
 
 def geodude_pickup_bimanual() -> py_trees.composites.Selector:
@@ -65,7 +55,7 @@ def geodude_pickup_bimanual() -> py_trees.composites.Selector:
     The Selector tries right first, falls back to left.
     """
     return py_trees.composites.Selector(
-        name="bimanual_pickup",
+        name="Try both arms",
         memory=True,
         children=[
             geodude_pickup("/right"),

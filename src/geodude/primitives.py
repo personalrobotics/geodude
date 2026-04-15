@@ -18,7 +18,6 @@ import numpy as np
 import py_trees
 from mj_manipulator.primitives import (
     _arm_preempted,
-    _deactivate_teleop_for_arms,
     _recover,
     _report_pickup_failure,
     _set_hud_action,
@@ -58,7 +57,8 @@ def pickup(
         verbose = robot.config.debug.verbose
 
     robot.clear_abort()
-    _deactivate_teleop_for_arms(robot)
+    # Don't deactivate teleop — if the operator activated it, respect
+    # their intent. _arm_unavailable skips teleop arms in the loop.
     try:
         return _pickup_inner(robot, target, arm=arm, verbose=verbose)
     except KeyboardInterrupt:
@@ -128,15 +128,14 @@ def _pickup_inner(
     random.shuffle(sides)
     sides_tried = []
     for i, side in enumerate(sides):
+        if _arm_preempted(robot, side):
+            continue  # arm unavailable (teleop, out of commission, etc.)
         if _try_pickup(side):
             _sync_viewer(robot)
             return True
         sides_tried.append(side)
-        if _arm_preempted(robot, side):
-            _sync_viewer(robot)
-            return False
         # Clear abort from this arm's BT run (e.g. drop-detection
-        # abort) so the other arm gets a chance to try.
+        # abort, teleop preemption) so the other arm gets a chance.
         robot.clear_abort()
         # Before trying the other arm, send this arm home
         if i < len(sides) - 1 and not _arm_preempted(robot, side):
@@ -177,7 +176,6 @@ def place(
         verbose = robot.config.debug.verbose
 
     robot.clear_abort()
-    _deactivate_teleop_for_arms(robot)
     try:
         return _place_inner(robot, destination, arm=arm, verbose=verbose)
     except KeyboardInterrupt:
@@ -249,8 +247,6 @@ def go_home(robot: Geodude, *, arm: str | None = None, verbose: bool | None = No
         verbose = robot.config.debug.verbose
 
     robot.clear_abort()
-    arms_to_home = [arm] if arm is not None else ["left", "right"]
-    _deactivate_teleop_for_arms(robot, arms_to_home)
     try:
         return _go_home_inner(robot, ctx, arm=arm, verbose=verbose)
     except KeyboardInterrupt:
@@ -279,6 +275,8 @@ def _go_home_inner(
 
     success = True
     for side, arm_obj in arms:
+        if _arm_preempted(robot, side):
+            continue  # arm unavailable (teleop, out of commission, etc.)
         if "ready" not in robot.named_poses or side not in robot.named_poses["ready"]:
             logger.warning("go_home: no 'ready' pose for %s arm, skipping", side)
             continue

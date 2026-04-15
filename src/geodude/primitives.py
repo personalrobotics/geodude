@@ -269,8 +269,6 @@ def _go_home_inner(
     verbose: bool = False,
 ) -> bool:
     """Core go_home with VentionBase homing."""
-    from mj_manipulator.cartesian import CartesianController
-
     if arm is not None:
         arms = [(arm, robot._resolve_arm(arm))]
     else:
@@ -302,19 +300,35 @@ def _go_home_inner(
             path = None
 
         if path is None:
-            logger.warning("go_home %s arm: retract up and retry", side)
-            arm_name = arm_obj.config.name
+            # Retract using the Vention base (not a cartesian arm move).
+            # The base lift is collision-checked and retimed, avoiding
+            # the wrist-flip self-collisions that cartesian retracts
+            # produce on 6-DOF arms.
+            base = robot._get_base_for_arm(arm_obj)
+            if base is not None:
+                current_h = base.get_height()
+                target_h = min(current_h + 0.10, base.height_range[1])
+                if target_h - current_h > 0.005:
+                    logger.warning("go_home %s arm: retract base up and retry", side)
+                    base_traj = base.plan_to(target_h, check_collisions=True, partial_ok=True)
+                    if base_traj is not None:
+                        ctx.execute(base_traj)
+                    else:
+                        logger.warning("go_home %s arm: base retract blocked", side)
+                else:
+                    logger.warning("go_home %s arm: base at max, cannot retract", side)
+            else:
+                # No base — use safe_retract (planned + retimed)
+                from mj_manipulator.safe_retract import safe_retract
 
-            def _step_fn(q, qd):
-                ctx.step_cartesian(arm_name, q, qd)
-
-            ctrl = CartesianController.from_arm(arm_obj, step_fn=_step_fn)
-            ctrl.move(
-                np.array([0.0, 0.0, 0.10, 0.0, 0.0, 0.0]),
-                dt=ctx.control_dt,
-                max_distance=0.10,
-                stop_condition=abort_fn,
-            )
+                logger.warning("go_home %s arm: safe retract up and retry", side)
+                safe_retract(
+                    arm_obj,
+                    ctx,
+                    np.array([0.0, 0.0, 0.10, 0.0, 0.0, 0.0]),
+                    max_distance=0.10,
+                    stop_condition=abort_fn,
+                )
             try:
                 path = arm_obj.plan_to_configuration(ready, abort_fn=abort_fn)
             except Exception as e:

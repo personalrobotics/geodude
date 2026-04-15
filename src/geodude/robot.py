@@ -337,12 +337,16 @@ class Geodude:
         When an ownership registry is available (tick-driven mode), aborts
         all arms via per-arm flags. Falls back to global event otherwise.
         """
+        if not self._abort_event.is_set():
+            logger.warning("⛔ E-Stop activated — all execution halted")
         if self._context is not None and self._context.ownership is not None:
             self._context.ownership.abort_all()
         self._abort_event.set()
 
     def clear_abort(self) -> None:
         """Clear the abort flag (call before starting a new operation)."""
+        if self._abort_event.is_set():
+            logger.info("✓ E-Stop cleared — resuming")
         if self._context is not None and self._context.ownership is not None:
             self._context.ownership.clear_all()
         self._abort_event.clear()

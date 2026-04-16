@@ -733,36 +733,42 @@ class Geodude:
     ) -> PlanResult | None:
         """Plan with a single arm at a specific base height.
 
-        Teleports the base for planning (so IK/RRT sees the correct
-        workspace), then restores it. The base trajectory is included
-        in the PlanResult so ctx.execute() moves the base properly
-        through physics/kinematics.
+        Plans in a forked environment with the base at the target height,
+        so live state is never mutated. The base trajectory is included
+        in the PlanResult so ctx.execute() moves the base properly.
         """
         base = self._get_base_for_arm(arm)
-        original_height = None
         base_traj = None
 
-        # Plan base trajectory and teleport for arm planning
+        # Plan base trajectory on live state (read-only collision query)
         if height is not None and base is not None:
             current_height = base.get_height()
             if abs(current_height - height) > 0.001:
                 base_traj = base.plan_to(height, check_collisions=True)
                 if base_traj is None:
                     return None  # path blocked by collision
-                original_height = current_height
-                base.set_height(height)  # teleport for arm planning
 
-        # Resolve timeout from config if not specified
+        # Fork env and set base to target height for arm planning.
+        # No live state mutation — the fork is discarded after planning.
+        planning_env = self._env.fork()
+        if height is not None and base is not None:
+            planning_env.data.qpos[base._qpos_idx] = height
+            mujoco.mj_forward(planning_env.model, planning_env.data)
+
         if timeout is None:
             timeout = self.config.planning.timeout
 
-        # Plan arm motion (with base at target height)
+        # Plan arm in the fork (base at target height, everything else live)
         try:
+            config = arm._make_planner_config(timeout, None)
+            planner = arm.create_planner(config, planning_env=planning_env)
+            start = arm.get_joint_positions()
+
             if goal_tsrs is not None:
                 tsrs = goal_tsrs if isinstance(goal_tsrs, list) else [goal_tsrs]
-                path = arm.plan_to_tsrs(tsrs, timeout=timeout, seed=seed)
+                path = planner.plan(start=start, goal_tsrs=tsrs, seed=seed)
             elif pose is not None:
-                path = arm.plan_to_pose(pose, timeout=timeout, seed=seed)
+                path = planner.plan(start=start, goal_tsrs=[arm._make_pose_tsr(pose)], seed=seed)
             else:
                 raise ValueError("Must provide goal_tsrs or pose")
         except Exception as e:
@@ -770,14 +776,7 @@ class Geodude:
             path = None
 
         if path is None:
-            # Restore base height on failure
-            if original_height is not None:
-                base.set_height(original_height)
             return None
-
-        # Restore base — execution will move it properly
-        if original_height is not None:
-            base.set_height(original_height)
 
         arm_traj = arm.retime(path)
 

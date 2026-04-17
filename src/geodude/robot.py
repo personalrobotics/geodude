@@ -389,6 +389,20 @@ class Geodude:
             joint_limits=joint_limits,
         )
 
+        # Rewrite the Robotiq actuator for constant grip force. The
+        # geodude_assets 2F-140 ships with the menagerie position-
+        # actuator bug: force couples to tendon length so grip → 0 at
+        # full close, and a forcerange=[-5, 5] clamp caps peak force at
+        # ~90 N (low end of the real 20–235 N Robotiq spec). The 2F-140
+        # hides the bug in practice because its large pads provide
+        # enough contact area to hold typical objects, but as soon as
+        # we grasp something smaller or slipperier the force-to-zero
+        # behaviour bites. See docs in mj_manipulator/docs/grippers.md
+        # §2 and mj_manipulator#129/geodude#189.
+        from mj_manipulator.grippers.robotiq import fix_robotiq_grip_force
+
+        fix_robotiq_grip_force(self.model, prefix=spec.gripper_prefix)
+
         # Create Robotiq gripper
         gripper = RobotiqGripper(
             self.model,

@@ -933,16 +933,15 @@ class Geodude:
         For just returning the robot to home, use ``robot.go_home()``
         which plans and executes through the context.
         """
-        # Reset MuJoCo state to keyframe
-        key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, "ready")
-        if key_id != -1:
-            mujoco.mj_resetDataKeyframe(self.model, self.data, key_id)
-        else:
-            mujoco.mj_resetData(self.model, self.data)
-
-        # Deactivate teleop, release grasps, abort runners, hold at new qpos
+        # Reset MuJoCo state + deactivate teleop, release grasps, hold
         if self._context is not None:
-            self._context.reset_state()
+            self._context.reset_to_keyframe("ready")
+        else:
+            key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, "ready")
+            if key_id != -1:
+                mujoco.mj_resetDataKeyframe(self.model, self.data, key_id)
+            else:
+                mujoco.mj_resetData(self.model, self.data)
 
         # Clear F/T tare
         for arm in [self._left_arm, self._right_arm]:
@@ -964,13 +963,13 @@ class Geodude:
 
     def reset_to_keyframe(self, name: str) -> None:
         """Reset robot to a MuJoCo keyframe by name."""
-        key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, name)
-        if key_id == -1:
-            raise ValueError(f"Keyframe '{name}' not found in model")
-        mujoco.mj_resetDataKeyframe(self.model, self.data, key_id)
         if self._context is not None:
-            self._context.reset_state()
+            self._context.reset_to_keyframe(name)
         else:
+            key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, name)
+            if key_id == -1:
+                raise ValueError(f"Keyframe '{name}' not found in model")
+            mujoco.mj_resetDataKeyframe(self.model, self.data, key_id)
             self.forward()
 
     @property

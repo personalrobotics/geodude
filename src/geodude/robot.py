@@ -940,13 +940,11 @@ class Geodude:
         else:
             mujoco.mj_resetData(self.model, self.data)
 
-        # Sync controller targets to new positions (prevents violent corrections)
+        # Deactivate teleop, release grasps, abort runners, hold at new qpos
         if self._context is not None:
-            self._context.hold()
+            self._context.reset_state()
 
-        # Release grasps and clear F/T tare
-        for obj in list(self.grasp_manager.grasped.keys()):
-            self.grasp_manager.mark_released(obj)
+        # Clear F/T tare
         for arm in [self._left_arm, self._right_arm]:
             arm._ft_tare_offset = np.zeros(6)
 
@@ -970,7 +968,10 @@ class Geodude:
         if key_id == -1:
             raise ValueError(f"Keyframe '{name}' not found in model")
         mujoco.mj_resetDataKeyframe(self.model, self.data, key_id)
-        self.forward()
+        if self._context is not None:
+            self._context.reset_state()
+        else:
+            self.forward()
 
     @property
     def perception(self):

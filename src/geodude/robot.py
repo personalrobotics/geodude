@@ -933,7 +933,7 @@ class Geodude:
         For just returning the robot to home, use ``robot.go_home()``
         which plans and executes through the context.
         """
-        # Reset MuJoCo state + deactivate teleop, release grasps, hold
+        # Reset MuJoCo state + deactivate teleop, release grasps
         if self._context is not None:
             self._context.reset_to_keyframe("ready")
         else:
@@ -958,8 +958,14 @@ class Geodude:
             for name in list(self._env.registry.active_objects):
                 self._env.registry.hide(name)
 
-        # Re-setup scene (fixtures + robot pose — calls forward() internally)
+        # Re-setup scene (fixtures + robot pose — calls forward() internally).
+        # setup_scene may modify qpos (base heights, arm positions), so we
+        # must re-sync controller targets AFTER it runs. reset_to_keyframe
+        # already called hold_all() once, but setup_scene changes invalidate
+        # those targets.
         self.setup_scene(fixtures=getattr(self, "_fixtures", None))
+        if self._context is not None:
+            self._context.hold()
 
     def reset_to_keyframe(self, name: str) -> None:
         """Reset robot to a MuJoCo keyframe by name."""

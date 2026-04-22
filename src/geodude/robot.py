@@ -959,13 +959,10 @@ class Geodude:
                 self._env.registry.hide(name)
 
         # Re-setup scene (fixtures + robot pose — calls forward() internally).
-        # setup_scene may modify qpos (base heights, arm positions), so we
-        # must re-sync controller targets AFTER it runs. reset_to_keyframe
-        # already called hold_all() once, but setup_scene changes invalidate
-        # those targets.
+        # setup_scene may modify qpos (base heights, arm positions).
+        # reset_to_keyframe deferred the hold, so the next tick captures
+        # whatever qpos exists after setup_scene — no manual hold needed.
         self.setup_scene(fixtures=getattr(self, "_fixtures", None))
-        if self._context is not None:
-            self._context.hold()
 
     def reset_to_keyframe(self, name: str) -> None:
         """Reset robot to a MuJoCo keyframe by name."""

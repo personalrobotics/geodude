@@ -332,15 +332,27 @@ class Geodude:
     # -----------------------------------------------------------------
 
     def request_abort(self) -> None:
-        """Signal all running operations to stop.
+        """Global kill switch: stop everything immediately.
 
-        When an ownership registry is available (tick-driven mode), aborts
-        all arms via per-arm flags. Falls back to global event otherwise.
+        - Sets the abort flag (checked by all primitives and trajectory
+          runners on the next tick)
+        - Aborts all arms via the ownership registry
+        - Deactivates all teleop (operator must re-activate)
+
+        The abort flag stays set until the user starts a new command
+        from the REPL, which calls ``clear_abort()``. Primitives
+        check ``is_abort_requested()`` at the top and return False
+        immediately without clearing it.
         """
         if not self._abort_event.is_set():
             logger.warning("⛔ E-Stop activated — all execution halted")
         if self._context is not None and self._context.ownership is not None:
             self._context.ownership.abort_all()
+        # Deactivate all teleop — stop means stop, everything
+        if self._context is not None and hasattr(self._context, "_event_loop"):
+            loop = self._context._event_loop
+            if loop is not None and hasattr(loop, "_deactivate_all_teleop"):
+                loop._deactivate_all_teleop()
         self._abort_event.set()
 
     def clear_abort(self) -> None:

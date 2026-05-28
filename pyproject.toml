@@ -7,7 +7,7 @@ name = "geodude"
 version = "3.0.0"
 description = "High-level API for programming the Geodude bimanual robot"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"  # mj-manipulator (transitive via ssik) requires 3.11+
 license = "MIT"
 authors = [
     {name = "Siddhartha Srinivasa", email = "siddhartha.srinivasa@gmail.com"},

@@ -7,7 +7,7 @@ name = "geodude"
 version = "3.0.0"
 description = "High-level API for programming the Geodude bimanual robot"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"  # mj-manipulator (transitive via ssik) requires 3.11+
 license = "MIT"
 authors = [
     {name = "Siddhartha Srinivasa", email = "siddhartha.srinivasa@gmail.com"},
@@ -23,10 +23,12 @@ dependencies = [
     "ipython>=8.0",
     "mj-manipulator @ git+https://github.com/personalrobotics/mj_manipulator.git",
     "mj-environment @ git+https://github.com/personalrobotics/mj_environment.git",
+    "mj-viser @ git+https://github.com/personalrobotics/mj_viser.git",
     "geodude-assets @ git+https://github.com/personalrobotics/geodude_assets.git",
     "prl-assets @ git+https://github.com/personalrobotics/prl_assets.git",
     "tsr @ git+https://github.com/personalrobotics/tsr.git",
     "eaik",
+    "viser>=1.0",
 ]
 
 [project.scripts]
@@ -35,6 +37,7 @@ geodude = "geodude.cli:main"
 [tool.uv.sources]
 mj-manipulator = { workspace = true }
 mj-environment = { workspace = true }
+mj-viser = { workspace = true }
 geodude-assets = { workspace = true }
 prl-assets = { workspace = true }
 tsr = { workspace = true }

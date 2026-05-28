@@ -289,6 +289,14 @@ class Geodude:
                 self._right_arm,
             )
 
+        # Cross-wire the bases so each treats the other arm as robot-self
+        # for collision checking. Without this, contacts between the two
+        # UR5e chains read as "arm vs environment" and falsely block base
+        # motion (geodude#197).
+        if self._left_base is not None and self._right_base is not None:
+            self._left_base.set_other_robot_body_ids(self._right_base.arm_body_ids)
+            self._right_base.set_other_robot_body_ids(self._left_base.arm_body_ids)
+
         # Named poses from keyframes
         keyframe_poses = self._load_keyframe_poses()
         self._named_poses = {**self.config.named_poses, **keyframe_poses}

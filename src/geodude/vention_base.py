@@ -66,6 +66,13 @@ class VentionBase:
         self._arm_body_ids: set[int] = set()
         self._build_arm_body_ids()
 
+        # Bodies belonging to *other* robot-self chains (e.g. the OTHER arm
+        # on a bimanual robot) that should be treated as self-contacts when
+        # checking arm-environment collisions. Wired by the owning robot
+        # after all bases are constructed; defaults to empty (single-arm
+        # robots).
+        self._other_robot_body_ids: set[int] = set()
+
     def _build_arm_body_ids(self) -> None:
         """Build set of body IDs that belong to this arm including gripper."""
         for joint_name in self._arm.config.joint_names:
@@ -363,6 +370,21 @@ class VentionBase:
                 # Allow contacts with grasped objects
                 if other in grasped_bodies:
                     continue
+                # Allow contacts with other robot-self chains (e.g. the
+                # OTHER arm on a bimanual robot). These are robot-robot
+                # collisions, not robot-environment.
+                if other in self._other_robot_body_ids:
+                    continue
                 return True
 
         return False
+
+    def set_other_robot_body_ids(self, body_ids: set[int]) -> None:
+        """Register other robot-self bodies for robot-self collision filtering.
+
+        Called by the owning robot once all sibling chains (e.g. the other
+        arm on a bimanual robot) are constructed. Contacts between this
+        arm and any registered body are treated as robot-self and ignored
+        by environment-collision checks.
+        """
+        self._other_robot_body_ids = set(body_ids)

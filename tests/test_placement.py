@@ -83,19 +83,20 @@ class TestGenerateSurfacePlaceTSRs:
         # can: height=0.123, COM at half-height above surface + clearance
         assert pose[2, 3] > SURFACE_POSE[2, 3]
 
-    def test_xy_bounds_reflect_surface_with_margin(self):
-        """Bw xy should be shrunk by the 5cm edge margin."""
+    def test_xy_bounds_keep_the_whole_object_on_the_surface(self):
+        """Bw xy is the surface inset by the can's footprint radius, so no admitted pose hangs off (sstsr #150)."""
+        from asset_manager import AssetManager
+        from prl_assets import OBJECTS_DIR
+
+        radius = AssetManager(str(OBJECTS_DIR)).get("can")["geometric_properties"]["radius"]
         tsrs = _generate_surface_place_tsrs(
             SURFACE_POSE,
             SURFACE_HX,
             SURFACE_HY,
             "can",
         )
-        margin = 0.05
-        expected_hx = SURFACE_HX - margin
-        expected_hy = SURFACE_HY - margin
-        np.testing.assert_allclose(tsrs[0].Bw[0], [-expected_hx, expected_hx])
-        np.testing.assert_allclose(tsrs[0].Bw[1], [-expected_hy, expected_hy])
+        np.testing.assert_allclose(tsrs[0].Bw[0], [-(SURFACE_HX - radius), SURFACE_HX - radius])
+        np.testing.assert_allclose(tsrs[0].Bw[1], [-(SURFACE_HY - radius), SURFACE_HY - radius])
 
     def test_yaw_is_free(self):
         """Placement should allow any yaw orientation."""
@@ -466,13 +467,14 @@ class TestEndToEndSurfacePlacement:
 
     def test_box_on_side_then_place(self):
         """Box on its side (rotated 90° around X), place a can on the new top face."""
+        big_box = {"type": "box", "size": [0.10, 0.08, 0.12]}  # the side face, 10 x 12 cm, fits a can
         box_pose = _rotx(np.pi / 2)
         box_pose[2, 3] = 0.5
-        ly = BOX_GP["size"][1]  # 0.08
+        ly = big_box["size"][1]  # 0.08
         # After rotx(90), +y local maps to +z world, so top is at z + ly/2
         box_top_z = 0.5 + ly / 2  # 0.54
 
-        faces = _get_upward_faces(box_pose, BOX_GP)
+        faces = _get_upward_faces(box_pose, big_box)
         assert len(faces) == 1
         surface_pose, hx, hy = faces[0]
 
@@ -516,10 +518,8 @@ class TestEndToEndSurfacePlacement:
         faces = _get_upward_faces(box_pose, BOX_GP)
         assert len(faces) == 0
 
-    def test_small_surface_clamps_margin(self):
-        """Very small surface: edge margin clamps extents to minimum 0.01."""
-        # Tiny box: 4cm × 4cm × 4cm → face half-extents = 0.02
-        # After 5cm margin: max(0.01, 0.02 - 0.05) = 0.01
+    def test_a_surface_too_small_for_the_object_has_no_placement(self):
+        """A can (6.6 cm across) does not fit on a 4 cm face: no placement, rather than one hanging off (sstsr #150)."""
         tiny_gp = {"type": "box", "size": [0.04, 0.04, 0.04]}
         pose = np.eye(4)
 
@@ -527,10 +527,7 @@ class TestEndToEndSurfacePlacement:
         assert len(faces) == 1
         surface_pose, hx, hy = faces[0]
 
-        tsrs = _generate_surface_place_tsrs(surface_pose, hx, hy, "can")
-        assert len(tsrs) == 1
-        # Bw xy should be clamped to ±0.01
-        np.testing.assert_allclose(tsrs[0].Bw[0], [-0.01, 0.01], atol=1e-6)
+        assert _generate_surface_place_tsrs(surface_pose, hx, hy, "can") == []
 
 
 class TestGeneratePlaceTSRsDispatch:

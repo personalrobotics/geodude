@@ -117,7 +117,7 @@ robot.pickup("can", arm="right")  # equivalent to above
 │  mj_manipulator  (generic manipulation)              │
 │  • Arm, SimContext, ExecutionContext protocol         │
 │  • BT leaf nodes (PlanToTSRs, Execute, Grasp, ...)   │
-│  • CBiRRT planning, EAIK inverse kinematics          │
+│  • CBiRRT planning, ssik inverse kinematics          │
 │  • CartesianController, GraspManager                 │
 │  • RobotiqGripper, FrankaGripper                     │
 └──────────────────────┬───────────────────────────────┘
@@ -285,5 +285,5 @@ uv run pytest tests/ -v
 **External:**
 
 - [py_trees](https://github.com/splintered-reality/py_trees) — Behavior tree engine
-- [eaik](https://github.com/Verdant-Robotics/eaik) — Analytical IK for UR robots
+- [ssik](https://github.com/personalrobotics/ssik) — Analytical IK, built from the MuJoCo model
 - [mujoco](https://github.com/google-deepmind/mujoco) — Physics simulation

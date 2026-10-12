@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 
 [[package]]
@@ -509,7 +509,7 @@ dependencies = [
     { name = "prl-assets" },
     { name = "py-trees" },
     { name = "pyyaml" },
-    { name = "tsr" },
+    { name = "sstsr" },
     { name = "viser" },
 ]
 
@@ -538,7 +538,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pyyaml" },
     { name = "ruff", marker = "extra == 'dev'" },
-    { name = "tsr", git = "https://github.com/personalrobotics/tsr.git" },
+    { name = "sstsr", specifier = ">=3.4,<4" },
     { name = "viser", specifier = ">=1.0" },
 ]
 provides-extras = ["chat", "dev"]
@@ -1145,7 +1145,7 @@ dependencies = [
 [[package]]
 name = "mj-manipulator"
 version = "2.0.0"
-source = { git = "https://github.com/personalrobotics/mj_manipulator.git#c6d1754f11108c1bd2f66e8df85e338413ab781e" }
+source = { git = "https://github.com/personalrobotics/mj_manipulator.git#47c5b1473176e62fa508b94265cbf8e759a046b4" }
 dependencies = [
     { name = "eaik" },
     { name = "mink" },
@@ -1154,11 +1154,11 @@ dependencies = [
     { name = "numpy" },
     { name = "prl-assets" },
     { name = "py-trees" },
-    { name = "pycbirrt" },
     { name = "scipy" },
+    { name = "sscbirrt" },
     { name = "ssik" },
+    { name = "sstsr" },
     { name = "toppra" },
-    { name = "tsr" },
 ]
 
 [[package]]
@@ -1608,15 +1608,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/81/81/81900180501a51056572dd01aa852cc2d162478d4676ecebbfaad5cc20d1/pybind11_stubgen-2.5.5.tar.gz", hash = "sha256:758d6d6bbeefc62ad7f78d5e5bbf357ccf6af83cd4504f5f549403f452942708", size = 25031, upload-time = "2025-08-09T01:22:44.403Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4f/e4/4f2d41881fae547f06ffa4c9748fa8ed13c4db5c830ff268b84175546b3c/pybind11_stubgen-2.5.5-py3-none-any.whl", hash = "sha256:10824cd2fc5cbbee032b8fb39e6f6c08de232deb309bc66d786a6c6e8a4601bd", size = 30210, upload-time = "2025-08-09T01:22:43.135Z" },
-]
-
-[[package]]
-name = "pycbirrt"
-version = "1.0.0"
-source = { git = "https://github.com/personalrobotics/pycbirrt.git#e846044db73390be35865835983de02ac7cd9e1d" }
-dependencies = [
-    { name = "numpy" },
-    { name = "tsr" },
 ]
 
 [[package]]
@@ -2083,6 +2074,26 @@ wheels = [
 ]
 
 [[package]]
+name = "sscbirrt"
+version = "3.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "sstsr" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/52/37/b0750cc3e3940375bb8f8e1cb43b1cb6d9dac0067aa2eb7a11a935446d87/sscbirrt-3.6.0.tar.gz", hash = "sha256:ef313717696abbc51ba798ae2855095ff4c09f8ae6f5280578ae3f540274025d", size = 5314103, upload-time = "2026-10-12T05:07:35.953Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c3/be/68a5195c87124b275ad740559aa024109b1838ee2044e1559151d3ea318a/sscbirrt-3.6.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:bb159f8fdc8a1b88749c4c59fec315a71cf81b078f49fde17b13034d476dd1a4", size = 665876, upload-time = "2026-10-12T05:07:24.322Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/04/9a642b6627e0064f999fb91454fc95963adb3ec036e6099a7cae057458ce/sscbirrt-3.6.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:099494cab20d39c178a41d9da3987ffc2bd756bd1a2f53f2d423dd7492d5abff", size = 902525, upload-time = "2026-10-12T05:07:25.983Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/5c/3c3f270c5e0d39f13936b81c85306127a7202453f6cda4159b1b81d99c3b/sscbirrt-3.6.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:6a186eedcc032eab959d5b93fe222a87dabbaa962875352f519cb953635fe84a", size = 668460, upload-time = "2026-10-12T05:07:27.35Z" },
+    { url = "https://files.pythonhosted.org/packages/1c/4f/6c3f7c5d8d340b4480548b4f03f9e90a8ea54b2e58b2f8cf0ac88e39320b/sscbirrt-3.6.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:04bbe9f864fbbe782a8fda0a704a095cf8ba20ffa664ffc87931b24715c2c95a", size = 908437, upload-time = "2026-10-12T05:07:28.661Z" },
+    { url = "https://files.pythonhosted.org/packages/89/ab/840e11dba237153e53667a3b29cf4847ceee90dc5bdac0d5c50a6137eb35/sscbirrt-3.6.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:7dddd8febdbbed2584dfcd7573b449dbf287b1be025ee2887d59fe29fe89a4ee", size = 668543, upload-time = "2026-10-12T05:07:30.19Z" },
+    { url = "https://files.pythonhosted.org/packages/66/b0/2eb81a942b9e2a5d164b516ed72d0152a40b5da669159ca6a76e1ca2c99d/sscbirrt-3.6.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:465b9a7b544cfa60c2ac487228e5f3bef3274d62d4d7cf51d36e68828bfadbc5", size = 908394, upload-time = "2026-10-12T05:07:31.486Z" },
+    { url = "https://files.pythonhosted.org/packages/27/51/b5e36e16ca2e5ebbb18aa26d415d44da463ad1261043552e3795af59c7ae/sscbirrt-3.6.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:312f783a4b633f969162627d92720b4ebf2bded663050b470acee1868ea4de28", size = 669367, upload-time = "2026-10-12T05:07:33.019Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/47/95a0829d8f4d9ab3b622181fb23e5ac90703f1d91db1bf18d654c1277bdc/sscbirrt-3.6.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c7c33d615b450977bc72aa97ad5ec996576d4dacb596ea2bf6d8c56337c4ba22", size = 909006, upload-time = "2026-10-12T05:07:34.433Z" },
+]
+
+[[package]]
 name = "ssik"
 version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2106,6 +2117,20 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/df/00/b68a1f22581a9e0feb1db447df695cffcb31fab07c684387269eddb25e91/ssik-1.2.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:2415a2b3442f2a208b9bae45e6d0e65feda7d5323ed42edfcf2510dde97c655e", size = 1168148, upload-time = "2026-05-21T03:54:29.839Z" },
     { url = "https://files.pythonhosted.org/packages/30/5c/16240176db25d0f4dca0770de9c37c19699b82c007fa7113758921466269/ssik-1.2.0-cp313-cp313-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:88ad99afeb5e1535460e0d923433816efa995207d7e4360bed9a84bc6981d575", size = 1844099, upload-time = "2026-05-21T03:54:31.87Z" },
     { url = "https://files.pythonhosted.org/packages/4c/ed/10a2aa27d9d269ffbc4d0fa0920a5973fe06a9d5fa01362deae52e737f0c/ssik-1.2.0-cp313-cp313-win_amd64.whl", hash = "sha256:4d14904c3dd974f725daf2990ed2a35cfe911d75f2af5131e3d516296aa0e359", size = 1156828, upload-time = "2026-05-21T03:54:33.907Z" },
+]
+
+[[package]]
+name = "sstsr"
+version = "3.4.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pyyaml" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/71/68/7bf835736203ba38ff2909871ef8fa459195f44213945438905d42b162bd/sstsr-3.4.1.tar.gz", hash = "sha256:837168c266b94ff0e429b68a59a9bf157491aefafd06309128dad8b6728a83e0", size = 1826847, upload-time = "2026-10-03T12:38:02.096Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/14/a1/d6f6804c3d7ed13be77d4a950725848bdcb78dc9e6eed993be5e8ed09e8c/sstsr-3.4.1-py3-none-any.whl", hash = "sha256:e08e8708f2c3da53c1a4bbbae197c55d32a1c3bf91d18ce058902c0cb8ca5fde", size = 133499, upload-time = "2026-10-03T12:38:00.19Z" },
 ]
 
 [[package]]
@@ -2176,16 +2201,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/79/37/5cb90f04990260d2caceb6093560c6cefafca1ec522c1e43be01ca658244/trimesh-4.12.2.tar.gz", hash = "sha256:c8ca31571ac00b112e4e160e66a2d4c3491df321f056bd33806be0485d1af9d9", size = 842220, upload-time = "2026-05-01T00:57:43.333Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/05/98/716a473cfb24750858ddd5d14e6527539dd206583a46408d08eeb2844a75/trimesh-4.12.2-py3-none-any.whl", hash = "sha256:b5b5afa63c5272345f2858f7676bc8c217dc8a89f4fadf6193fe10a81b5ff2aa", size = 741043, upload-time = "2026-05-01T00:57:40.763Z" },
-]
-
-[[package]]
-name = "tsr"
-version = "1.0.0"
-source = { git = "https://github.com/personalrobotics/tsr.git#fa7bdce859d69ccf081dfd8e061fe2a73bbdae27" }
-dependencies = [
-    { name = "numpy" },
-    { name = "pyyaml" },
-    { name = "scipy" },
 ]
 
 [[package]]

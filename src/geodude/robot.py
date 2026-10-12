@@ -22,7 +22,7 @@ from mj_manipulator import (
     RobotiqGripper,
     SimContext,
 )
-from mj_manipulator.arms.eaik_solver import MuJoCoEAIKSolver
+from mj_manipulator.arms.ssik_solver import MuJoCoSSIKSolver
 from mj_manipulator.arms.ur5e import (
     UR5E_ACCELERATION_LIMITS,
     UR5E_VELOCITY_LIMITS,
@@ -394,14 +394,14 @@ class Geodude:
         # Create arm first to get joint indices for IK solver
         arm = Arm(self._env, arm_config)
 
-        # Create EAIK solver
+        # ssik IK, built from the arm's kinematics in the live model
         joint_limits = arm.get_joint_limits()
         first_joint_body = self._env.model.jnt_bodyid[arm.joint_ids[0]]
-        base_body_id = self._env.model.body_parentid[first_joint_body]
+        base_body_id = int(self._env.model.body_parentid[first_joint_body])
 
-        ik_solver = MuJoCoEAIKSolver(
-            model=self._env.model,
-            data=self._env.data,
+        ik_solver = MuJoCoSSIKSolver.from_model(
+            self._env.model,
+            self._env.data,
             joint_ids=list(arm.joint_ids),
             joint_qpos_indices=arm.joint_qpos_indices,
             ee_site_id=arm.ee_site_id,

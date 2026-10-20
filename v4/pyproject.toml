@@ -23,6 +23,9 @@ dependencies = [
     "geodude-assets @ git+https://github.com/personalrobotics/geodude_assets@30ca5ff8706e5d856fd22d2511c879026ee45bb3",
 ]
 
+[project.scripts]
+geodude-recycling = "geodude.recycling:main"
+
 [dependency-groups]
 dev = ["mypy>=1.13", "pytest>=8.3", "ruff>=0.8", "types-pyyaml"]
 

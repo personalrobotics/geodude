@@ -89,6 +89,26 @@ jobs:
         env:
           GEODUDE_ARTIFACTS: ${{ github.workspace }}/v4/artifacts
 
+      # Both apps import as geodude: prove the wheel stands alone, outside the checkout.
+      - name: Build the wheel
+        run: uv build --wheel --out-dir dist
+
+      - name: Install the wheel in a clean environment
+        run: |
+          uv export --locked --no-dev --no-emit-project --no-hashes -o "$RUNNER_TEMP/requirements.txt"
+          uv venv "$RUNNER_TEMP/clean" --python 3.13
+          uv pip install --python "$RUNNER_TEMP/clean" -r "$RUNNER_TEMP/requirements.txt" dist/geodude-*.whl
+
+      - name: Check the installed wheel and run its command
+        working-directory: ${{ runner.temp }}
+        run: |
+          PY="$RUNNER_TEMP/clean/bin/python"
+          "$PY" -I "$GITHUB_WORKSPACE/v4/scripts/check_boundary.py"
+          "$RUNNER_TEMP/clean/bin/geodude-recycling" --seed 0 --record installed-run
+          "$PY" -I "$GITHUB_WORKSPACE/v4/scripts/check_installed.py" "$GITHUB_WORKSPACE" installed-run/recycling.json
+          mkdir -p "$GITHUB_WORKSPACE/v4/artifacts"
+          cp -r installed-run "$GITHUB_WORKSPACE/v4/artifacts/installed-run"
+
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4

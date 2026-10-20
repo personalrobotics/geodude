@@ -3,16 +3,20 @@
 A seeded recycling scene is staged from prl_assets: one can on the worktop and the
 legacy demo's two bins. Geodude's right arm picks the can with ssgrasping's ``grasp``,
 from sstsr's side grasps of the can's prl_assets geometry at its privileged pose
-channel, and places it upright on the worktop with ``place``. The run is recorded and
-written as a run bundle. The evidence is ``recycling.json``:
-- the scene stages to the same bytes twice, and its manifest names the prl_assets
-  source and every staged file's hash;
-- every grasp and placement stage succeeds, nothing is left attached, and the
-  attachment monitor reports no slip;
-- the run gives the same trace twice;
-- its bundle verifies, and its world materializes without a runtime.
+channel, and places it upright on the worktop with ``place``. ``geodude-recycling
+--record`` reports the run in ``recycling.json``; this test adds to that report and
+keeps it as its evidence:
+- the sources it ran from and the seed, and the scene manifest naming the prl_assets
+  source and every staged file's hash, with the scene staging to the same bytes twice;
+- every grasp and placement stage, with the release confirmed, and nothing attached;
+- where the can came to rest, from its pose channel after the run, with its tilt from
+  upright, its base's height above the worktop, and its offset from the target, each
+  within its tolerance;
+- the same outcome and trace from two runs;
+- a bundle that verifies, with a world that materializes without a runtime.
 
-Reproduce with ``uv run pytest tests/test_recycling.py``.
+Reproduce with ``uv run pytest tests/test_recycling.py``. CI also runs the same command
+from the built wheel in a clean environment (``scripts/check_installed.py``).
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ssrobot import JsonlTrace, RobotContext, load_installed_package, open_bundle, read_trace
+from ssrobot import JsonlTrace, RobotContext, load_installed_package, open_bundle
 from ssrobot.mujoco import materialize_world
 
 from geodude import recycling
@@ -49,21 +53,10 @@ def _run(work: Path) -> dict[str, Any]:
         JsonlTrace(trace) as sink,
         RobotContext(package.description, recycling.runtime(package, scene), sinks=[sink]) as ctx,
     ):
-        ctx.snapshot()
-        picked, placed = recycling.pick_and_place(
-            ctx, package, "can_0", (0.20, -0.50), arm=recycling.Arm("right")
-        )
-        ctx.snapshot()
-        attached = [a.object for a in ctx.scene.attachments]
-    violations = [r.time_ns for r in read_trace(trace) if r.kind.value == "violation"]
+        result = recycling.demo(ctx, package)
     return {
         "scene": _files(work / "scene"),
-        "manifest": json.loads((work / "scene" / "manifest.json").read_text()),
-        "grasp": [(s.name, s.succeeded) for s in picked.stages],
-        "place": None if placed is None else [(s.name, s.succeeded) for s in placed.stages],
-        "placed_pose": None if placed is None else placed.values.get("placed_pose"),
-        "attached_at_end": attached,
-        "violations": violations,
+        "outcome": result,
         "trace_sha256": hashlib.sha256(trace.read_bytes()).hexdigest(),
     }
 
@@ -73,28 +66,28 @@ def test_geodude_recycles_one_can_on_ssrobot(artifacts: Path, tmp_path: Path) ->
 
     out = tmp_path / "recorded"
     assert recycling.main(["--seed", str(SEED), "--record", str(out)]) == 0
+    report = json.loads((out / "recycling.json").read_text())
     bundle = open_bundle(out / "bundle")
     world = materialize_world(bundle)
 
-    report = {
-        **first,
-        "repeat_identical": first == second,
-        "bundle": {
-            "files": [f.path for f in bundle.manifest.files],
-            "snapshots": sum(1 for r in bundle.records if r.kind.value == "snapshot"),
-            "world_matches": world.world == bundle.manifest.world,
-        },
+    report["staged_files"] = first["scene"]
+    report["repeat_identical"] = first == second
+    report["recorded_matches_repeat"] = {k: report[k] for k in first["outcome"]} == first["outcome"]
+    report["bundle"] = {
+        "files": [f.path for f in bundle.manifest.files],
+        "snapshots": sum(1 for r in bundle.records if r.kind.value == "snapshot"),
+        "world_matches": world.world == bundle.manifest.world,
     }
-    text = json.dumps(report, indent=2) + "\n"
-    (artifacts / "recycling.json").write_text(text)
+    (artifacts / "recycling.json").write_text(json.dumps(report, indent=2) + "\n")
 
-    assert report["repeat_identical"], "two runs differ"
-    manifest = report["manifest"]
-    assert manifest["seed"] == SEED and manifest["prl_assets"]["source"] is not None
-    assert set(manifest["files"]) == set(report["scene"]) - {"manifest.json"}
-    assert [o["name"] for o in manifest["objects"]] == ["can_0"]
-    assert [f["name"] for f in manifest["fixtures"]] == ["recycle_bin_0", "recycle_bin_1"]
-    assert all(ok for _, ok in report["grasp"]), report["grasp"]
-    assert report["place"] is not None and all(ok for _, ok in report["place"]), report["place"]
-    assert report["attached_at_end"] == [] and report["violations"] == []
+    assert report["seed"] == SEED
+    assert report["sources"]["geodude"]["version"].startswith("4.")
+    scene = report["scene"]
+    assert scene["seed"] == SEED and scene["prl_assets"]["source"] is not None
+    assert set(scene["files"]) == set(report["staged_files"]) - {"manifest.json"}
+    assert [o["name"] for o in scene["objects"]] == ["can_0"]
+    assert [f["name"] for f in scene["fixtures"]] == ["recycle_bin_0", "recycle_bin_1"]
+    assert report["checks"] == dict.fromkeys(report["checks"], True), report["checks"]
+    assert report["succeeded"] and report["attached"] == []
+    assert report["repeat_identical"] and report["recorded_matches_repeat"]
     assert report["bundle"]["snapshots"] >= 2 and report["bundle"]["world_matches"]

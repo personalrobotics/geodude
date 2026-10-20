@@ -10,12 +10,17 @@ Run it, watch it, and record it::
     python -m geodude.recycling --seed 0 --viser --record out/
 
 ``--viser`` serves a live view at http://localhost:8080; ``--record`` writes the run as
-a bundle (``out/bundle``) that mj_viser replays.
+a bundle (``out/bundle``) that mj_viser replays, and its outcome as ``out/recycling.json``:
+the sources it ran from, the seed, every skill stage, and where the can came to rest.
+The installed command ``geodude-recycling`` is the same.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
+import json
+import math
 import shutil
 import sys
 import tempfile
@@ -45,6 +50,9 @@ from ssrobot.planning import CBiRRT, SsikKinematics
 from geodude import regions
 from geodude.scene import meta, stage_scene, worktop
 
+TARGET = (0.20, -0.50)
+"""Where step 1 places the can on the worktop."""
+
 BINS = {"recycle_bin": [(0.85, -0.35, 0.01), (-0.85, -0.35, 0.01)]}
 """The legacy demo's bins, either side of the robot, on the floor."""
 UP = (0.0, 0.0, 1.0)
@@ -55,6 +63,11 @@ free motion peaks at 4.4-5.1 N, contact crosses 8 N within one tick."""
 SWING_TOLERANCE_RAD = 0.2
 """The attachment monitor's rotation tolerance: a cylinder pinched between two pads
 swings about the finger axis as the arm accelerates and settles back."""
+PLACE_SLACK_M = 0.03
+"""How far from ``TARGET``, in each of x and y, the placement region lets an object's
+centre be."""
+PLACE_TILT_RAD = 0.05
+"""How far from upright a placed object may rest."""
 PLACE_TOLERANCE_M = 0.01
 """How far outside its region a placed object may rest and still count: the transfer may
 aim at a region's edge, and the arm tracks a plan only to the runtime's goal tolerance
@@ -62,6 +75,19 @@ aim at a region's edge, and the arm tracks a plan only to the runtime's goal tol
 CHECK_ITERATIONS = 300
 """The iteration budget of the planner that checks a follow-on straight move."""
 MAX_TICKS = 200_000
+SOURCES = (
+    "geodude",
+    "ssrobot",
+    "ssgrasping",
+    "ssmjviser",
+    "sscbirrt",
+    "ssik",
+    "sstsr",
+    "mujoco",
+    "prl-assets",
+    "geodude-assets",
+)
+"""The distributions a run's outcome names."""
 
 
 @dataclass(frozen=True)
@@ -145,7 +171,7 @@ def pick_and_place(
     tick: Callable[[], None] = lambda: None,
 ) -> tuple[SkillResult, SkillResult | None]:
     """Grasp ``obj`` with ``arm`` from every sstsr grasp of its prl_assets geometry, and
-    place it upright on the worktop within 3 cm of ``target``."""
+    place it upright on the worktop within ``PLACE_SLACK_M`` of ``target`` in x and y."""
     geometry = meta(kind_of(obj))["geometric_properties"]
     planner, checker = planners(package, arm)
     surface = worktop(package).centre[2]
@@ -186,7 +212,7 @@ def pick_and_place(
                 object=obj,
                 target="vention_base",
                 normal=UP,
-                regions=[regions.upright(geometry, (*target, surface), 0.03)],
+                regions=[regions.upright(geometry, (*target, surface), PLACE_SLACK_M)],
                 preplace_m=0.04,
                 overshoot_m=0.01,
                 terminal_m=0.01,
@@ -194,13 +220,91 @@ def pick_and_place(
                     channel=arm.wrench, part=WrenchPart.FORCE, threshold=CONTACT_N, tare=True
                 ),
                 retreat_m=0.08,
-                region_tolerance=(PLACE_TOLERANCE_M, 0.05),
+                region_tolerance=(PLACE_TOLERANCE_M, PLACE_TILT_RAD),
             ),
             check_planner=checker,
         ),
         tick,
     )
     return picked, placed
+
+
+def sources() -> dict[str, Any]:
+    """Each of ``SOURCES``: its version and, when it was installed from a URL, a path or
+    a file, where from."""
+    out: dict[str, Any] = {}
+    for name in SOURCES:
+        dist = importlib.metadata.distribution(name)
+        direct = dist.read_text("direct_url.json")
+        out[name] = {
+            "version": dist.version,
+            "source": None if direct is None else json.loads(direct),
+        }
+    return out
+
+
+def outcome(
+    ctx: RobotContext,
+    package: RobotPackage,
+    obj: str,
+    target: tuple[float, float],
+    picked: SkillResult,
+    placed: SkillResult | None,
+) -> dict[str, Any]:
+    """What a pick-and-place achieved, observed after it ends: every stage, whether the
+    release was confirmed, where ``obj`` rests (from its pose channel), how far its axis
+    is from upright, its base's height above the worktop, and what is still attached.
+    ``succeeded`` requires every stage to succeed, nothing attached, and the object
+    upright within ``PLACE_TILT_RAD``, its base on the worktop, and its centre within
+    ``PLACE_SLACK_M`` plus ``PLACE_TOLERANCE_M`` of ``target`` in x and y."""
+    final = object_pose(ctx, obj)
+    _, x, y, _ = final.quat_wxyz
+    tilt = math.acos(max(-1.0, min(1.0, 1 - 2 * (x * x + y * y))))  # body z from world z
+    offset = [final.position[i] - target[i] for i in range(2)]
+    height = regions.height(meta(kind_of(obj))["geometric_properties"])
+    base = final.position[2] - math.cos(tilt) * height / 2 - worktop(package).centre[2]
+    attached = [a.object for a in ctx.scene.attachments]
+    released = placed is not None and any(
+        s.name == "release" and s.succeeded for s in placed.stages
+    )
+    checks = {
+        "grasped": picked.succeeded,
+        "placed": placed is not None and placed.succeeded,
+        "released": released,
+        "nothing_attached": not attached,
+        "upright": tilt <= PLACE_TILT_RAD,
+        "on_worktop": abs(base) <= PLACE_TOLERANCE_M,
+        "at_target": max(map(abs, offset)) <= PLACE_SLACK_M + PLACE_TOLERANCE_M,
+    }
+    return {
+        "object": obj,
+        "target": list(target),
+        "grasp": [[s.name, s.succeeded] for s in picked.stages],
+        "place": None if placed is None else [[s.name, s.succeeded] for s in placed.stages],
+        "final_pose": {"position": list(final.position), "quat_wxyz": list(final.quat_wxyz)},
+        "tilt_rad": tilt,
+        "base_above_worktop_m": base,
+        "offset_from_target_xy_m": offset,
+        "attached": attached,
+        "tolerances": {
+            "tilt_rad": PLACE_TILT_RAD,
+            "base_m": PLACE_TOLERANCE_M,
+            "offset_xy_m": PLACE_SLACK_M + PLACE_TOLERANCE_M,
+        },
+        "checks": checks,
+        "succeeded": all(checks.values()),
+    }
+
+
+def demo(
+    ctx: RobotContext, package: RobotPackage, tick: Callable[[], None] = lambda: None
+) -> dict[str, Any]:
+    """Step 1 in a staged scene: the right arm moves ``can_0`` to ``TARGET``, with a
+    snapshot before and after. Returns its ``outcome``."""
+    ctx.snapshot()
+    picked, placed = pick_and_place(ctx, package, "can_0", TARGET, arm=Arm("right"), tick=tick)
+    ctx.snapshot()
+    return outcome(ctx, package, "can_0", TARGET, picked, placed)
 
 
 def runtime(package: RobotPackage, scene: Path) -> MujocoRuntime:
@@ -248,14 +352,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if view is not None:
                     view.refresh()
 
-            ctx.snapshot()
-            picked, placed = pick_and_place(
-                ctx, package, "can_0", (0.20, -0.50), arm=Arm("right"), tick=tick
-            )
-            ctx.snapshot()
-            for result in (picked, placed):
-                if result is not None:
-                    print(f"{result.skill}: {result.state.value} at {result.stage.name}")
+            result = demo(ctx, package, tick)
+            print(json.dumps(result["checks"]))
             if view is not None:
                 if sys.stdin.isatty():
                     input("Press Enter to close the viewer. ")
@@ -268,8 +366,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             write_bundle(
                 args.record / "bundle", trace=trace, package=package, model="mjcf", scene=scene
             )
-            print(f"recorded {args.record / 'bundle'}")
-        ok = placed is not None and placed.succeeded
+            report = {
+                "seed": args.seed,
+                "sources": sources(),
+                "scene": json.loads((scene.parent / "manifest.json").read_text()),
+                **result,
+            }
+            (args.record / "recycling.json").write_text(json.dumps(report, indent=2) + "\n")
+            print(f"recorded {args.record / 'bundle'} and {args.record / 'recycling.json'}")
+        ok = bool(result["succeeded"])
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return 0 if ok else 1

@@ -57,7 +57,8 @@ def tsr(region: Any) -> Tsr:
     )
 
 
-def _height(geometry: Mapping[str, Any]) -> float:
+def height(geometry: Mapping[str, Any]) -> float:
+    """An upright object's height."""
     return float(geometry["height"] if geometry["type"] == "cylinder" else geometry["size"][2])
 
 
@@ -85,7 +86,7 @@ def pregrasps(geometry: Mapping[str, Any], centre: Pose) -> list[Tsr]:
     else:
         raise ValueError(f"no grasps for a {geometry['type']}")
     base = matrix(centre)
-    base[:3, 3] -= base[:3, 2] * _height(geometry) / 2
+    base[:3, 3] -= base[:3, 2] * height(geometry) / 2
     back = np.eye(4)
     back[2, 3] = -STANDOFF_M
     return [tsr(dataclasses.replace(t, Tw_e=t.Tw_e @ back).instantiate(base)) for t in templates]

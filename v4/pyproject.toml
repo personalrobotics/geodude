@@ -1,0 +1,60 @@
+# Geodude 4.0: Geodude on ssrobot and ssgrasping (personalrobotics/geodude#213).
+#
+# It is built alongside the legacy 3.x app at the repository root, as its own uv project
+# with its own environment, and replaces it at the cutover (#212). It never imports
+# mj_manipulator, mj_environment, asset_manager, or the old mj-viser
+# (scripts/check_boundary.py).
+[project]
+name = "geodude"
+version = "4.0.0.dev0"
+description = "Geodude, the bimanual robot, on ssrobot and ssgrasping"
+requires-python = ">=3.11,<3.14"
+license = "MIT"
+authors = [{name = "Siddhartha Srinivasa", email = "siddhartha.srinivasa@gmail.com"}]
+dependencies = [
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+    # Pinned by commit: the contracts and skills this app is proven against.
+    "ssrobot[mujoco,planning] @ git+https://github.com/personalrobotics/ssrobot@917795ab1a95dc52331f2604bf486141b903249a",
+    "ssgrasping @ git+https://github.com/personalrobotics/ssgrasping@591f234c800c4f9cdeaa775e55d7aef445f1dbb0",
+    "ssmjviser @ git+https://github.com/personalrobotics/mj_viser@95352af3ec0779aa1add73d790ce3079f9547b08",
+    "prl-assets @ git+https://github.com/personalrobotics/prl_assets@965ceead83abba11314e15d39904a614b217504e",
+    # ssrobot's reference pin for Geodude (references/robots.toml).
+    "geodude-assets @ git+https://github.com/personalrobotics/geodude_assets@30ca5ff8706e5d856fd22d2511c879026ee45bb3",
+]
+
+[dependency-groups]
+dev = ["mypy>=1.13", "pytest>=8.3", "ruff>=0.8", "types-pyyaml"]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/geodude"]
+
+# Its own workspace root: uv never adopts it into the robot-code workspace around the
+# legacy app.
+[tool.uv.workspace]
+members = []
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "RUF"]
+
+[tool.mypy]
+strict = true
+files = ["src", "tests", "scripts"]
+
+[[tool.mypy.overrides]]
+module = ["mujoco.*", "sscbirrt.*", "tsr.*", "prl_assets.*", "geodude_assets.*", "mj_viser.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

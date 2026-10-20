@@ -52,6 +52,50 @@ jobs:
             echo "No tests/ directory; skipping pytest."
           fi
 
+  # Geodude 4.0 on ssrobot: its own project and lock, never the legacy dependencies.
+  v4:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: v4
+    env:
+      UV_NO_SOURCES: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libeigen3-dev
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Ruff
+        run: uv run ruff check . && uv run ruff format --check .
+
+      - name: Mypy
+        run: uv run mypy
+
+      - name: Boundary
+        run: uv run python scripts/check_boundary.py
+
+      - name: Pytest
+        run: uv run pytest -v
+        env:
+          GEODUDE_ARTIFACTS: ${{ github.workspace }}/v4/artifacts
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: geodude-v4-evidence
+          path: v4/artifacts/
+
   notify-robot-code:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

@@ -1,11 +1,13 @@
-"""Geodude 4.0, steps 1 and 2 of the recycling demo on ssrobot (#199, #201).
+"""Geodude 4.0, steps 1 to 3 of the recycling demo on ssrobot (#199, #201).
 
 A seeded recycling scene is staged from prl_assets: one can on the worktop and the
-legacy demo's two bins. Geodude's right arm picks the can with ssgrasping's ``grasp``,
+legacy demo's two bins. The arm on the can's side picks it with ssgrasping's ``grasp``,
 from sstsr's side grasps of the can's prl_assets geometry at its privileged pose
 channel, and drops it with ``drop`` into the bin on its side, from the legacy demo's
-drop zone. ``geodude-recycling --record`` reports the run in ``recycling.json``; this
-test adds to that report and keeps it as its evidence:
+drop zone. Seed 0 puts the can on the right arm's side; seed 3, under ``left``, on the
+left arm's, where the right arm's grasp cannot be placed on the worktop.
+``geodude-recycling --record`` reports the run in ``recycling.json``; this test adds to
+that report and keeps it as its evidence:
 - the sources it ran from and the seed, and the scene manifest naming the prl_assets
   source and every staged file's hash, with the scene staging to the same bytes twice;
 - every grasp and drop stage, with the release confirmed, and nothing attached;
@@ -13,6 +15,7 @@ test adds to that report and keeps it as its evidence:
   prl_assets interior;
 - the same outcome and trace from two runs;
 - a bundle that verifies, with a world that materializes without a runtime;
+- the left arm, for seed 3, chosen by the can's side and dropping into the left bin;
 - step 1, under ``worktop``: the same pick, then ``place`` upright on the worktop, with
   the can's tilt from upright, its base's height above the worktop, and its offset from
   the target each within its tolerance.
@@ -35,6 +38,7 @@ from geodude import recycling
 from geodude.scene import stage_scene
 
 SEED = 0
+LEFT_SEED = 3
 
 
 def _files(root: Path) -> dict[str, str]:
@@ -45,10 +49,10 @@ def _files(root: Path) -> dict[str, str]:
     }
 
 
-def _run(work: Path, to: str = "bin") -> dict[str, Any]:
+def _run(work: Path, to: str = "bin", seed: int = SEED) -> dict[str, Any]:
     package = load_installed_package("geodude_assets")
     scene = stage_scene(
-        work / "scene", package, objects={"can": 1}, fixtures=recycling.BINS, seed=SEED
+        work / "scene", package, objects={"can": 1}, fixtures=recycling.BINS, seed=seed
     )
     trace = work / "trace.jsonl"
     with (
@@ -66,6 +70,7 @@ def _run(work: Path, to: str = "bin") -> dict[str, Any]:
 def test_geodude_recycles_one_can_on_ssrobot(artifacts: Path, tmp_path: Path) -> None:
     first, second = _run(tmp_path / "first"), _run(tmp_path / "second")
     worktop = _run(tmp_path / "worktop", "worktop")["outcome"]
+    left = _run(tmp_path / "left", seed=LEFT_SEED)["outcome"]
 
     out = tmp_path / "recorded"
     assert recycling.main(["--seed", str(SEED), "--record", str(out)]) == 0
@@ -76,6 +81,7 @@ def test_geodude_recycles_one_can_on_ssrobot(artifacts: Path, tmp_path: Path) ->
     report["staged_files"] = first["scene"]
     report["repeat_identical"] = first == second
     report["recorded_matches_repeat"] = {k: report[k] for k in first["outcome"]} == first["outcome"]
+    report["left"] = left
     report["worktop"] = worktop
     report["bundle"] = {
         "files": [f.path for f in bundle.manifest.files],
@@ -92,11 +98,16 @@ def test_geodude_recycles_one_can_on_ssrobot(artifacts: Path, tmp_path: Path) ->
     assert [o["name"] for o in scene["objects"]] == ["can_0"]
     assert [f["name"] for f in scene["fixtures"]] == ["recycle_bin_0", "recycle_bin_1"]
     assert report["to"] == "bin" and report["bin"]["name"] == "recycle_bin_0"
+    assert report["arm"] == "right"
     assert report["checks"] == dict.fromkeys(report["checks"], True), report["checks"]
     assert report["succeeded"] and report["attached"] == []
     assert [n for n, _ in report["drop"]] == [
         "preflight", "transfer", "release", "retreat", "dropped",
     ]  # fmt: skip
+    assert left["arm"] == "left"
+    assert left["bin"]["name"] == "recycle_bin_1"
+    assert left["checks"] == dict.fromkeys(left["checks"], True), left["checks"]
+    assert left["succeeded"] and left["attached"] == []
     assert worktop["checks"] == dict.fromkeys(worktop["checks"], True), worktop["checks"]
     assert worktop["succeeded"] and worktop["attached"] == []
     assert report["repeat_identical"] and report["recorded_matches_repeat"]

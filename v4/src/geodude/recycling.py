@@ -1,9 +1,10 @@
 """The recycling demo on ssrobot and ssgrasping (personalrobotics/geodude#201).
 
-Step 1 of the port: one object picked by one arm and placed upright on the worktop,
-through ssgrasping's ``grasp`` and ``place``, in a seeded scene staged from prl_assets.
-Perception is the ground-truth stub the demo has always used: each object's privileged
-pose channel (ssrobot#101).
+Steps 1 and 2 of the port, in a seeded scene staged from prl_assets: one can, picked by
+the right arm with ssgrasping's ``grasp``, and dropped with its ``drop`` into the bin on
+that arm's side (step 2, the default) or placed upright on the worktop with its
+``place`` (step 1, ``--to worktop``). Perception is the ground-truth stub the demo has
+always used: each object's privileged pose channel (ssrobot#101).
 
 Run it, watch it, and record it::
 
@@ -30,7 +31,16 @@ from pathlib import Path
 from typing import Any
 
 from sscbirrt import CBiRRTConfig
-from ssgrasping import GraspSpec, PlaceSpec, SkillExecution, SkillResult, grasp, place
+from ssgrasping import (
+    DropSpec,
+    GraspSpec,
+    PlaceSpec,
+    SkillExecution,
+    SkillResult,
+    drop,
+    grasp,
+    place,
+)
 from ssrobot import (
     ClockMode,
     JsonlTrace,
@@ -54,7 +64,10 @@ TARGET = (0.20, -0.50)
 """Where step 1 places the can on the worktop."""
 
 BINS = {"recycle_bin": [(0.85, -0.35, 0.01), (-0.85, -0.35, 0.01)]}
-"""The legacy demo's bins, either side of the robot, on the floor."""
+"""The legacy demo's bins, either side of the robot, on the floor: ``recycle_bin_0`` on
+the right arm's side, ``recycle_bin_1`` on the left's. Each arm reaches only its own
+side's bin (#201)."""
+DESTINATIONS = ("bin", "worktop")
 UP = (0.0, 0.0, 1.0)
 """The worktop's outward normal."""
 CONTACT_N = 8.0
@@ -116,6 +129,13 @@ class Arm:
     def wrench(self) -> str:
         return f"{self.side}_wrist_wrench"
 
+    @property
+    def bin(self) -> tuple[str, tuple[float, float, float]]:
+        """The bin on this arm's side: its name and base."""
+        index = {"right": 0, "left": 1}[self.side]
+        x, y, z = BINS["recycle_bin"][index]
+        return f"recycle_bin_{index}", (x, y, z)
+
 
 def planners(package: RobotPackage, arm: Arm) -> tuple[Planner, Planner]:
     """sscbirrt with ssik for ``arm``, at a resolution fine enough for straight moves,
@@ -161,72 +181,97 @@ def drive(ctx: RobotContext, execution: SkillExecution, tick: Callable[[], None]
     return execution.result
 
 
-def pick_and_place(
+def pick(
+    ctx: RobotContext,
+    obj: str,
+    *,
+    arm: Arm,
+    planners: tuple[Planner, Planner],
+    tick: Callable[[], None] = lambda: None,
+) -> SkillResult:
+    """Grasp ``obj`` with ``arm`` from every sstsr grasp of its prl_assets geometry, at
+    its pose channel, and lift it."""
+    geometry = meta(kind_of(obj))["geometric_properties"]
+    planner, checker = planners
+    spec = GraspSpec(
+        manipulator=arm.manipulator,
+        end_effector=arm.hand,
+        gripper=arm.gripper,
+        opening_channel=arm.opening,
+        object=obj,
+        support="vention_base",
+        normal=UP,
+        pregrasps=regions.pregrasps(geometry, object_pose(ctx, obj)),
+        approach_m=regions.STANDOFF_M,
+        held_opening=(0.2, 0.95),
+        lift_m=0.06,
+    )
+    return drive(ctx, grasp(ctx, planner, spec, check_planner=checker), tick)
+
+
+def place_on_worktop(
     ctx: RobotContext,
     package: RobotPackage,
     obj: str,
     target: tuple[float, float],
     *,
     arm: Arm,
+    planners: tuple[Planner, Planner],
     tick: Callable[[], None] = lambda: None,
-) -> tuple[SkillResult, SkillResult | None]:
-    """Grasp ``obj`` with ``arm`` from every sstsr grasp of its prl_assets geometry, and
-    place it upright on the worktop within ``PLACE_SLACK_M`` of ``target`` in x and y."""
+) -> SkillResult:
+    """Place the held ``obj`` upright on the worktop within ``PLACE_SLACK_M`` of
+    ``target`` in x and y, under the measured contact guard."""
     geometry = meta(kind_of(obj))["geometric_properties"]
-    planner, checker = planners(package, arm)
+    planner, checker = planners
     surface = worktop(package).centre[2]
-    picked = drive(
-        ctx,
-        grasp(
-            ctx,
-            planner,
-            GraspSpec(
-                manipulator=arm.manipulator,
-                end_effector=arm.hand,
-                gripper=arm.gripper,
-                opening_channel=arm.opening,
-                object=obj,
-                support="vention_base",
-                normal=UP,
-                pregrasps=regions.pregrasps(geometry, object_pose(ctx, obj)),
-                approach_m=regions.STANDOFF_M,
-                held_opening=(0.2, 0.95),
-                lift_m=0.06,
-            ),
-            check_planner=checker,
+    spec = PlaceSpec(
+        manipulator=arm.manipulator,
+        end_effector=arm.hand,
+        gripper=arm.gripper,
+        opening_channel=arm.opening,
+        object=obj,
+        target="vention_base",
+        normal=UP,
+        regions=[regions.upright(geometry, (*target, surface), PLACE_SLACK_M)],
+        preplace_m=0.04,
+        overshoot_m=0.01,
+        terminal_m=0.01,
+        guard=WrenchGuard(
+            channel=arm.wrench, part=WrenchPart.FORCE, threshold=CONTACT_N, tare=True
         ),
-        tick,
+        retreat_m=0.08,
+        region_tolerance=(PLACE_TOLERANCE_M, PLACE_TILT_RAD),
     )
-    if not picked.succeeded:
-        return picked, None
-    placed = drive(
-        ctx,
-        place(
-            ctx,
-            planner,
-            PlaceSpec(
-                manipulator=arm.manipulator,
-                end_effector=arm.hand,
-                gripper=arm.gripper,
-                opening_channel=arm.opening,
-                object=obj,
-                target="vention_base",
-                normal=UP,
-                regions=[regions.upright(geometry, (*target, surface), PLACE_SLACK_M)],
-                preplace_m=0.04,
-                overshoot_m=0.01,
-                terminal_m=0.01,
-                guard=WrenchGuard(
-                    channel=arm.wrench, part=WrenchPart.FORCE, threshold=CONTACT_N, tare=True
-                ),
-                retreat_m=0.08,
-                region_tolerance=(PLACE_TOLERANCE_M, PLACE_TILT_RAD),
-            ),
-            check_planner=checker,
-        ),
-        tick,
+    return drive(ctx, place(ctx, planner, spec, check_planner=checker), tick)
+
+
+def drop_in_bin(
+    ctx: RobotContext,
+    obj: str,
+    *,
+    arm: Arm,
+    planners: tuple[Planner, Planner],
+    tick: Callable[[], None] = lambda: None,
+) -> SkillResult:
+    """Drop the held ``obj`` into the bin on ``arm``'s side, from the legacy demo's drop
+    zone over it, and check it came to rest inside."""
+    name, base = arm.bin
+    container = meta(kind_of(name))
+    height = regions.height(meta(kind_of(obj))["geometric_properties"])
+    planner, checker = planners
+    spec = DropSpec(
+        manipulator=arm.manipulator,
+        end_effector=arm.hand,
+        gripper=arm.gripper,
+        opening_channel=arm.opening,
+        object=obj,
+        container=name,
+        normal=UP,
+        regions=[regions.drop_zone(container, base, height)],
+        retreat_m=0.08,
+        inside=[regions.interior(container, base)],
     )
-    return picked, placed
+    return drive(ctx, drop(ctx, planner, spec, check_planner=checker), tick)
 
 
 def sources() -> dict[str, Any]:
@@ -243,7 +288,19 @@ def sources() -> dict[str, Any]:
     return out
 
 
-def outcome(
+def _stages(result: SkillResult | None) -> list[list[Any]] | None:
+    return None if result is None else [[s.name, s.succeeded] for s in result.stages]
+
+
+def _released(result: SkillResult | None) -> bool:
+    return result is not None and any(s.name == "release" and s.succeeded for s in result.stages)
+
+
+def _pose(pose: Pose) -> dict[str, list[float]]:
+    return {"position": list(pose.position), "quat_wxyz": list(pose.quat_wxyz)}
+
+
+def worktop_outcome(
     ctx: RobotContext,
     package: RobotPackage,
     obj: str,
@@ -251,12 +308,12 @@ def outcome(
     picked: SkillResult,
     placed: SkillResult | None,
 ) -> dict[str, Any]:
-    """What a pick-and-place achieved, observed after it ends: every stage, whether the
-    release was confirmed, where ``obj`` rests (from its pose channel), how far its axis
-    is from upright, its base's height above the worktop, and what is still attached.
-    ``succeeded`` requires every stage to succeed, nothing attached, and the object
-    upright within ``PLACE_TILT_RAD``, its base on the worktop, and its centre within
-    ``PLACE_SLACK_M`` plus ``PLACE_TOLERANCE_M`` of ``target`` in x and y."""
+    """What a pick and worktop placement achieved, observed after it ends: every stage,
+    whether the release was confirmed, where ``obj`` rests (from its pose channel), how
+    far its axis is from upright, its base's height above the worktop, and what is still
+    attached. ``succeeded`` requires every stage to succeed, nothing attached, and the
+    object upright within ``PLACE_TILT_RAD``, its base on the worktop, and its centre
+    within ``PLACE_SLACK_M`` plus ``PLACE_TOLERANCE_M`` of ``target`` in x and y."""
     final = object_pose(ctx, obj)
     _, x, y, _ = final.quat_wxyz
     tilt = math.acos(max(-1.0, min(1.0, 1 - 2 * (x * x + y * y))))  # body z from world z
@@ -264,24 +321,22 @@ def outcome(
     height = regions.height(meta(kind_of(obj))["geometric_properties"])
     base = final.position[2] - math.cos(tilt) * height / 2 - worktop(package).centre[2]
     attached = [a.object for a in ctx.scene.attachments]
-    released = placed is not None and any(
-        s.name == "release" and s.succeeded for s in placed.stages
-    )
     checks = {
         "grasped": picked.succeeded,
         "placed": placed is not None and placed.succeeded,
-        "released": released,
+        "released": _released(placed),
         "nothing_attached": not attached,
         "upright": tilt <= PLACE_TILT_RAD,
         "on_worktop": abs(base) <= PLACE_TOLERANCE_M,
         "at_target": max(map(abs, offset)) <= PLACE_SLACK_M + PLACE_TOLERANCE_M,
     }
     return {
+        "to": "worktop",
         "object": obj,
         "target": list(target),
-        "grasp": [[s.name, s.succeeded] for s in picked.stages],
-        "place": None if placed is None else [[s.name, s.succeeded] for s in placed.stages],
-        "final_pose": {"position": list(final.position), "quat_wxyz": list(final.quat_wxyz)},
+        "grasp": _stages(picked),
+        "place": _stages(placed),
+        "final_pose": _pose(final),
         "tilt_rad": tilt,
         "base_above_worktop_m": base,
         "offset_from_target_xy_m": offset,
@@ -296,15 +351,67 @@ def outcome(
     }
 
 
-def demo(
-    ctx: RobotContext, package: RobotPackage, tick: Callable[[], None] = lambda: None
+def bin_outcome(
+    ctx: RobotContext, obj: str, arm: Arm, picked: SkillResult, dropped: SkillResult | None
 ) -> dict[str, Any]:
-    """Step 1 in a staged scene: the right arm moves ``can_0`` to ``TARGET``, with a
-    snapshot before and after. Returns its ``outcome``."""
+    """What a pick and drop achieved, observed after it ends: every stage, whether the
+    release was confirmed, where ``obj`` rests (from its pose channel) relative to the
+    bin's base, and what is still attached. ``succeeded`` requires every stage to
+    succeed, nothing attached, and the object's centre within the bin's prl_assets
+    interior: inside its inner walls, over its floor, below its rim."""
+    name, base = arm.bin
+    geometry = meta(kind_of(name))["geometric_properties"]
+    outer, inner = geometry["outer_size"], geometry["inner_size"]
+    final = object_pose(ctx, obj)
+    local = [final.position[i] - base[i] for i in range(3)]
+    attached = [a.object for a in ctx.scene.attachments]
+    checks = {
+        "grasped": picked.succeeded,
+        "dropped": dropped is not None and dropped.succeeded,
+        "released": _released(dropped),
+        "nothing_attached": not attached,
+        "in_bin": abs(local[0]) <= inner[0] / 2
+        and abs(local[1]) <= inner[1] / 2
+        and outer[2] - inner[2] <= local[2] <= outer[2],
+    }
+    return {
+        "to": "bin",
+        "object": obj,
+        "bin": {"name": name, "base": list(base)},
+        "grasp": _stages(picked),
+        "drop": _stages(dropped),
+        "final_pose": _pose(final),
+        "position_in_bin_m": local,
+        "attached": attached,
+        "checks": checks,
+        "succeeded": all(checks.values()),
+    }
+
+
+def demo(
+    ctx: RobotContext,
+    package: RobotPackage,
+    to: str = "bin",
+    tick: Callable[[], None] = lambda: None,
+) -> dict[str, Any]:
+    """The right arm picks ``can_0`` in a staged scene and drops it in its bin
+    (``to="bin"``) or places it at ``TARGET`` on the worktop (``to="worktop"``), with a
+    snapshot before and after. Returns the destination's outcome."""
+    if to not in DESTINATIONS:
+        raise ValueError(f"no destination {to!r}; one of {DESTINATIONS}")
+    arm, obj = Arm("right"), "can_0"
+    chosen = planners(package, arm)
     ctx.snapshot()
-    picked, placed = pick_and_place(ctx, package, "can_0", TARGET, arm=Arm("right"), tick=tick)
+    picked = pick(ctx, obj, arm=arm, planners=chosen, tick=tick)
+    after: SkillResult | None = None
+    if picked.succeeded and to == "bin":
+        after = drop_in_bin(ctx, obj, arm=arm, planners=chosen, tick=tick)
+    elif picked.succeeded:
+        after = place_on_worktop(ctx, package, obj, TARGET, arm=arm, planners=chosen, tick=tick)
     ctx.snapshot()
-    return outcome(ctx, package, "can_0", TARGET, picked, placed)
+    if to == "bin":
+        return bin_outcome(ctx, obj, arm, picked, after)
+    return worktop_outcome(ctx, package, obj, TARGET, picked, after)
 
 
 def runtime(package: RobotPackage, scene: Path) -> MujocoRuntime:
@@ -313,8 +420,11 @@ def runtime(package: RobotPackage, scene: Path) -> MujocoRuntime:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Geodude's recycling demo, step 1, on ssrobot.")
+    parser = argparse.ArgumentParser(description="Geodude's recycling demo, steps 1-2, on ssrobot.")
     parser.add_argument("--seed", type=int, default=0, help="the scene's seed")
+    parser.add_argument(
+        "--to", choices=DESTINATIONS, default="bin", help="drop the can in its bin, or place it"
+    )
     parser.add_argument("--viser", action="store_true", help="serve a live view on port 8080")
     parser.add_argument("--record", type=Path, help="write the run as a bundle in this directory")
     args = parser.parse_args(argv)
@@ -352,7 +462,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if view is not None:
                     view.refresh()
 
-            result = demo(ctx, package, tick)
+            result = demo(ctx, package, args.to, tick)
             print(json.dumps(result["checks"]))
             if view is not None:
                 if sys.stdin.isatty():

@@ -2,7 +2,9 @@
 
 Grasp regions come from sstsr's templates for Geodude's Robotiq 2F-140, and placement
 regions from sstsr's ``StablePlacer``; both are instantiated at an object's or a
-surface's pose and converted to ssrobot's ``Tsr``.
+surface's pose and converted to ssrobot's ``Tsr``. A container's drop zone and interior
+are the legacy demo's, from its prl_assets geometry; they are this application's, not
+sstsr's or ssgrasping's.
 """
 
 from __future__ import annotations
@@ -90,6 +92,53 @@ def pregrasps(geometry: Mapping[str, Any], centre: Pose) -> list[Tsr]:
     back = np.eye(4)
     back[2, 3] = -STANDOFF_M
     return [tsr(dataclasses.replace(t, Tw_e=t.Tw_e @ back).instantiate(base)) for t in templates]
+
+
+def drop_zone(
+    container: Mapping[str, Any],
+    base: tuple[float, float, float],
+    held_height: float,
+) -> Tsr:
+    """The legacy demo's drop zone over an upright open box (prl_assets ``meta.yaml``)
+    standing at ``base``, from mj_manipulator's ``_generate_container_drop_tsrs``: the end
+    effector pointing straight down, anywhere over the interior less the container's
+    ``drop_zone_margin``, ``max(0.25, held_height + 0.10)`` above the rim (2 cm higher to
+    5 cm lower), at any yaw."""
+    geometry = container["geometric_properties"]
+    if geometry["type"] != "open_box":
+        raise ValueError(f"cannot drop into a {geometry['type']}")
+    outer = geometry["outer_size"]
+    wall = float(geometry.get("wall_thickness", 0.003))
+    margin = float(container.get("policy", {}).get("placement", {}).get("drop_zone_margin", 0.05))
+    hx, hy = (float(outer[i]) / 2 - wall - margin for i in range(2))
+    x, y, z = base
+    return Tsr(
+        origin=Pose(
+            position=(x, y, z + float(outer[2]) + max(0.25, held_height + 0.10)),
+            quat_wxyz=(0.0, 1.0, 0.0, 0.0),  # x along the world's, z pointing down
+        ),
+        offset=Pose(position=(0.0, 0.0, 0.0), quat_wxyz=(1.0, 0.0, 0.0, 0.0)),
+        position_bounds=((-hx, hx), (-hy, hy), (-0.02, 0.05)),
+        rotation_bounds=((0.0, 0.0), (0.0, 0.0), (-math.pi, math.pi)),
+    )
+
+
+def interior(container: Mapping[str, Any], base: tuple[float, float, float]) -> Tsr:
+    """Where an object's frame may rest inside an upright open box (prl_assets
+    ``meta.yaml``) standing at ``base``: over its floor, below its rim, any orientation."""
+    geometry = container["geometric_properties"]
+    outer, inner = geometry["outer_size"], geometry["inner_size"]
+    hx, hy = float(inner[0]) / 2, float(inner[1]) / 2
+    return Tsr(
+        origin=Pose(position=base, quat_wxyz=(1.0, 0.0, 0.0, 0.0)),
+        offset=Pose(position=(0.0, 0.0, 0.0), quat_wxyz=(1.0, 0.0, 0.0, 0.0)),
+        position_bounds=(
+            (-hx, hx),
+            (-hy, hy),
+            (float(outer[2]) - float(inner[2]), float(outer[2])),
+        ),
+        rotation_bounds=((-math.pi, math.pi),) * 3,
+    )
 
 
 def upright(geometry: Mapping[str, Any], spot: tuple[float, float, float], slack: float) -> Tsr:

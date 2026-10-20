@@ -1,9 +1,9 @@
 """The recycling demo on ssrobot and ssgrasping (personalrobotics/geodude#201).
 
-Steps 1 and 2 of the port, in a seeded scene staged from prl_assets: one can, picked by
-the right arm with ssgrasping's ``grasp``, and dropped with its ``drop`` into the bin on
-that arm's side (step 2, the default) or placed upright on the worktop with its
-``place`` (step 1, ``--to worktop``). Perception is the ground-truth stub the demo has
+Steps 1 to 3 of the port, in a seeded scene staged from prl_assets: one can, picked with
+ssgrasping's ``grasp`` by the arm on its side of the worktop, and dropped with its
+``drop`` into the bin on that arm's side (the default) or placed upright on the worktop
+with its ``place`` (``--to worktop``). Perception is the ground-truth stub the demo has
 always used: each object's privileged pose channel (ssrobot#101).
 
 Run it, watch it, and record it::
@@ -135,6 +135,12 @@ class Arm:
         index = {"right": 0, "left": 1}[self.side]
         x, y, z = BINS["recycle_bin"][index]
         return f"recycle_bin_{index}", (x, y, z)
+
+
+def arm_for(position: Sequence[float]) -> Arm:
+    """The arm on the side of the worktop at ``position``: x >= 0 is the right arm's
+    side, as its bin is. Retrying with the other arm is recovery policy (#209, #210)."""
+    return Arm("right" if position[0] >= 0 else "left")
 
 
 def planners(package: RobotPackage, arm: Arm) -> tuple[Planner, Planner]:
@@ -394,14 +400,16 @@ def demo(
     to: str = "bin",
     tick: Callable[[], None] = lambda: None,
 ) -> dict[str, Any]:
-    """The right arm picks ``can_0`` in a staged scene and drops it in its bin
-    (``to="bin"``) or places it at ``TARGET`` on the worktop (``to="worktop"``), with a
-    snapshot before and after. Returns the destination's outcome."""
+    """Pick ``can_0`` in a staged scene with the arm on its side, and drop it in that
+    arm's bin (``to="bin"``) or place it at ``TARGET`` on the worktop
+    (``to="worktop"``), with a snapshot before and after. Returns the destination's
+    outcome, with the arm used."""
     if to not in DESTINATIONS:
         raise ValueError(f"no destination {to!r}; one of {DESTINATIONS}")
-    arm, obj = Arm("right"), "can_0"
-    chosen = planners(package, arm)
+    obj = "can_0"
     ctx.snapshot()
+    arm = arm_for(object_pose(ctx, obj).position)
+    chosen = planners(package, arm)
     picked = pick(ctx, obj, arm=arm, planners=chosen, tick=tick)
     after: SkillResult | None = None
     if picked.succeeded and to == "bin":
@@ -410,8 +418,10 @@ def demo(
         after = place_on_worktop(ctx, package, obj, TARGET, arm=arm, planners=chosen, tick=tick)
     ctx.snapshot()
     if to == "bin":
-        return bin_outcome(ctx, obj, arm, picked, after)
-    return worktop_outcome(ctx, package, obj, TARGET, picked, after)
+        result = bin_outcome(ctx, obj, arm, picked, after)
+    else:
+        result = worktop_outcome(ctx, package, obj, TARGET, picked, after)
+    return {"arm": arm.side, **result}
 
 
 def runtime(package: RobotPackage, scene: Path) -> MujocoRuntime:
@@ -420,7 +430,7 @@ def runtime(package: RobotPackage, scene: Path) -> MujocoRuntime:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Geodude's recycling demo, steps 1-2, on ssrobot.")
+    parser = argparse.ArgumentParser(description="Geodude's recycling demo, steps 1-3, on ssrobot.")
     parser.add_argument("--seed", type=int, default=0, help="the scene's seed")
     parser.add_argument(
         "--to", choices=DESTINATIONS, default="bin", help="drop the can in its bin, or place it"

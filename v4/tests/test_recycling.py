@@ -11,6 +11,8 @@ that report and keeps it as its evidence:
 - the sources it ran from and the seed, and the scene manifest naming the prl_assets
   source and every staged file's hash, with the scene staging to the same bytes twice;
 - every grasp and drop stage, with the release confirmed, and nothing attached;
+- the arm back home afterwards, at its joints in the package's named ``ready``
+  configuration;
 - where the can came to rest, from its pose channel after the run: inside the bin's
   prl_assets interior;
 - the same outcome and trace from two runs;

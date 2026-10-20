@@ -3,8 +3,10 @@
 Steps 1 to 3 of the port, in a seeded scene staged from prl_assets: one can, picked with
 ssgrasping's ``grasp`` by the arm on its side of the worktop, and dropped with its
 ``drop`` into the bin on that arm's side (the default) or placed upright on the worktop
-with its ``place`` (``--to worktop``). Perception is the ground-truth stub the demo has
-always used: each object's privileged pose channel (ssrobot#101).
+with its ``place`` (``--to worktop``); the arm then goes home, to its joints in the
+package's named ``ready`` configuration, where the run starts. Perception is the
+ground-truth stub the demo has always used: each object's privileged pose channel
+(ssrobot#101).
 
 Run it, watch it, and record it::
 
@@ -43,6 +45,7 @@ from ssgrasping import (
 )
 from ssrobot import (
     ClockMode,
+    ExecutionState,
     JsonlTrace,
     ObservationRequest,
     Planner,
@@ -155,6 +158,39 @@ def planners(package: RobotPackage, arm: Arm) -> tuple[Planner, Planner]:
         )
 
     return make(), make(max_iterations=CHECK_ITERATIONS)
+
+
+def ready(package: RobotPackage, arm: Arm) -> tuple[float, ...]:
+    """``arm``'s joints in the package's named ``ready`` configuration, Geodude's home."""
+    description = package.description
+    named = next(c for c in description.configurations if c.name == "ready")
+    at = dict(zip(description.group(named.group).joints, named.positions, strict=True))
+    group = next(m.group for m in description.manipulators if m.name == arm.manipulator)
+    return tuple(at[j] for j in description.group(group).joints)
+
+
+def go_home(
+    ctx: RobotContext,
+    package: RobotPackage,
+    *,
+    arm: Arm,
+    planners: tuple[Planner, Planner],
+    tick: Callable[[], None] = lambda: None,
+) -> bool:
+    """Plan ``arm`` back to its ``ready`` joints and run the plan; whether it got there."""
+    planner, _ = planners
+    plan = ctx.manipulator(arm.manipulator).plan_to_configuration(
+        ready(package, arm), planner=planner
+    )
+    if not plan.succeeded:
+        return False
+    execution = ctx.execute(plan, planner=planner)
+    for _ in range(MAX_TICKS):
+        if execution.done:
+            break
+        ctx.step()
+        tick()
+    return execution.status.state is ExecutionState.SUCCEEDED
 
 
 def object_pose(ctx: RobotContext, name: str) -> Pose:
@@ -400,10 +436,11 @@ def demo(
     to: str = "bin",
     tick: Callable[[], None] = lambda: None,
 ) -> dict[str, Any]:
-    """Pick ``can_0`` in a staged scene with the arm on its side, and drop it in that
-    arm's bin (``to="bin"``) or place it at ``TARGET`` on the worktop
-    (``to="worktop"``), with a snapshot before and after. Returns the destination's
-    outcome, with the arm used."""
+    """Pick ``can_0`` in a staged scene with the arm on its side, drop it in that arm's
+    bin (``to="bin"``) or place it at ``TARGET`` on the worktop (``to="worktop"``), and
+    send the arm home, with a snapshot before and after. Returns the destination's
+    outcome, with the arm used; its ``home`` check is that the arm got back to
+    ``ready``."""
     if to not in DESTINATIONS:
         raise ValueError(f"no destination {to!r}; one of {DESTINATIONS}")
     obj = "can_0"
@@ -416,11 +453,14 @@ def demo(
         after = drop_in_bin(ctx, obj, arm=arm, planners=chosen, tick=tick)
     elif picked.succeeded:
         after = place_on_worktop(ctx, package, obj, TARGET, arm=arm, planners=chosen, tick=tick)
+    home = go_home(ctx, package, arm=arm, planners=chosen, tick=tick)
     ctx.snapshot()
     if to == "bin":
         result = bin_outcome(ctx, obj, arm, picked, after)
     else:
         result = worktop_outcome(ctx, package, obj, TARGET, picked, after)
+    result["checks"]["home"] = home
+    result["succeeded"] = all(result["checks"].values())
     return {"arm": arm.side, **result}
 
 

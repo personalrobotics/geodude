@@ -267,7 +267,7 @@ requires-dist = [
     { name = "prl-assets", git = "https://github.com/personalrobotics/prl_assets?rev=965ceead83abba11314e15d39904a614b217504e" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ssgrasping", git = "https://github.com/personalrobotics/ssgrasping?rev=591f234c800c4f9cdeaa775e55d7aef445f1dbb0" },
-    { name = "ssmjviser", git = "https://github.com/personalrobotics/mj_viser?rev=95352af3ec0779aa1add73d790ce3079f9547b08" },
+    { name = "ssmjviser", specifier = "==1.0.0" },
     { name = "ssrobot", extras = ["mujoco", "planning"], git = "https://github.com/personalrobotics/ssrobot?rev=917795ab1a95dc52331f2604bf486141b903249a" },
 ]
 
@@ -1013,8 +1013,8 @@ wheels = [
 
 [[package]]
 name = "ssmjviser"
-version = "0.4.0"
-source = { git = "https://github.com/personalrobotics/mj_viser?rev=95352af3ec0779aa1add73d790ce3079f9547b08#95352af3ec0779aa1add73d790ce3079f9547b08" }
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "mujoco" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1022,6 +1022,10 @@ dependencies = [
     { name = "pillow" },
     { name = "trimesh" },
     { name = "viser" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2e/5e/d06d86183ad78093baf0f8f13c96f9e01d732bd0820b7ec0caef5b2253e6/ssmjviser-1.0.0.tar.gz", hash = "sha256:d25e9e670e132d2d20492049f63fa5466b37b7bdc58ec494f439c5736247a751", size = 1387337, upload-time = "2026-10-20T17:43:16.917Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8f/f6/08dbc928dc06dd7854a2d463a83ac4ec3af0447d0d5515687b8be03c082c/ssmjviser-1.0.0-py3-none-any.whl", hash = "sha256:40b20deadf7841400f423d72109bbeb2658a445bc7f4c70d86fadfd4339c1628", size = 62811, upload-time = "2026-10-20T17:43:15.565Z" },
 ]
 
 [[package]]

@@ -266,9 +266,9 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "prl-assets", git = "https://github.com/personalrobotics/prl_assets?rev=b632aafcf916c560e0ca928e7e3ff098ce51f465" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ssgrasping", git = "https://github.com/personalrobotics/ssgrasping?rev=69d72597a41e7899f27cba0aa54ebdd1914bb6b6" },
+    { name = "ssgrasping", git = "https://github.com/personalrobotics/ssgrasping?rev=c788d2d71243d057a5f3e23009e612b14eda1236" },
     { name = "ssmjviser", specifier = "==1.0.0" },
-    { name = "ssrobot", extras = ["mujoco", "planning"], git = "https://github.com/personalrobotics/ssrobot?rev=838aa317579132a49b9d87c7942fd8c7d0bda61f" },
+    { name = "ssrobot", extras = ["mujoco", "planning"], git = "https://github.com/personalrobotics/ssrobot?rev=cc54ad1f1378ba6c97eee81e6f4438610ba6e84d" },
 ]
 
 [package.metadata.requires-dev]
@@ -978,7 +978,7 @@ ssik = [
 [[package]]
 name = "ssgrasping"
 version = "0.0.1"
-source = { git = "https://github.com/personalrobotics/ssgrasping?rev=69d72597a41e7899f27cba0aa54ebdd1914bb6b6#69d72597a41e7899f27cba0aa54ebdd1914bb6b6" }
+source = { git = "https://github.com/personalrobotics/ssgrasping?rev=c788d2d71243d057a5f3e23009e612b14eda1236#c788d2d71243d057a5f3e23009e612b14eda1236" }
 dependencies = [
     { name = "ssrobot" },
 ]
@@ -1031,7 +1031,7 @@ wheels = [
 [[package]]
 name = "ssrobot"
 version = "0.0.0"
-source = { git = "https://github.com/personalrobotics/ssrobot?rev=838aa317579132a49b9d87c7942fd8c7d0bda61f#838aa317579132a49b9d87c7942fd8c7d0bda61f" }
+source = { git = "https://github.com/personalrobotics/ssrobot?rev=cc54ad1f1378ba6c97eee81e6f4438610ba6e84d#cc54ad1f1378ba6c97eee81e6f4438610ba6e84d" }
 
 [package.optional-dependencies]
 mujoco = [

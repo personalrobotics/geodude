@@ -102,7 +102,7 @@ def test_geodude_recycles_one_can_on_ssrobot(artifacts: Path, tmp_path: Path) ->
     assert report["checks"] == dict.fromkeys(report["checks"], True), report["checks"]
     assert report["succeeded"] and report["attached"] == []
     assert [n for n, _ in report["drop"]] == [
-        "preflight", "transfer", "release", "retreat", "dropped",
+        "preflight", "transfer", "release", "dropped",
     ]  # fmt: skip
     assert left["arm"] == "left"
     assert left["bin"]["name"] == "recycle_bin_1"

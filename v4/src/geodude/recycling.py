@@ -16,8 +16,8 @@ the sources it ran from, the seed, every skill stage, and where the can came to 
 The installed command ``geodude-recycling`` is the same.
 
 ``--cans 4`` stages four cans and recycles them all (``recycle``): both arms race for
-each, the arm on the can's side preferred, and each can is planned during the previous
-drop's retreat (personalrobotics/geodude#223).
+each, the arm on the can's side preferred, and each can is planned while the previous
+can is carried to its bin (personalrobotics/geodude#223).
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ from ssgrasping import (
 )
 from ssrobot import (
     ClockMode,
-    ExecutionState,
+    Execution,
     JsonlTrace,
     ObservationRequest,
     Planner,
@@ -306,7 +306,7 @@ def drop_spec(obj: str, arm: Arm) -> DropSpec:
         container=name,
         normal=UP,
         regions=[regions.drop_zone(container, base, height)],
-        retreat_m=0.08,
+        retreat_m=0.0,  # the next can's motion starts from the drop: no retreat (#223)
         inside=[regions.interior(container, base)],
         carry_scaling=CARRY_SCALING,
     )
@@ -479,6 +479,16 @@ def candidates(
     ]
 
 
+def landing(obj: str, arm: Arm) -> Pose:
+    """Where ``obj``, dropped by ``arm``, is expected to rest: upright on the floor of
+    that arm's bin, at its centre. For planning the next can only; never checked."""
+    name, (x, y, z) = arm.bin
+    geometry = meta(kind_of(name))["geometric_properties"]
+    floor = geometry["outer_size"][2] - geometry["inner_size"][2]
+    height = regions.height(meta(kind_of(obj))["geometric_properties"])
+    return Pose(position=(x, y, z + floor + height / 2), quat_wxyz=(1.0, 0.0, 0.0, 0.0))
+
+
 def recycle(
     ctx: RobotContext,
     package: RobotPackage,
@@ -491,9 +501,12 @@ def recycle(
     """Pick each of ``objects`` in turn and drop it in a bin, racing both arms for each
     (``Candidates``): the arm on its side takes it if its whole planned prefix, through
     the drop into its own bin, plans; otherwise the other arm, if its prefix plans. The
-    next object's race is planned during this drop's post-release retreat, on its
-    prediction; every object already dropped is unsettled in it, since it may still be
-    rolling in its bin. The winner's pregrasp then continues from where the retreat ends.
+    drop has no retreat. The next object's race is planned while this drop's transfer
+    carries the object to its bin, on the transfer's prediction, which expects the object
+    released there to rest on the bin's floor (``landing``), the gripper open as it
+    started, and every object dropped before it unsettled, since it may still be rolling
+    in its bin. The winner's pregrasp then continues from where the transfer ended, once
+    the release is confirmed and the object has landed.
     Within the grasp, the approach is planned during the pregrasp. Returns each object's
     ``bin_outcome``, with the arm and the race.
 
@@ -501,6 +514,11 @@ def recycle(
     nothing is planned during motion, and each race is planned on a snapshot when its
     object's turn comes. Both are for comparison."""
     arms = {side: planners(package, Arm(side)) for side in BIN_OF}
+    start = ctx.snapshot()
+    opened = {  # every gripper starts open; a release opens it again
+        side: {j: start.position(j) for j in ctx.description.gripper(Arm(side).gripper).joints}
+        for side in BIN_OF
+    }
     outcomes: list[dict[str, Any]] = []
     looking: Lookahead | None = None
     pending: Candidates | None = None
@@ -535,17 +553,30 @@ def recycle(
             spec = selection.candidate.drop
             assert spec is not None  # every candidate drops
             dropping = drop(ctx, planner, spec, check_planner=checker, lookahead=looking)
-            released.append(obj)
-            pending, retreat = _drop_racing_next(
-                ctx, dropping, released, following, arms, tick, race=race
-            )
+
+            def race_next(
+                transfer: Execution,
+                following: str | None = following,
+                obj: str = obj,
+                arm: Arm = arm,
+            ) -> Candidates:
+                assert following is not None
+                return Candidates(
+                    ctx,
+                    candidates(ctx, following, arms, race=race),
+                    after=transfer,
+                    unsettled=released,
+                    releases={obj: landing(obj, arm)},
+                    joints=opened[arm.side],
+                )
+
+            pending = _drop_racing_next(ctx, dropping, race_next if following else None, tick)
             assert dropping.result is not None
             dropped = dropping.result
-            if pending is not None and (
-                retreat is None or retreat.status.state is not ExecutionState.SUCCEEDED
-            ):
+            released.append(obj)
+            if pending is not None and not _released(dropped):
                 run_together(ctx, [pending], max_ticks=MAX_TICKS)  # its planners are free again
-                pending = None  # planned on a retreat that did not happen: race again
+                pending = None  # planned on a release that did not happen: race again
         outcome = bin_outcome(ctx, obj, arm, picked, dropped)
         logs = {
             skill: result.values.get("lookahead", [])
@@ -561,29 +592,19 @@ def recycle(
 def _drop_racing_next(
     ctx: RobotContext,
     dropping: SkillExecution,
-    released: Sequence[str],
-    following: str | None,
-    arms: dict[str, tuple[Planner, Planner]],
+    race_next: Callable[[Execution], Candidates] | None,
     tick: Callable[[], None],
-    *,
-    race: bool,
-) -> tuple[Candidates | None, Any]:
-    """Drive ``dropping`` to its end; once its retreat is executing, start the race for
-    ``following`` on the retreat's prediction, with every ``released`` object, the one
-    being dropped among them, unsettled. Returns
-    the race, possibly still planning, and the retreat it was planned on."""
+) -> Candidates | None:
+    """Drive ``dropping`` to its end; once its transfer is executing, start ``race_next``
+    on it. Returns the race, possibly still planning."""
     pending: Candidates | None = None
-    retreat = None
     dropping.advance()
     for _ in range(MAX_TICKS):
         if dropping.done:
             break
         active = dropping.active
-        if pending is None and following is not None and dropping.stage == "retreat" and active:
-            retreat = active
-            pending = Candidates(
-                ctx, candidates(ctx, following, arms, race=race), after=active, unsettled=released
-            )
+        if pending is None and race_next is not None and dropping.stage == "transfer" and active:
+            pending = race_next(active)
             pending.advance()
         ctx.step()
         tick()
@@ -592,7 +613,7 @@ def _drop_racing_next(
             pending.advance()
     else:
         dropping.cancel(f"not done after {MAX_TICKS} ticks")
-    return pending, retreat
+    return pending
 
 
 def runtime(package: RobotPackage, scene: Path) -> MujocoRuntime:
@@ -616,7 +637,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=int,
         default=1,
         help="how many cans to stage; more than one recycles them all into the bins, racing "
-        "the arms and planning each can during the previous one's retreat",
+        "the arms and planning each can while the previous one is carried to its bin",
     )
     parser.add_argument("--viser", action="store_true", help="serve a live view on port 8080")
     parser.add_argument("--record", type=Path, help="write the run as a bundle in this directory")

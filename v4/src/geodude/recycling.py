@@ -32,6 +32,8 @@ from typing import Any
 
 from sscbirrt import CBiRRTConfig
 from ssgrasping import (
+    Candidate,
+    Candidates,
     DropSpec,
     GraspSpec,
     PlaceSpec,
@@ -40,9 +42,11 @@ from ssgrasping import (
     drop,
     grasp,
     place,
+    run_together,
 )
 from ssrobot import (
     ClockMode,
+    ExecutionState,
     JsonlTrace,
     ObservationRequest,
     Planner,
@@ -67,6 +71,9 @@ BINS = {"recycle_bin": [(0.85, -0.35, 0.01), (-0.85, -0.35, 0.01)]}
 """The legacy demo's bins, either side of the robot, on the floor: ``recycle_bin_0`` on
 the right arm's side, ``recycle_bin_1`` on the left's. Each arm reaches only its own
 side's bin (#201)."""
+BIN_OF = {"right": 0, "left": 1}
+"""Which of ``BINS`` each arm drops into: the one on its side. The rule is data: racing
+the arms (#223) evaluates each arm through its own bin."""
 DESTINATIONS = ("bin", "worktop")
 UP = (0.0, 0.0, 1.0)
 """The worktop's outward normal."""
@@ -97,6 +104,10 @@ at full speed, sscbirrt 3.11's transfers swing the wrist fast enough to throw it
 fingers (personalrobotics/ssgrasping#16)."""
 CHECK_ITERATIONS = 300
 """The iteration budget of the planner that checks a follow-on straight move."""
+PREFERRED = 1
+"""The race priority of the arm on an object's side, over the other arm's 0. Raced at
+equal priority, the shorter prefix won, and it was often the other arm's: a long
+cross-body carry, from which cans slipped out of the grasp (personalrobotics/geodude#223)."""
 MAX_TICKS = 200_000
 SOURCES = (
     "geodude",
@@ -142,7 +153,7 @@ class Arm:
     @property
     def bin(self) -> tuple[str, tuple[float, float, float]]:
         """The bin on this arm's side: its name and base."""
-        index = {"right": 0, "left": 1}[self.side]
+        index = BIN_OF[self.side]
         x, y, z = BINS["recycle_bin"][index]
         return f"recycle_bin_{index}", (x, y, z)
 
@@ -182,16 +193,10 @@ def kind_of(name: str) -> str:
 
 def drive(ctx: RobotContext, execution: SkillExecution, tick: Callable[[], None]) -> SkillResult:
     """Advance ``execution`` to its end, stepping the manual clock and calling ``tick``
-    after each step (a viewer refresh, a snapshot)."""
+    after each step (a viewer refresh, a snapshot). While the skill waits only on a plan
+    made on a worker, the clock does not step."""
     assert ctx.info.clock_mode is ClockMode.MANUAL
-    execution.advance()
-    for _ in range(MAX_TICKS):
-        if execution.done:
-            break
-        ctx.step()
-        tick()
-        execution.advance()
-    else:
+    if not run_together(ctx, [execution], max_ticks=MAX_TICKS, tick=tick):
         execution.cancel(f"not done after {MAX_TICKS} ticks")
     assert execution.result is not None
     return execution.result
@@ -207,9 +212,15 @@ def pick(
 ) -> SkillResult:
     """Grasp ``obj`` with ``arm`` from every sstsr grasp of its prl_assets geometry, at
     its pose channel, and lift it."""
-    geometry = meta(kind_of(obj))["geometric_properties"]
     planner, checker = planners
-    spec = GraspSpec(
+    spec = grasp_spec(ctx, obj, arm)
+    return drive(ctx, grasp(ctx, planner, spec, check_planner=checker), tick)
+
+
+def grasp_spec(ctx: RobotContext, obj: str, arm: Arm) -> GraspSpec:
+    """``pick``'s grasp of ``obj`` by ``arm``."""
+    geometry = meta(kind_of(obj))["geometric_properties"]
+    return GraspSpec(
         manipulator=arm.manipulator,
         end_effector=arm.hand,
         gripper=arm.gripper,
@@ -222,7 +233,6 @@ def pick(
         held_opening=(0.2, 0.95),
         lift_m=0.06,
     )
-    return drive(ctx, grasp(ctx, planner, spec, check_planner=checker), tick)
 
 
 def place_on_worktop(
@@ -272,11 +282,17 @@ def drop_in_bin(
 ) -> SkillResult:
     """Drop the held ``obj`` into the bin on ``arm``'s side, from the legacy demo's drop
     zone over it, and check it came to rest inside."""
+    planner, checker = planners
+    spec = drop_spec(obj, arm)
+    return drive(ctx, drop(ctx, planner, spec, check_planner=checker), tick)
+
+
+def drop_spec(obj: str, arm: Arm) -> DropSpec:
+    """``drop_in_bin``'s drop of ``obj`` by ``arm`` into its bin."""
     name, base = arm.bin
     container = meta(kind_of(name))
     height = regions.height(meta(kind_of(obj))["geometric_properties"])
-    planner, checker = planners
-    spec = DropSpec(
+    return DropSpec(
         manipulator=arm.manipulator,
         end_effector=arm.hand,
         gripper=arm.gripper,
@@ -289,7 +305,6 @@ def drop_in_bin(
         inside=[regions.interior(container, base)],
         carry_scaling=CARRY_SCALING,
     )
-    return drive(ctx, drop(ctx, planner, spec, check_planner=checker), tick)
 
 
 def sources() -> dict[str, Any]:
@@ -434,6 +449,141 @@ def demo(
     else:
         result = worktop_outcome(ctx, package, obj, TARGET, picked, after)
     return {"arm": arm.side, **result}
+
+
+def candidates(
+    ctx: RobotContext, obj: str, arms: dict[str, tuple[Planner, Planner]], *, race: bool = True
+) -> list[Candidate]:
+    """Each arm, as a candidate for ``obj``: its grasp, and its drop into its own bin
+    (``BIN_OF``), with that arm's planners. The arm on ``obj``'s side (``arm_for``) is
+    preferred (``PREFERRED``); the other is the fallback, taken when the preferred arm's
+    prefix does not plan. Without ``race``, only the preferred arm."""
+    preferred = arm_for(object_pose(ctx, obj).position).side
+    if not race:
+        arms = {preferred: arms[preferred]}
+    return [
+        Candidate(
+            label=side,
+            grasp=grasp_spec(ctx, obj, Arm(side)),
+            planner=planner,
+            checker=checker,
+            drop=drop_spec(obj, Arm(side)),
+            priority=PREFERRED if side == preferred else 0,
+        )
+        for side, (planner, checker) in arms.items()
+    ]
+
+
+def recycle(
+    ctx: RobotContext,
+    package: RobotPackage,
+    objects: Sequence[str],
+    tick: Callable[[], None] = lambda: None,
+    *,
+    race: bool = True,
+    lookahead: bool = True,
+) -> list[dict[str, Any]]:
+    """Pick each of ``objects`` in turn and drop it in a bin, racing both arms for each
+    (``Candidates``): the arm on its side takes it if its whole planned prefix, through
+    the drop into its own bin, plans; otherwise the other arm, if its prefix plans. The
+    next object's race is planned during this drop's post-release retreat, on its
+    prediction; every object already dropped is unsettled in it, since it may still be
+    rolling in its bin. The winner's pregrasp then continues from where the retreat ends.
+    Within the grasp, the approach is planned during the pregrasp. Returns each object's
+    ``bin_outcome``, with the arm and the race.
+
+    Without ``race``, the only candidate is ``arm_for``'s arm; without ``lookahead``,
+    nothing is planned during motion, and each race is planned on a snapshot when its
+    object's turn comes. Both are for comparison."""
+    arms = {side: planners(package, Arm(side)) for side in BIN_OF}
+    outcomes: list[dict[str, Any]] = []
+    pending: Candidates | None = None
+    released: list[str] = []  # dropped, and possibly still settling in a bin
+    for i, obj in enumerate(objects):
+        if pending is None:
+            pending = Candidates(ctx, candidates(ctx, obj, arms, race=race), unsettled=released)
+        run_together(ctx, [pending], max_ticks=MAX_TICKS, tick=tick)  # blocks; no steps
+        selection, report = pending.selection, pending.report
+        pending = None
+        if selection is None:
+            outcomes.append({"object": obj, "arm": None, "race": report, "succeeded": False})
+            continue
+        arm = Arm(selection.candidate.label)
+        planner, checker = arms[arm.side]
+        picked = drive(
+            ctx,
+            grasp(
+                ctx,
+                planner,
+                selection.candidate.grasp,
+                check_planner=checker,
+                lookahead=lookahead,
+                unsettled=released,
+                pregrasp=selection.pregrasp,
+            ),
+            tick,
+        )
+        dropped = None
+        if picked.succeeded:
+            following = objects[i + 1] if lookahead and i + 1 < len(objects) else None
+            spec = selection.candidate.drop
+            assert spec is not None  # every candidate drops
+            dropping = drop(
+                ctx, planner, spec, check_planner=checker, lookahead=lookahead, unsettled=released
+            )
+            released.append(obj)
+            pending, retreat = _drop_racing_next(
+                ctx, dropping, released, following, arms, tick, race=race
+            )
+            assert dropping.result is not None
+            dropped = dropping.result
+            if pending is not None and (
+                retreat is None or retreat.status.state is not ExecutionState.SUCCEEDED
+            ):
+                run_together(ctx, [pending], max_ticks=MAX_TICKS)  # its planners are free again
+                pending = None  # planned on a retreat that did not happen: race again
+        outcome = bin_outcome(ctx, obj, arm, picked, dropped)
+        outcomes.append({"arm": arm.side, "race": report, **outcome})
+        if ctx.scene.attachment(obj) is not None:
+            break  # still held: recovery is #209/#210's
+    return outcomes
+
+
+def _drop_racing_next(
+    ctx: RobotContext,
+    dropping: SkillExecution,
+    released: Sequence[str],
+    following: str | None,
+    arms: dict[str, tuple[Planner, Planner]],
+    tick: Callable[[], None],
+    *,
+    race: bool,
+) -> tuple[Candidates | None, Any]:
+    """Drive ``dropping`` to its end; once its retreat is executing, start the race for
+    ``following`` on the retreat's prediction, with every ``released`` object, the one
+    being dropped among them, unsettled. Returns
+    the race, possibly still planning, and the retreat it was planned on."""
+    pending: Candidates | None = None
+    retreat = None
+    dropping.advance()
+    for _ in range(MAX_TICKS):
+        if dropping.done:
+            break
+        active = dropping.active
+        if pending is None and following is not None and dropping.stage == "retreat" and active:
+            retreat = active
+            pending = Candidates(
+                ctx, candidates(ctx, following, arms, race=race), after=active, unsettled=released
+            )
+            pending.advance()
+        ctx.step()
+        tick()
+        dropping.advance()
+        if pending is not None:
+            pending.advance()
+    else:
+        dropping.cancel(f"not done after {MAX_TICKS} ticks")
+    return pending, retreat
 
 
 def runtime(package: RobotPackage, scene: Path) -> MujocoRuntime:

@@ -73,9 +73,15 @@ UP = (0.0, 0.0, 1.0)
 CONTACT_N = 8.0
 """The guarded placement's force threshold, measured in personalrobotics/ssgrasping#10:
 free motion peaks at 4.4-5.1 N, contact crosses 8 N within one tick."""
-SWING_TOLERANCE_RAD = 0.2
-"""The attachment monitor's rotation tolerance: a cylinder pinched between two pads
-swings about the finger axis as the arm accelerates and settles back."""
+HOLD_TOLERANCE_M = 0.02
+SWING_TOLERANCE_RAD = 0.4
+"""How far a held can may move from its declared grasp, in position and rotation,
+before the attachment monitor reports it no longer held. Measured over 40 carries
+(ten four-can rounds): a can pinched at the fingertips settles up to 11 mm and, after a
+knock, turns up to 0.87 rad; one the 2F-140 pulls deep into the hand as it closes, held
+by its inner links, re-seats up to 15 mm and 0.33 rad and stays held. A deep grasp is
+secure, so its re-seating must not count as losing the can; a can turned 0.5 rad or more
+out of a pinch is still reported."""
 PLACE_SLACK_M = 0.03
 """How far from ``TARGET``, in each of x and y, the placement region lets an object's
 centre be."""
@@ -432,7 +438,12 @@ def demo(
 
 def runtime(package: RobotPackage, scene: Path) -> MujocoRuntime:
     """Geodude in the staged scene, as the recycling demo runs it."""
-    return MujocoRuntime(package, scene=scene, attach_tolerance_rad=SWING_TOLERANCE_RAD)
+    return MujocoRuntime(
+        package,
+        scene=scene,
+        attach_tolerance_m=HOLD_TOLERANCE_M,
+        attach_tolerance_rad=SWING_TOLERANCE_RAD,
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:

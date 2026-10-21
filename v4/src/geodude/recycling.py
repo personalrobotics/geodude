@@ -14,6 +14,10 @@ Run it, watch it, and record it::
 a bundle (``out/bundle``) that mj_viser replays, and its outcome as ``out/recycling.json``:
 the sources it ran from, the seed, every skill stage, and where the can came to rest.
 The installed command ``geodude-recycling`` is the same.
+
+``--cans 4`` stages four cans and recycles them all (``recycle``): both arms race for
+each, the arm on the can's side preferred, and each can is planned during the previous
+drop's retreat (personalrobotics/geodude#223).
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from ssgrasping import (
     Candidates,
     DropSpec,
     GraspSpec,
+    Lookahead,
     PlaceSpec,
     SkillExecution,
     SkillResult,
@@ -497,6 +502,7 @@ def recycle(
     object's turn comes. Both are for comparison."""
     arms = {side: planners(package, Arm(side)) for side in BIN_OF}
     outcomes: list[dict[str, Any]] = []
+    looking: Lookahead | None = None
     pending: Candidates | None = None
     released: list[str] = []  # dropped, and possibly still settling in a bin
     for i, obj in enumerate(objects):
@@ -510,6 +516,7 @@ def recycle(
             continue
         arm = Arm(selection.candidate.label)
         planner, checker = arms[arm.side]
+        looking = Lookahead(unsettled=tuple(released)) if lookahead else None
         picked = drive(
             ctx,
             grasp(
@@ -517,8 +524,7 @@ def recycle(
                 planner,
                 selection.candidate.grasp,
                 check_planner=checker,
-                lookahead=lookahead,
-                unsettled=released,
+                lookahead=looking,
                 pregrasp=selection.pregrasp,
             ),
             tick,
@@ -528,9 +534,7 @@ def recycle(
             following = objects[i + 1] if lookahead and i + 1 < len(objects) else None
             spec = selection.candidate.drop
             assert spec is not None  # every candidate drops
-            dropping = drop(
-                ctx, planner, spec, check_planner=checker, lookahead=lookahead, unsettled=released
-            )
+            dropping = drop(ctx, planner, spec, check_planner=checker, lookahead=looking)
             released.append(obj)
             pending, retreat = _drop_racing_next(
                 ctx, dropping, released, following, arms, tick, race=race
@@ -543,7 +547,12 @@ def recycle(
                 run_together(ctx, [pending], max_ticks=MAX_TICKS)  # its planners are free again
                 pending = None  # planned on a retreat that did not happen: race again
         outcome = bin_outcome(ctx, obj, arm, picked, dropped)
-        outcomes.append({"arm": arm.side, "race": report, **outcome})
+        logs = {
+            skill: result.values.get("lookahead", [])
+            for skill, result in (("grasp", picked), ("drop", dropped))
+            if result is not None
+        }
+        outcomes.append({"arm": arm.side, "race": report, "lookahead": logs, **outcome})
         if ctx.scene.attachment(obj) is not None:
             break  # still held: recovery is #209/#210's
     return outcomes
@@ -602,6 +611,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--to", choices=DESTINATIONS, default="bin", help="drop the can in its bin, or place it"
     )
+    parser.add_argument(
+        "--cans",
+        type=int,
+        default=1,
+        help="how many cans to stage; more than one recycles them all into the bins, racing "
+        "the arms and planning each can during the previous one's retreat",
+    )
     parser.add_argument("--viser", action="store_true", help="serve a live view on port 8080")
     parser.add_argument("--record", type=Path, help="write the run as a bundle in this directory")
     args = parser.parse_args(argv)
@@ -609,7 +625,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     work = Path(tempfile.mkdtemp(prefix="geodude-"))
     try:
         scene = stage_scene(
-            work / "scene", package, objects={"can": 1}, fixtures=BINS, seed=args.seed
+            work / "scene", package, objects={"can": args.cans}, fixtures=BINS, seed=args.seed
         )
         trace = work / "trace.jsonl"
         sinks: list[Any] = [JsonlTrace(trace)] if args.record else []
@@ -639,8 +655,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if view is not None:
                     view.refresh()
 
-            result = demo(ctx, package, args.to, tick)
-            print(json.dumps(result["checks"]))
+            if args.cans == 1:
+                result = demo(ctx, package, args.to, tick)
+                print(json.dumps(result["checks"]))
+            else:
+                if args.to != "bin":
+                    parser.error("more than one can is recycled into the bins only")
+                cans = recycle(ctx, package, sorted(ctx.info.objects), tick)
+                result = {"cans": cans, "succeeded": all(c["succeeded"] for c in cans)}
+                print(json.dumps({c["object"]: c["succeeded"] for c in cans}))
             if view is not None:
                 if sys.stdin.isatty():
                     input("Press Enter to close the viewer. ")

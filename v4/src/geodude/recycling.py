@@ -85,6 +85,10 @@ PLACE_TOLERANCE_M = 0.01
 """How far outside its region a placed object may rest and still count: the transfer may
 aim at a region's edge, and the arm tracks a plan only to the runtime's goal tolerance
 (0.01 rad per joint), a few millimetres at the hand."""
+CARRY_SCALING = 0.7
+"""The fraction of the joints' velocity and acceleration limits a held can is carried at:
+at full speed, sscbirrt 3.11's transfers swing the wrist fast enough to throw it from the
+fingers (personalrobotics/ssgrasping#16)."""
 CHECK_ITERATIONS = 300
 """The iteration budget of the planner that checks a follow-on straight move."""
 MAX_TICKS = 200_000
@@ -247,6 +251,7 @@ def place_on_worktop(
         ),
         retreat_m=0.08,
         region_tolerance=(PLACE_TOLERANCE_M, PLACE_TILT_RAD),
+        carry_scaling=CARRY_SCALING,
     )
     return drive(ctx, place(ctx, planner, spec, check_planner=checker), tick)
 
@@ -276,6 +281,7 @@ def drop_in_bin(
         regions=[regions.drop_zone(container, base, height)],
         retreat_m=0.08,
         inside=[regions.interior(container, base)],
+        carry_scaling=CARRY_SCALING,
     )
     return drive(ctx, drop(ctx, planner, spec, check_planner=checker), tick)
 

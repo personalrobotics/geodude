@@ -98,7 +98,9 @@ def pregrasps(geometry: Mapping[str, Any], centre: Pose) -> list[Tsr]:
 
 
 def deepest(geometry: Mapping[str, Any], centre: Pose) -> Callable[[Pose], float] | None:
-    """For ssgrasping's ``GraspSpec.deepest``: how far the hand at a pregrasp pose may
+    """For ssgrasping's ``GraspSpec.deepest`` (not used yet: in simulation the 2F-140 grips
+    a can enveloped this deep with less than half the force of a fingertip grasp, and
+    drops it more often; personalrobotics/geodude#223): how far the hand at a pregrasp pose may
     approach an object with ``geometry`` standing at ``centre``, so the palm stops
     ``PALM_CLEARANCE_M`` from its surface and the fingers envelop it. A cylinder: the
     distance along the approach axis to the cylinder's axis, less its radius and the

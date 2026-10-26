@@ -107,6 +107,15 @@ CARRY_SCALING = 0.7
 """The fraction of the joints' velocity and acceleration limits a held can is carried at:
 at full speed, sscbirrt 3.11's transfers swing the wrist fast enough to throw it from the
 fingers (personalrobotics/ssgrasping#16)."""
+LINE_TOLERANCE_M = 0.002
+"""How far a straight approach or lift may stray from its line (``GraspSpec``'s
+``line_tolerance_m``, 1 mm by default). After rest, the arm arrives at a pregrasp 0.6 mm
+across its approach line at the median and 1.9 mm at p95, over 71 approaches in 20 seeds
+(personalrobotics/ssrobot#206), so the approach planned ahead continues from inside its
+line. The tradeoff: the wider line changes which grasps are made, so which cans fail
+moves too. Over 20 seeds, 210 of 223 cans against 212 of 225 at 1 mm: some seeds gain
+cans, others lose one to the in-hand slip (geodude_assets#36) or to a transfer refused
+when compiled (ssrobot#207)."""
 CHECK_ITERATIONS = 300
 """The iteration budget of the planner that checks a follow-on straight move."""
 PREFERRED = 1
@@ -237,6 +246,7 @@ def grasp_spec(ctx: RobotContext, obj: str, arm: Arm) -> GraspSpec:
         approach_m=regions.STANDOFF_M,
         held_opening=(0.2, 0.95),
         lift_m=0.06,
+        line_tolerance_m=LINE_TOLERANCE_M,
     )
 
 

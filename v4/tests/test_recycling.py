@@ -112,3 +112,15 @@ def test_geodude_recycles_one_can_on_ssrobot(artifacts: Path, tmp_path: Path) ->
     assert worktop["succeeded"] and worktop["attached"] == []
     assert report["repeat_identical"] and report["recorded_matches_repeat"]
     assert report["bundle"]["snapshots"] >= 2 and report["bundle"]["world_matches"]
+
+
+def test_the_demo_refuses_impossible_can_counts_before_starting() -> None:
+    """``--cans`` below 1 would stage nothing and report success; ``--to worktop`` places
+    one can only. Both are refused at the command line, before any package, scene, or
+    runtime is set up."""
+    import pytest
+
+    for argv in (["--cans", "0"], ["--cans", "-2"], ["--cans", "2", "--to", "worktop"]):
+        with pytest.raises(SystemExit) as refused:
+            recycling.main(argv)
+        assert refused.value.code == 2, argv

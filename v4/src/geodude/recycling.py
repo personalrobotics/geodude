@@ -651,6 +651,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--viser", action="store_true", help="serve a live view on port 8080")
     parser.add_argument("--record", type=Path, help="write the run as a bundle in this directory")
     args = parser.parse_args(argv)
+    if args.cans < 1:
+        parser.error("--cans must be at least 1")
+    if args.cans > 1 and args.to != "bin":
+        parser.error("more than one can is recycled into the bins only")
     package = load_installed_package("geodude_assets")
     work = Path(tempfile.mkdtemp(prefix="geodude-"))
     try:
@@ -701,8 +705,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 result = demo(ctx, package, args.to, tick)
                 print(json.dumps(result["checks"]))
             else:
-                if args.to != "bin":
-                    parser.error("more than one can is recycled into the bins only")
                 cans = recycle(ctx, package, sorted(ctx.info.objects), tick)
                 result = {"cans": cans, "succeeded": all(c["succeeded"] for c in cans)}
                 print(json.dumps({c["object"]: c["succeeded"] for c in cans}))

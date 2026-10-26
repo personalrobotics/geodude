@@ -535,18 +535,7 @@ def recycle(
         arm = Arm(selection.candidate.label)
         planner, checker = arms[arm.side]
         looking = Lookahead(unsettled=tuple(released)) if lookahead else None
-        picked = drive(
-            ctx,
-            grasp(
-                ctx,
-                planner,
-                selection.candidate.grasp,
-                check_planner=checker,
-                lookahead=looking,
-                pregrasp=selection.pregrasp,
-            ),
-            tick,
-        )
+        picked = drive(ctx, selection.grasp(ctx, lookahead=looking), tick)
         dropped = None
         if picked.succeeded:
             following = objects[i + 1] if lookahead and i + 1 < len(objects) else None

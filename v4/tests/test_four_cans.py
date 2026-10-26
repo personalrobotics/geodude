@@ -93,6 +93,9 @@ def test_geodude_recycles_four_cans_racing_its_arms(artifacts: Path, tmp_path: P
             assert can["arm"] == preferred["label"]
         approach = next(e for e in can["lookahead"]["grasp"] if e["stage"] == "approach")
         assert approach["prediction"]["lineage"] == [approach["prediction"]["base"]]
+        # The race's approach check is kept, not planned again, even from a pregrasp that
+        # ran as a continuation, rebased onto the actual arrival.
+        assert approach.get("kept") == "the feasibility check, planned before", approach
         assert [e["stage"] for e in can["lookahead"]["drop"]] == ["release"]
 
     # The first can is raced on a snapshot; every later one during the transfer before it.

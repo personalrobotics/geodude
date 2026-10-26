@@ -16,8 +16,8 @@ dependencies = [
     "pyyaml>=6.0",
     "ssmjviser==1.0.0",
     # Pinned by commit: the contracts and skills this app is proven against.
-    "ssrobot[mujoco,planning] @ git+https://github.com/personalrobotics/ssrobot@cc54ad1f1378ba6c97eee81e6f4438610ba6e84d",
-    "ssgrasping @ git+https://github.com/personalrobotics/ssgrasping@993f776d73cd721c3d456a486953ce9336488078",
+    "ssrobot[mujoco,planning] @ git+https://github.com/personalrobotics/ssrobot@c455aaa76203afb04b0876aaedcbfdaaf1ae99ab",
+    "ssgrasping @ git+https://github.com/personalrobotics/ssgrasping@a9de6c0f2a5627b2d2c085fb1a93eb375fe5207c",
     "prl-assets @ git+https://github.com/personalrobotics/prl_assets@b632aafcf916c560e0ca928e7e3ff098ce51f465",
     # Ahead of ssrobot's reference pin for Geodude (references/robots.toml, 7b740c3): the
     # 2F-140 driven like the real gripper (geodude_assets#38).

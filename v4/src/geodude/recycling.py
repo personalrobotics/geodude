@@ -582,8 +582,10 @@ def recycle(
             dropped = dropping.result
             released.append(obj)
             if pending is not None and not _released(dropped):
-                run_together(ctx, [pending], max_ticks=MAX_TICKS)  # its planners are free again
-                pending = None  # planned on a release that did not happen: race again
+                # Planned on a release that did not happen: none of it can be used. Stop it,
+                # rather than let it finish, and race again.
+                pending.close()
+                pending = None
         outcome = bin_outcome(ctx, obj, arm, picked, dropped)
         logs = {
             skill: result.values.get("lookahead", [])

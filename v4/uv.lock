@@ -262,7 +262,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "geodude-assets", git = "https://github.com/personalrobotics/geodude_assets?rev=7b740c37f79c49335a2451610541d7b3ef7ba1b7" },
+    { name = "geodude-assets", git = "https://github.com/personalrobotics/geodude_assets?rev=c2f70876901a164ee95e63efd79f3a0a66c592e1" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "prl-assets", git = "https://github.com/personalrobotics/prl_assets?rev=b632aafcf916c560e0ca928e7e3ff098ce51f465" },
     { name = "pyyaml", specifier = ">=6.0" },
@@ -282,7 +282,7 @@ dev = [
 [[package]]
 name = "geodude-assets"
 version = "0.1.0"
-source = { git = "https://github.com/personalrobotics/geodude_assets?rev=7b740c37f79c49335a2451610541d7b3ef7ba1b7#7b740c37f79c49335a2451610541d7b3ef7ba1b7" }
+source = { git = "https://github.com/personalrobotics/geodude_assets?rev=c2f70876901a164ee95e63efd79f3a0a66c592e1#c2f70876901a164ee95e63efd79f3a0a66c592e1" }
 dependencies = [
     { name = "mujoco" },
     { name = "numpy-stl" },

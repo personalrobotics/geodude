@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -27,9 +27,6 @@ MIN_SIDE_DEPTH_M = 0.099
 the modelled 2F-140's fingers stay parallel; its deep (84 mm) grasps fold them, and the can
 slips in the carry (sstsr#189, geodude_assets#36). Over 100 seeds of four cans, racing,
 with no clearance: 344 cans recycled against 313 with every depth."""
-PALM_CLEARANCE_M = 0.01
-"""How close the palm (the hand's TSR frame, sstsr's ``grasp_site``) may come to an
-object's surface before the fingers close."""
 
 
 def matrix(pose: Pose) -> np.ndarray:
@@ -105,30 +102,6 @@ def pregrasps(geometry: Mapping[str, Any], centre: Pose) -> list[Tsr]:
     back = np.eye(4)
     back[2, 3] = -STANDOFF_M
     return [tsr(dataclasses.replace(t, Tw_e=t.Tw_e @ back).instantiate(base)) for t in templates]
-
-
-def deepest(geometry: Mapping[str, Any], centre: Pose) -> Callable[[Pose], float] | None:
-    """For ssgrasping's ``GraspSpec.deepest`` (not used yet: in simulation the 2F-140 grips
-    a can enveloped this deep with less than half the force of a fingertip grasp, and
-    drops it more often; personalrobotics/geodude#223): how far the hand at a pregrasp pose may
-    approach an object with ``geometry`` standing at ``centre``, so the palm stops
-    ``PALM_CLEARANCE_M`` from its surface and the fingers envelop it. A cylinder: the
-    distance along the approach axis to the cylinder's axis, less its radius and the
-    clearance. None for other shapes: their grasps approach by ``STANDOFF_M``."""
-    if geometry["type"] != "cylinder":
-        return None
-    radius = float(geometry["radius"])
-    frame = matrix(centre)
-    c, u = frame[:3, 3], frame[:3, 2]
-
-    def reach(pose: Pose) -> float:
-        hand = matrix(pose)
-        p, a = hand[:3, 3], hand[:3, 2]
-        w, a_off = c - p, a - (a @ u) * u  # both without their part along the axis
-        w = w - (w @ u) * u
-        return float((w @ a_off) / (a_off @ a_off)) - radius - PALM_CLEARANCE_M
-
-    return reach
 
 
 def drop_zone(

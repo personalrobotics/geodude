@@ -107,6 +107,11 @@ CARRY_SCALING = 0.7
 """The fraction of the joints' velocity and acceleration limits a held can is carried at:
 at full speed, sscbirrt 3.11's transfers swing the wrist fast enough to throw it from the
 fingers (personalrobotics/ssgrasping#16)."""
+CLEARANCE_M = 0.005
+"""The clearance the grasp's pregrasp and the drop's transfer, Geodude's moves through
+free space, keep from the worktop, the bins and the other cans
+(``PlanningRequest.clearance_m``). Over 100 seeds of four cans, racing: 380 cans
+recycled against 344 with none (personalrobotics/ssrobot#183)."""
 LINE_TOLERANCE_M = 0.002
 """How far a straight approach or lift may stray from its line (``GraspSpec``'s
 ``line_tolerance_m``, 1 mm by default). After rest, the arm arrives at a pregrasp 0.6 mm
@@ -247,6 +252,7 @@ def grasp_spec(ctx: RobotContext, obj: str, arm: Arm) -> GraspSpec:
         held_opening=(0.2, 0.95),
         lift_m=0.06,
         line_tolerance_m=LINE_TOLERANCE_M,
+        clearance_m=CLEARANCE_M,
     )
 
 
@@ -319,6 +325,7 @@ def drop_spec(obj: str, arm: Arm) -> DropSpec:
         retreat_m=0.0,  # the next can's motion starts from the drop: no retreat (#223)
         inside=[regions.interior(container, base)],
         carry_scaling=CARRY_SCALING,
+        clearance_m=CLEARANCE_M,
     )
 
 

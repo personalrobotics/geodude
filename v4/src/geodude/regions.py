@@ -21,6 +21,12 @@ from tsr.placement.stable_placer import StablePlacer
 
 STANDOFF_M = 0.08
 """How far back along the approach axis a pregrasp is from its grasp."""
+MIN_SIDE_DEPTH_M = 0.099
+"""The least palm-to-axis distance of a cylinder side grasp offered: sstsr's shallow
+(114 mm) and mid (99 mm) grasps, which hold the can within 15 mm of the fingertips, where
+the modelled 2F-140's fingers stay parallel; its deep (84 mm) grasps fold them, and the can
+slips in the carry (sstsr#189, geodude_assets#36). Over 100 seeds of four cans, racing,
+with no clearance: 344 cans recycled against 313 with every depth."""
 PALM_CLEARANCE_M = 0.01
 """How close the palm (the hand's TSR frame, sstsr's ``grasp_site``) may come to an
 object's surface before the fingers close."""
@@ -70,12 +76,16 @@ def height(geometry: Mapping[str, Any]) -> float:
 def pregrasps(geometry: Mapping[str, Any], centre: Pose) -> list[Tsr]:
     """sstsr's grasps of an object with ``geometry`` (prl_assets ``geometric_properties``)
     standing at ``centre``, the families the legacy demo uses: a cylinder from the side,
-    at every depth; a box on its x and y faces, from the top, and from the bottom. Each is
-    backed off by ``STANDOFF_M`` along its approach. sstsr frames a grasped object at the
-    middle of its base."""
+    no deeper than ``MIN_SIDE_DEPTH_M``; a box on its x and y faces, from the top, and
+    from the bottom. Each is backed off by ``STANDOFF_M`` along its approach. sstsr frames
+    a grasped object at the middle of its base."""
     hand = Robotiq2F140()
     if geometry["type"] == "cylinder":
-        templates = hand.grasp_cylinder_side(geometry["radius"], geometry["height"])
+        templates = [
+            t
+            for t in hand.grasp_cylinder_side(geometry["radius"], geometry["height"])
+            if np.linalg.norm(t.Tw_e[:3, 3]) >= MIN_SIDE_DEPTH_M - 1e-4
+        ]
     elif geometry["type"] == "box":
         templates = []
         for family in (

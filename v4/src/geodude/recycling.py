@@ -29,6 +29,7 @@ import math
 import shutil
 import sys
 import tempfile
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -678,8 +679,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 view.viewer.add_panel(ContactOverlay())
                 print(view.open())
 
+            # Wall time minus simulated time, kept as a real robot keeps it.
+            anchor = [time.monotonic() - ctx.now.time_ns / 1e9]
+
             def tick() -> None:
                 if view is not None:
+                    # A live view runs as a real robot does: never ahead of real time, and
+                    # once held still (the context planning on its own thread, or this
+                    # view drawing) it carries on from there instead of catching up, so
+                    # every pause shows as long as it lasted.
+                    ahead = ctx.now.time_ns / 1e9 - (time.monotonic() - anchor[0])
+                    if ahead > 0:
+                        time.sleep(ahead)
+                    elif ahead < 0:
+                        anchor[0] = time.monotonic() - ctx.now.time_ns / 1e9
                     view.refresh()
 
             if args.cans == 1:

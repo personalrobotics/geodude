@@ -17,14 +17,17 @@ each of which owns one kind of decision:
 | --- | --- |
 | [geodude_assets](https://github.com/personalrobotics/geodude_assets) | Geodude's robot package: its MuJoCo model, groups, end effectors, grippers, channels, and limits |
 | ssrobot | The session, snapshots, planning contracts, the checked execution boundary, and the run's evidence |
-| ssgrasping | Robot-neutral grasp, place, and drop skills, candidate races, and planning ahead |
+| ssgrasping | Grasp, place, and drop skills written against robot-neutral contracts, candidate races, and planning ahead |
 | [prl_assets](https://github.com/personalrobotics/prl_assets) and [sstsr](https://github.com/personalrobotics/sstsr) | Object geometry and models, and the gripper and placement templates built from them |
-| Geodude 4.0 | Which arm takes which object, where the bins stand, the regions offered to each skill, the measured speeds and forces, how a scene is staged, and what counts as success |
+| Geodude 4.0 | Which arm takes which object, where the bins stand, the regions offered to each skill, the speeds, forces, and tolerances, how a scene is staged, how the run is driven, and what counts as success |
 
-The application therefore contains no planner, controller, simulator loop, or
-grasping logic of its own. It chooses data and policy, and the shared layers carry
-them out. The same separation is what allows ssgrasping's skills to remain
-robot-neutral.
+Geodude 4.0 owns the application's orchestration. It chooses and constructs its
+planners, builds the specs it passes to each skill, decides which skills run in which
+order, and advances the `RobotContext`, stepping its clock while skills and races
+proceed. It does not contain a planner implementation, a low-level controller, a
+simulator integration, or a grasping skill. ssrobot's runtime integrates MuJoCo,
+sscbirrt plans, and ssgrasping implements the skills. The same separation is what allows
+ssgrasping's skills to be written against robot-neutral contracts.
 
 ## The recycling demo
 
@@ -33,7 +36,9 @@ one on each arm's side, then picks each can and drops it into a bin. With one ca
 arm on the can's side of the worktop picks it and drops it into its own bin.
 
 With several cans, both arms race for each one. Each arm's whole feasibility prefix,
-from the pregrasp through the drop into its own bin, is planned before anything moves.
+from the pregrasp through the transfer to its own bin's drop region, is planned before
+anything moves. Closing the fingers, releasing the can, and where it comes to rest are
+observed when they happen, not planned.
 The arm on the can's side is preferred, and the other arm takes the can when the
 preferred arm's prefix does not plan. The race for the next can is planned while the
 current can is carried, on the prediction of that transfer. The prediction expects the
@@ -91,8 +96,8 @@ the region a dropped can must come to rest in are the 3.x demo's, computed from 
 bin's geometry. These are Geodude's choices rather than ssgrasping's, because another
 robot or task would offer different grasps and containers.
 
-The speeds, forces, and tolerances in `src/geodude/recycling.py` were measured on this
-robot, and each constant records the measurement that set it. Held cans are carried at
+The speeds, forces, and tolerances are set in `src/geodude/recycling.py`. Where a value
+is set from measurement, its code comment records that evidence. Held cans are carried at
 a fraction of the joint limits, because full speed can throw a can from the fingers. A
 guarded placement stops at a contact force set above the free-motion peak. Free-space
 moves keep a small clearance from the worktop, the bins, and the other cans. Straight
@@ -113,10 +118,11 @@ SHA-256 of every staged file. The same inputs produce the same bytes.
 
 `--record DIR` writes the run as an ssrobot run bundle in `DIR/bundle`, with the exact
 robot, scene, and trace needed to inspect it elsewhere, and its outcome in
-`DIR/recycling.json`. The outcome records the version and origin of each package the run
-used, every skill stage, and where each can came to rest. A bundle can be turned into a recording
-that anyone can scrub with mj_viser, as described in its guide to
-[replaying a run bundle](https://github.com/personalrobotics/mj_viser#replay-a-run-bundle).
+`DIR/recycling.json`. The outcome records the version and origin of each distribution in
+the application's listed stack (`SOURCES` in `recycling.py`), every skill stage, and
+where each can came to rest. A bundle can be turned into a recording that anyone can
+scrub with mj_viser, as described in its guide to [replaying a run
+bundle](https://github.com/personalrobotics/mj_viser#replay-a-run-bundle).
 
 ## Current status
 

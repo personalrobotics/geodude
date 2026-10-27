@@ -266,9 +266,9 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "prl-assets", git = "https://github.com/personalrobotics/prl_assets?rev=b632aafcf916c560e0ca928e7e3ff098ce51f465" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ssgrasping", git = "https://github.com/personalrobotics/ssgrasping?rev=a9de6c0f2a5627b2d2c085fb1a93eb375fe5207c" },
+    { name = "ssgrasping", git = "https://github.com/personalrobotics/ssgrasping?rev=76d3d265902deb38ae00c5d93387cf94fb2c06af" },
     { name = "ssmjviser", specifier = "==1.0.0" },
-    { name = "ssrobot", extras = ["mujoco", "planning"], git = "https://github.com/personalrobotics/ssrobot?rev=c455aaa76203afb04b0876aaedcbfdaaf1ae99ab" },
+    { name = "ssrobot", extras = ["mujoco", "planning"], git = "https://github.com/personalrobotics/ssrobot?rev=79b128a85a8c87023eeb2a27948d1fe098d98f00" },
 ]
 
 [package.metadata.requires-dev]
@@ -950,21 +950,21 @@ wheels = [
 
 [[package]]
 name = "sscbirrt"
-version = "3.13.0"
+version = "3.15.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "sstsr" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/39/c2/c5d159524b360531338452ea4d829f71e1e576df5886abdc1fb2f1b67d95/sscbirrt-3.13.0.tar.gz", hash = "sha256:01f19ac71cb71dfbfc529a79c1c59cc1bdda37fcd32fd616fd272a6a70db8542", size = 5437987, upload-time = "2026-10-23T15:04:27.8Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/45/e5/25bcb080cff0f709c981127eb2f452af751f04f70849c704324481d81c15/sscbirrt-3.15.0.tar.gz", hash = "sha256:88e4a4a822db455517a57b54a97028e743363d4a160fb8e29515e796827f062d", size = 5451304, upload-time = "2026-10-26T15:02:38.914Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d8/7e/e28d6bbe55178be6724ba7df03b20afb7fee3c5df752a25d41b74cc22a48/sscbirrt-3.13.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:81c25b97a3d2ee8d84ea55c82d28039486022fda5a7fff057571389178800788", size = 1091591, upload-time = "2026-10-23T15:04:16.043Z" },
-    { url = "https://files.pythonhosted.org/packages/40/6b/8d3dbfffa883cfe9ad2656843f793ab807ffa999846c1456b5ccfb1e0085/sscbirrt-3.13.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:4db6d545fc1945343fa932e0e9bce021a0376feca79b82ed5b13e5ee403a5df5", size = 1438521, upload-time = "2026-10-23T15:04:17.728Z" },
-    { url = "https://files.pythonhosted.org/packages/e5/b5/379aeea1e33c70966883d32c8e30dd7250f4fe13926f5ca93104d0fa5a7d/sscbirrt-3.13.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:f6ec9e68f92d101a61194a3cb6e150bfa8b828049f4349dd14e896dd22c2f6a2", size = 1095116, upload-time = "2026-10-23T15:04:19.079Z" },
-    { url = "https://files.pythonhosted.org/packages/48/87/12b8977cca209fd494b92a8076958d31ccfd18453cea71a6a2f0b44d3076/sscbirrt-3.13.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b177374c5faa7a06a8573893c818ac498fb15a36f73875df6af8c726053e02c6", size = 1445841, upload-time = "2026-10-23T15:04:20.499Z" },
-    { url = "https://files.pythonhosted.org/packages/d1/19/870c1bdb412d2beb9b1e4084a62bfb29380cab32b84d3bdedaf49ea6aede/sscbirrt-3.13.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:17280a0dd02a2e6cb07a242589b74ff3f11e73a8e20af9e8ebf5fa5f071042ee", size = 1095160, upload-time = "2026-10-23T15:04:21.889Z" },
-    { url = "https://files.pythonhosted.org/packages/3e/63/1c6bfbbd74345376f424447a36ed429fa1f93e16a99b306059da82018dbe/sscbirrt-3.13.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:fcb61016544d31aead064f81ea26a9bdaefc125bb972e48e3d7f0860e563c87e", size = 1445882, upload-time = "2026-10-23T15:04:23.474Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/7c/792fb35fa105f765be669f69b80ae1173132df5ee75ab9f4d55e6f0df574/sscbirrt-3.15.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:384ef9469d5c1c13138cdaa84faca987a2903a5019ed826151f5139cefdeec40", size = 1094535, upload-time = "2026-10-26T15:02:25.532Z" },
+    { url = "https://files.pythonhosted.org/packages/50/65/dc1ddd3a13d46e9e2a68a3fad51ebe5189e97221a68d3897f33bf4b79989/sscbirrt-3.15.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:4f1dd7b5c003ed1c2d16e4effb23f1b6bb2b686e3f50ed9a70f1c80db9a70abe", size = 1441456, upload-time = "2026-10-26T15:02:27.163Z" },
+    { url = "https://files.pythonhosted.org/packages/b3/05/6f99d007d7282ef65587fa8988bf6f228eeb86fe5fd4cb404887a7419fdb/sscbirrt-3.15.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:dea92260476b49c092221eaaf295e12c48239178b86ae6dcf623c696e3def155", size = 1098199, upload-time = "2026-10-26T15:02:28.758Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/b1/022f867be8bec00b0fa131584784acee2e7773f3f475bae666f94aff295c/sscbirrt-3.15.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:049bfca1405dcf4cba721a9b075ad5d866f18d9a5d233c0dd6f093b19e71080b", size = 1449024, upload-time = "2026-10-26T15:02:30.321Z" },
+    { url = "https://files.pythonhosted.org/packages/31/f6/4e5c403af33d0cebf3a6ff184a7a6c172edb5408f932e98a21c3b2d5b349/sscbirrt-3.15.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:a747d1f68fdc734e2dab8f1307c55f89db25cd0fe4e70f3c005254a4386cfc2b", size = 1098147, upload-time = "2026-10-26T15:02:32.011Z" },
+    { url = "https://files.pythonhosted.org/packages/34/dc/55087cb3fb4f73888207b444ab811e150fb420a133dfa00ac4c72cd140c9/sscbirrt-3.15.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:66bc3eedf0148104be39139ff10b236d6513c0740aa8a34376c1958fc472cc8a", size = 1448895, upload-time = "2026-10-26T15:02:33.687Z" },
 ]
 
 [package.optional-dependencies]
@@ -978,7 +978,7 @@ ssik = [
 [[package]]
 name = "ssgrasping"
 version = "0.0.1"
-source = { git = "https://github.com/personalrobotics/ssgrasping?rev=a9de6c0f2a5627b2d2c085fb1a93eb375fe5207c#a9de6c0f2a5627b2d2c085fb1a93eb375fe5207c" }
+source = { git = "https://github.com/personalrobotics/ssgrasping?rev=76d3d265902deb38ae00c5d93387cf94fb2c06af#76d3d265902deb38ae00c5d93387cf94fb2c06af" }
 dependencies = [
     { name = "ssrobot" },
 ]
@@ -1031,7 +1031,7 @@ wheels = [
 [[package]]
 name = "ssrobot"
 version = "0.0.0"
-source = { git = "https://github.com/personalrobotics/ssrobot?rev=c455aaa76203afb04b0876aaedcbfdaaf1ae99ab#c455aaa76203afb04b0876aaedcbfdaaf1ae99ab" }
+source = { git = "https://github.com/personalrobotics/ssrobot?rev=79b128a85a8c87023eeb2a27948d1fe098d98f00#79b128a85a8c87023eeb2a27948d1fe098d98f00" }
 
 [package.optional-dependencies]
 mujoco = [
@@ -1045,7 +1045,7 @@ planning = [
 
 [[package]]
 name = "sstsr"
-version = "3.5.0"
+version = "4.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1054,9 +1054,9 @@ dependencies = [
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/88/3e/5fd06137a23a4370c6a0034d76781680836ec0da7246b4a95f9f8b470b7c/sstsr-3.5.0.tar.gz", hash = "sha256:4557a8be60e3d51f8186134e47133dcd78a5450acde0c7b7492fc1124c4972a4", size = 1831367, upload-time = "2026-10-15T06:30:05.223Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ab/5a/e589a8b06810eafa956a7b1438e96d7a4fd99f07b6c6178747ac88111ec4/sstsr-4.0.0.tar.gz", hash = "sha256:6808a16ad72a16585ad1f19abaa721477bece507a5ffd9891ade4e282d9e1bf6", size = 1846141, upload-time = "2026-10-26T04:37:50.934Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/25/90/24ed5dea66332d218c12a192bc76f9f1096d731d9a3566234f5275cd201b/sstsr-3.5.0-py3-none-any.whl", hash = "sha256:2274582315fa1963a9c7520dd7981841495021e5a71a2d5a08c5e48afae864cf", size = 134193, upload-time = "2026-10-15T06:30:03.229Z" },
+    { url = "https://files.pythonhosted.org/packages/1c/8b/05206864796743960aa3391c3ad988fc8f2f2194c097628eb4ecca760567/sstsr-4.0.0-py3-none-any.whl", hash = "sha256:ff2b51ac9a262dcee46adf795dd391864a2f1d4be795094e41c8baa87b0899d9", size = 135600, upload-time = "2026-10-26T04:37:49.258Z" },
 ]
 
 [[package]]

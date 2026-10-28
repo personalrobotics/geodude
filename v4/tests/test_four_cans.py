@@ -7,6 +7,9 @@ each through the drop into its own bin; the arm on the can's side is preferred. 
 for every can after the first is planned on the prediction of the previous drop's
 transfer, which expects that can released onto its bin's floor, and the selected
 pregrasp continues from where the transfer ends, after the release. Drops do not retreat.
+Each drop's transfer is planned while its grasp's lift runs, on the lift's prediction,
+which expects the grasp to narrow the can's allowance to the hand, and continues from
+where the lift ended (ssgrasping's ``Follow``, personalrobotics/ssgrasping#21).
 The evidence is ``recycling.json``, kept by this test with:
 - every can's outcome, its arm, and its race: each candidate's outcome and plans, and
   the selection, which is the preferred arm's when its prefix plans;
@@ -96,7 +99,10 @@ def test_geodude_recycles_four_cans_racing_its_arms(artifacts: Path, tmp_path: P
         # The race's approach check is kept, not planned again, even from a pregrasp that
         # ran as a continuation, rebased onto the actual arrival.
         assert approach.get("kept") == "the feasibility check, planned before", approach
-        assert [e["stage"] for e in can["lookahead"]["drop"]] == ["release"]
+        assert [e["stage"] for e in can["lookahead"]["drop"]] == ["transfer", "release"]
+        transfer = can["lookahead"]["drop"][0]
+        assert transfer["prediction"]["allowances"] == [can["object"]], transfer
+        assert transfer["decision"] == "continued", transfer
 
     # The first can is raced on a snapshot; every later one during the transfer before it.
     assert cans[0]["race"]["basis"]["on"] == "snapshot"

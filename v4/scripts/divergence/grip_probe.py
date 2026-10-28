@@ -5,7 +5,9 @@ geodude_assets#36), for diagnosis only.
 (``recycling.sort_all``) and samples the simulator, without changing it, every
 ``SAMPLE_STEPS`` physics steps from each grasp's ``close`` until its object is detached:
 - the stage (skill and name) and the object;
-- each gripper link touching the object, with its summed normal force;
+- each gripper link touching the object, with its summed normal force, and each contact
+  point on the gripper: its geom, its position in that geom's frame (mm), and its normal
+  force;
 - the gripping hand's driver, coupler, spring-link and follower joints, and its actuator's
   force;
 - the object's displacement from where it was held at ``attach``, relative to the
@@ -121,6 +123,26 @@ def main() -> int:
                         mujoco.mj_contactForce(m, d, i, f)
                         key = other.split("/gripper/")[-1] if "/gripper/" in other else other
                         forces[key] += float(f[0])
+                points = []
+                for i in range(d.ncon):
+                    c = d.contact[i]
+                    g1, g2 = c.geom1, c.geom2
+                    if ob not in (m.geom_bodyid[g1], m.geom_bodyid[g2]):
+                        continue
+                    other = g2 if m.geom_bodyid[g1] == ob else g1
+                    if "/gripper/" not in body[m.geom_bodyid[other]]:
+                        continue
+                    mujoco.mj_contactForce(m, d, i, f)
+                    gr = d.geom_xmat[other].reshape(3, 3)
+                    local = gr.T @ (c.pos - d.geom_xpos[other])
+                    points.append(
+                        {
+                            "geom": name(mujoco.mjtObj.mjOBJ_GEOM, other).split("/")[-1],
+                            "body": body[m.geom_bodyid[other]].split("/gripper/")[-1],
+                            "at_mm": [round(1000 * float(v), 1) for v in local],
+                            "normal_n": round(float(f[0]), 2),
+                        }
+                    )
                 rel_p = d.xmat[base].reshape(3, 3).T @ (d.xpos[ob] - d.xpos[base])
                 rel_r = d.xmat[base].reshape(3, 3).T @ d.xmat[ob].reshape(3, 3)
                 if attached and current["reference"] is None:
@@ -147,6 +169,7 @@ def main() -> int:
                         "t": round(d.time, 3),
                         "stage": f"{where['skill']}.{where['name']}",
                         "contacts_n": {k: round(v, 2) for k, v in sorted(forces.items())},
+                        "points": points,
                         "joints": joints,
                         "actuator_n": round(float(d.actuator_force[act]), 3),
                         "ctrl": round(float(d.ctrl[act]), 3),

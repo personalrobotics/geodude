@@ -68,7 +68,7 @@ It prints the outcome, judged after the run from the can's resting pose, and whe
 record was written:
 
 ```text
-{"grasped": true, "dropped": true, "released": true, "nothing_attached": true, "in_bin": true}
+{"grasped": true, "dropped": true, "released": true, "landed": true, "detached": true, "in_bin": true}
 recorded out/one/bundle and out/one/recycling.json
 ```
 

@@ -18,7 +18,9 @@ dependencies = [
     # Pinned by commit: the contracts and skills this app is proven against.
     "ssrobot[mujoco,planning] @ git+https://github.com/personalrobotics/ssrobot@6445900f339f4d5a82566e3647c1b42396dbe1a2",
     "ssgrasping @ git+https://github.com/personalrobotics/ssgrasping@db5b844c5b3e29b7d49c3f585eddad9070607dba",
-    "prl-assets @ git+https://github.com/personalrobotics/prl_assets@b632aafcf916c560e0ca928e7e3ff098ce51f465",
+    # Measurement only: sstsr#194 and prl_assets#24's floor, not for merge.
+    "sstsr @ git+https://github.com/personalrobotics/sstsr@10f776aac0128395b3ff114f4a2d76fa3d9e65bc",
+    "prl-assets @ git+https://github.com/personalrobotics/prl_assets@2c088b9fa2a6fd5a9b692507bc3e6b74bffdf4dd",
     # ssrobot's reference pin for Geodude (references/robots.toml): the 2F-140 driven like
     # the real gripper (geodude_assets#38), with its declared completion detector (#40).
     "geodude-assets @ git+https://github.com/personalrobotics/geodude_assets@e8f4b720687d7fcfa8a26c9dc9d7734f5f82b59e",

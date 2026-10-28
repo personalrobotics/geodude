@@ -20,7 +20,7 @@ dependencies = [
     "ssgrasping @ git+https://github.com/personalrobotics/ssgrasping@b7b57775718c3ddf68403b154eb1885034dbc3d9",
     # Measurement only: sstsr#194 (closed reach), not for merge.
     "sstsr @ git+https://github.com/personalrobotics/sstsr@10f776aac0128395b3ff114f4a2d76fa3d9e65bc",
-    "prl-assets @ git+https://github.com/personalrobotics/prl_assets@b632aafcf916c560e0ca928e7e3ff098ce51f465",
+    "prl-assets @ git+https://github.com/personalrobotics/prl_assets@eb3b5e9eccf733102749dadae51b761c0e835912",
     # ssrobot's reference pin for Geodude (references/robots.toml): the 2F-140 driven like
     # the real gripper (geodude_assets#38), with its declared completion detector (#40).
     "geodude-assets @ git+https://github.com/personalrobotics/geodude_assets@e8f4b720687d7fcfa8a26c9dc9d7734f5f82b59e",

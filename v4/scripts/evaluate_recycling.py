@@ -10,6 +10,10 @@ lookahead, as the demo runs. The evaluation is one JSON artifact:
 - the totals the bar is stated in: objects recycled out of every object staged,
   including any never attempted because its round stopped, and rounds cleared.
 
+An evaluation in which any round errored is invalid (``"valid": false``): it has no
+``summary``, only a ``partial_summary`` of the rounds that finished, and the script exits
+nonzero. ``FORMAT`` versions the artifact.
+
 Planning has a wall-clock budget, so a round run beside others may time out where it
 would not alone. Rounds run in parallel, at most ``--jobs`` at once; every round that
 records a planning timeout is then run again alone, and its verdict is that run's. Each
@@ -20,13 +24,18 @@ and ``acceptance`` (seeds 1000-1039), run once, on the final pins::
 
     uv run python scripts/evaluate_recycling.py development out/development.json
 
-``--seeds 3,7`` evaluates only those seeds of the corpus. ``--classify`` reclassifies an
-existing evaluation, without running anything, after a change to ``classify``.
+``--seeds 3,7`` evaluates only those seeds of the development corpus. The acceptance
+corpus runs whole, from a clean tree, or not at all.
+
+``--classify EVALUATION OUT`` reclassifies an existing evaluation, without running
+anything, after a change to ``classify``. It never touches ``EVALUATION``: ``OUT`` is a
+derived artifact that records the original's SHA-256 and the classifying commit.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -38,6 +47,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+FORMAT = 1
+"""The evaluation artifact's format: raised whenever a field's meaning changes."""
 CORPORA = {"development": range(0, 40), "acceptance": range(1000, 1040)}
 OBJECTS = 5
 """Objects per round: the legacy demo's ``spawn_count``."""
@@ -185,6 +196,53 @@ def _round_in_subprocess(seed: int) -> dict[str, Any]:
     return result
 
 
+def _valid(evaluation: dict[str, Any]) -> dict[str, Any]:
+    """``evaluation`` with its verdict: valid, with a summary, only if every round ran."""
+    completed = [r for r in evaluation["rounds"] if "error" not in r]
+    errors = [r["seed"] for r in evaluation["rounds"] if "error" in r]
+    out = {k: v for k, v in evaluation.items() if k not in ("summary", "partial_summary")}
+    out.update(errors=errors, valid=not errors)
+    if errors:
+        out["partial_summary"] = _summary(completed)
+    else:
+        out["summary"] = _summary(completed)
+    return out
+
+
+def _write(out: Path, evaluation: dict[str, Any]) -> None:
+    """Write ``evaluation`` to ``out`` whole or not at all."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    partial = out.with_name(out.name + ".partial")
+    partial.write_text(json.dumps(evaluation, indent=1) + "\n")
+    partial.replace(out)
+
+
+def _report(evaluation: dict[str, Any]) -> int:
+    if evaluation["valid"]:
+        print(json.dumps(evaluation["summary"], indent=1))
+        return 0
+    print(f"INVALID: rounds {evaluation['errors']} errored", file=sys.stderr)
+    return 1
+
+
+def reclassify(source: Path) -> dict[str, Any]:
+    """``source``'s evaluation, reclassified by this commit's ``classify``."""
+    raw = source.read_bytes()
+    evaluation = json.loads(raw)
+    if evaluation.get("format") != FORMAT:
+        raise SystemExit(f"{source} is format {evaluation.get('format')}, not {FORMAT}")
+    for round_ in evaluation["rounds"]:
+        if "error" not in round_:
+            round_["objects"] = _objects(round_)
+    provenance = _provenance()
+    evaluation["derived"] = {
+        "from_sha256": hashlib.sha256(raw).hexdigest(),
+        "classifier_commit": provenance["commit"],
+        "classifier_dirty": provenance["dirty"],
+    }
+    return _valid(evaluation)
+
+
 def evaluate(corpus: str, seeds: list[int], jobs: int) -> dict[str, Any]:
     provenance = _provenance()
     with ThreadPoolExecutor(max_workers=jobs) as pool:
@@ -198,17 +256,18 @@ def evaluate(corpus: str, seeds: list[int], jobs: int) -> dict[str, Any]:
     for round_ in finished:
         if "error" not in round_:
             round_["objects"] = _objects(round_)
-    return {
-        "corpus": corpus,
-        "seeds": seeds,
-        "objects_per_round": OBJECTS,
-        "jobs": jobs,
-        **provenance,
-        "load_after": list(os.getloadavg()),
-        "errors": [r["seed"] for r in finished if "error" in r],
-        "summary": _summary([r for r in finished if "error" not in r]),
-        "rounds": finished,
-    }
+    return _valid(
+        {
+            "format": FORMAT,
+            "corpus": corpus,
+            "seeds": seeds,
+            "objects_per_round": OBJECTS,
+            "jobs": jobs,
+            **provenance,
+            "load_after": list(os.getloadavg()),
+            "rounds": finished,
+        }
+    )
 
 
 def main() -> int:
@@ -218,24 +277,33 @@ def main() -> int:
     parser.add_argument("--seeds", help="comma-separated seeds of the corpus, instead of all")
     parser.add_argument("--jobs", type=int, default=JOBS, help="rounds run at once")
     parser.add_argument("--round", type=int, help=argparse.SUPPRESS)  # one round, to stdout
-    parser.add_argument("--classify", type=Path, help="reclassify this evaluation in place")
+    parser.add_argument(
+        "--classify",
+        nargs=2,
+        type=Path,
+        metavar=("EVALUATION", "OUT"),
+        help="reclassify an evaluation into a new, derived artifact",
+    )
     args = parser.parse_args()
     if args.round is not None:
         print(json.dumps(run_round(args.round)))
         return 0
     if args.classify is not None:
-        evaluation = json.loads(args.classify.read_text())
-        for round_ in evaluation["rounds"]:
-            if "error" not in round_:
-                round_["objects"] = _objects(round_)
-        evaluation["summary"] = _summary([r for r in evaluation["rounds"] if "error" not in r])
-        args.classify.write_text(json.dumps(evaluation, indent=1) + "\n")
-        print(json.dumps(evaluation["summary"], indent=1))
-        return 0
+        source, out = args.classify
+        if out.exists():
+            parser.error(f"{out} exists: an evaluation is never overwritten")
+        derived = reclassify(source)
+        _write(out, derived)
+        return _report(derived)
     if args.corpus is None or args.out is None:
         parser.error("a corpus and an output path are needed")
     seeds = list(CORPORA[args.corpus])
-    if args.seeds:
+    if args.corpus == "acceptance":
+        if args.seeds:
+            parser.error("the acceptance corpus runs whole: --seeds is refused")
+        if _provenance()["dirty"]:
+            parser.error("the acceptance corpus runs from a clean tree")
+    elif args.seeds:
         chosen = [int(s) for s in args.seeds.split(",")]
         if not set(chosen) <= set(seeds):
             parser.error(f"--seeds must be seeds of the {args.corpus} corpus")
@@ -243,12 +311,8 @@ def main() -> int:
     if args.out.exists():
         parser.error(f"{args.out} exists: an evaluation is never overwritten")
     evaluation = evaluate(args.corpus, seeds, args.jobs)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    partial = args.out.with_name(args.out.name + ".partial")
-    partial.write_text(json.dumps(evaluation, indent=1) + "\n")
-    partial.replace(args.out)
-    print(json.dumps(evaluation["summary"], indent=1))
-    return 1 if evaluation["errors"] else 0
+    _write(args.out, evaluation)
+    return _report(evaluation)
 
 
 if __name__ == "__main__":

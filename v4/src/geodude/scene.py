@@ -4,6 +4,10 @@
 ``MujocoRuntime(package, scene=...)`` composes with Geodude. Objects rest upright on the
 worktop at poses sampled, with a seeded generator, from sstsr's ``StablePlacer`` regions,
 as the legacy demo spawns them; fixtures (the recycling bins) stand where they are given.
+No object may start within ``CLEARANCE_M`` of the robot at its start configuration, by
+each hand's ssrobot planning scene: the legacy demo's worktop reaches under the arms' ready
+pose, and an object staged against a finger is pushed as the run starts (#201). A scene
+that breaks this is sampled again, with the next generator.
 
 Each prl_assets object file is a standalone model with fixed names (body ``can``, joint
 ``can_joint``, mesh ``can_visual``), so every instance is attached under its own name
@@ -33,15 +37,21 @@ import mujoco
 import numpy as np
 import yaml
 from prl_assets import OBJECTS_DIR
-from ssrobot import RobotPackage
+from ssrobot import RobotContext, RobotPackage
+from ssrobot.mujoco import MujocoRuntime
 from tsr.placement.stable_placer import StablePlacer
 
 WORKTOP_INSET_M = 0.05
 """How far inside the worktop's edges objects are placed, as the legacy demo does."""
 CLEARANCE_M = 0.01
-"""The least gap between two placed objects' footprints."""
+"""The least gap between two placed objects' footprints, and between an object and the
+robot at its start configuration."""
 ATTEMPTS = 200
 """Samples tried per object before staging fails."""
+SCENE_ATTEMPTS = 20
+"""Scenes sampled, each with its own generator, before staging fails because every one
+puts an object within ``CLEARANCE_M`` of the robot. Over #201's development corpus, 12 of
+40 seeds' first scenes do, 8 of them touching a finger; every seed stages by its sixth."""
 
 
 @dataclass(frozen=True)
@@ -120,11 +130,14 @@ def _quaternion(matrix: np.ndarray) -> tuple[float, float, float, float]:
     return w, x, y, z
 
 
-def place(table: Worktop, objects: Mapping[str, int], seed: int) -> tuple[Placement, ...]:
+def place(
+    table: Worktop, objects: Mapping[str, int], seed: int, attempt: int = 0
+) -> tuple[Placement, ...]:
     """Upright poses on the worktop for ``objects`` (type: count), sampled from sstsr's
-    regions with ``numpy.random.default_rng(seed)``, no two footprints within
-    ``CLEARANCE_M``. Types are placed in name order."""
-    rng = np.random.default_rng(seed)
+    regions with ``numpy.random.default_rng(seed)``, or ``default_rng((seed, attempt))``
+    for a later ``attempt``, no two footprints within ``CLEARANCE_M``. Types are placed
+    in name order."""
+    rng = np.random.default_rng(seed if attempt == 0 else (seed, attempt))
     hx, hy = table.half_extents
     placer = StablePlacer(hx - WORKTOP_INSET_M, hy - WORKTOP_INSET_M)
     surface = np.eye(4)
@@ -214,44 +227,91 @@ def stage_scene(
     target = Path(out)
     if target.exists():
         raise FileExistsError(f"{target} already exists")
-    placements = place(worktop(package), objects, seed)
+    table = worktop(package)
     target.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(dir=target.parent, prefix=f".{target.name}."))
-    try:
-        scene = mujoco.MjSpec()
-        scene.compiler.degree = False
-        staged: dict[str, str] = {}
-        for p in placements:
-            staged |= _attach(scene, p.kind, p.name, p, (), staging)
-        stands = []
-        for kind in sorted(fixtures):
-            for index, at in enumerate(fixtures[kind]):
-                name = f"{kind}_{index}"
-                staged |= _attach(scene, kind, name, None, at, staging)
-                stands.append({"name": name, "kind": kind, "base": [float(v) for v in at]})
-        xml = scene.to_xml().replace(f"{staging}{os.sep}", "")
-        (staging / "scene.xml").write_text(xml)
-        distribution = importlib.metadata.distribution("prl-assets")
-        direct = distribution.read_text("direct_url.json")
-        manifest = {
-            "prl_assets": {
-                "version": distribution.version,
-                "source": None if direct is None else json.loads(direct),
-            },
-            "seed": seed,
-            "objects": [
-                {"name": p.name, "kind": p.kind, "position": p.position, "quat_wxyz": p.quat_wxyz}
-                for p in placements
-            ],
-            "fixtures": stands,
-            "files": {
-                "scene.xml": hashlib.sha256(xml.encode()).hexdigest(),
-                **dict(sorted(staged.items())),
-            },
-        }
-        (staging / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-        os.rename(staging, target)
-    except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
-    return target / "scene.xml"
+    rejected: list[dict[str, Any]] = []
+    for attempt in range(SCENE_ATTEMPTS):
+        placements = place(table, objects, seed, attempt)
+        staging = Path(tempfile.mkdtemp(dir=target.parent, prefix=f".{target.name}."))
+        try:
+            _write(staging, placements, fixtures, seed)
+            near = near_robot(package, staging / "scene.xml")
+            if not near:
+                manifest = json.loads((staging / "manifest.json").read_text())
+                manifest["attempt"] = attempt
+                manifest["rejected"] = rejected
+                (staging / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+                os.rename(staging, target)
+                return target / "scene.xml"
+            rejected.append({"attempt": attempt, "near_robot": near})
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+    raise ValueError(f"every one of {SCENE_ATTEMPTS} scenes puts an object against the robot")
+
+
+def near_robot(package: RobotPackage, scene: Path) -> list[str]:
+    """The objects of ``scene`` within ``CLEARANCE_M`` of the robot at its start
+    configuration, by each hand's planning scene (one manipulator per end effector, the
+    one with the fewest joints: a planning scene checks only its group's links)."""
+    description = package.description
+    groups: dict[str, str] = {}
+    for m in description.manipulators:
+        if m.end_effector is None:
+            continue
+        held = groups.get(m.end_effector)
+        if held is None or len(description.group(m.group).joints) < len(
+            description.group(held).joints
+        ):
+            groups[m.end_effector] = m.group
+    near: set[str] = set()
+    with RobotContext(description, MujocoRuntime(package, scene=scene)) as ctx:
+        snapshot = ctx.snapshot()
+        names = {o.name for o in snapshot.objects}
+        for group in sorted(groups.values()):
+            q = tuple(snapshot.position(j) for j in description.group(group).joints)
+            planning = ctx.planning_scene(snapshot, group, clearance_m=CLEARANCE_M)
+            for contact in planning.contacts(q):
+                near |= {contact.first, contact.second} & names
+    return sorted(near)
+
+
+def _write(
+    staging: Path,
+    placements: Sequence[Placement],
+    fixtures: Mapping[str, Sequence[Sequence[float]]],
+    seed: int,
+) -> None:
+    """Write the scene of ``placements`` and ``fixtures``, and its manifest, into
+    ``staging``."""
+    scene = mujoco.MjSpec()
+    scene.compiler.degree = False
+    staged: dict[str, str] = {}
+    for p in placements:
+        staged |= _attach(scene, p.kind, p.name, p, (), staging)
+    stands = []
+    for kind in sorted(fixtures):
+        for index, at in enumerate(fixtures[kind]):
+            name = f"{kind}_{index}"
+            staged |= _attach(scene, kind, name, None, at, staging)
+            stands.append({"name": name, "kind": kind, "base": [float(v) for v in at]})
+    xml = scene.to_xml().replace(f"{staging}{os.sep}", "")
+    (staging / "scene.xml").write_text(xml)
+    distribution = importlib.metadata.distribution("prl-assets")
+    direct = distribution.read_text("direct_url.json")
+    manifest = {
+        "prl_assets": {
+            "version": distribution.version,
+            "source": None if direct is None else json.loads(direct),
+        },
+        "seed": seed,
+        "objects": [
+            {"name": p.name, "kind": p.kind, "position": p.position, "quat_wxyz": p.quat_wxyz}
+            for p in placements
+        ],
+        "fixtures": stands,
+        "files": {
+            "scene.xml": hashlib.sha256(xml.encode()).hexdigest(),
+            **dict(sorted(staged.items())),
+        },
+    }
+    (staging / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

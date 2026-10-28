@@ -23,6 +23,7 @@ can is carried to its bin (personalrobotics/geodude#223).
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import importlib.metadata
 import json
 import math
@@ -325,18 +326,23 @@ def drop_in_bin(
     planners: tuple[Planner, Planner],
     tick: Callable[[], None] = lambda: None,
 ) -> tuple[SkillResult, SkillResult | None]:
-    """Drop the held ``obj`` into the bin on ``arm``'s side, from the legacy demo's drop
-    zone over it, then observe whether it came to rest inside (``landing_spec``). The
-    drop's result, and the landing's when the release was confirmed."""
+    """Drop the held ``obj`` into the bin on ``arm``'s side, from wherever over it the
+    object, as it is held, falls clear of the rim (``held_drop_spec``), then observe
+    whether it came to rest inside (``landing_spec``). The drop's result, and the
+    landing's when the release was confirmed."""
     planner, checker = planners
-    dropped = drive(ctx, drop(ctx, planner, drop_spec(obj, arm), check_planner=checker), tick)
+    spec = held_drop_spec(ctx, drop_spec(obj, arm), arm)
+    if spec is None:
+        raise ValueError(f"no drop zone over {arm.bin[0]} fits {obj!r} as it is held")
+    dropped = drive(ctx, drop(ctx, planner, spec, check_planner=checker), tick)
     if not _released(dropped):
         return dropped, None
     return dropped, drive(ctx, landing(ctx, landing_spec(obj, arm)), tick)
 
 
 def drop_spec(obj: str, arm: Arm) -> DropSpec:
-    """``drop_in_bin``'s drop of ``obj`` by ``arm`` into its bin."""
+    """The drop of ``obj`` by ``arm`` into its bin from the legacy demo's drop zone: what
+    the race checks before anything is held. The drop that runs is ``held_drop_spec``'s."""
     name, base = arm.bin
     container = meta(kind_of(name))
     height = regions.height(meta(kind_of(obj))["geometric_properties"])
@@ -353,6 +359,33 @@ def drop_spec(obj: str, arm: Arm) -> DropSpec:
         carry_scaling=CARRY_SCALING,
         clearance_m=CLEARANCE_M,
     )
+
+
+NO_ZONE = {
+    "skill": "drop",
+    "stage": "zone",
+    "detail": "no drop zone fits the object as it is held",
+    "evidence": "planned",
+}
+"""The failure recorded when ``held_drop_spec`` finds no zone: nothing was dropped."""
+
+
+def held_drop_spec(ctx: RobotContext, raced: DropSpec, arm: Arm) -> DropSpec | None:
+    """``raced``, the drop the race planned with the legacy zone (``drop_spec``), over the
+    zones where the object, as it is now held, falls clear of the bin's rim
+    (``regions.held_drop_zones``), a ``CLEARANCE_M`` inside its walls. None when no zone
+    fits: the object, held so, cannot be dropped clear of the rim."""
+    attachment = ctx.scene.attachment(raced.object)
+    assert attachment is not None  # a grasp that succeeded left it attached
+    name, base = arm.bin
+    zones = regions.held_drop_zones(
+        meta(kind_of(name)),
+        base,
+        meta(kind_of(raced.object))["geometric_properties"],
+        attachment.transform,
+        CLEARANCE_M,
+    )
+    return dataclasses.replace(raced, regions=zones) if zones else None
 
 
 def landing_spec(obj: str, arm: Arm) -> LandingSpec:
@@ -626,10 +659,13 @@ def recycle(
         looking = Lookahead(unsettled=tuple(released)) if lookahead else None
         picked = drive(ctx, selection.grasp(ctx, lookahead=looking), stepped)
         dropped = None
+        spec = None
         if picked.succeeded:
+            raced = selection.candidate.drop
+            assert raced is not None  # every candidate drops
+            spec = held_drop_spec(ctx, raced, arm)
+        if spec is not None:
             following = objects[i + 1] if lookahead and i + 1 < len(objects) else None
-            spec = selection.candidate.drop
-            assert spec is not None  # every candidate drops
             dropping = drop(ctx, planner, spec, check_planner=checker, lookahead=looking)
 
             def race_next(
@@ -681,6 +717,8 @@ def recycle(
             landings.append((observed, record))
         else:
             entry.update(bin_outcome(ctx, obj, arm, picked, dropped, None))
+            if picked.succeeded and spec is None:
+                entry["failure"] = dict(NO_ZONE)
         if ctx.scene.attachment(obj) is not None:
             break  # still held: recovery is #209/#210's
     for _ in range(MAX_TICKS):  # the last landings, with nothing else to do

@@ -2,6 +2,9 @@
 
 Bimanual manipulation with the Geodude robot, built on [mj_manipulator](https://github.com/personalrobotics/mj_manipulator).
 
+Geodude 4.0, rebuilt on ssrobot and ssgrasping, is developed in [`v4/`](v4/README.md)
+alongside this application and will replace it once it covers the same tasks.
+
 ## The Robot
 
 ```

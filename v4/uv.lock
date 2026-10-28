@@ -270,7 +270,7 @@ requires-dist = [
     { name = "ssgrasping", git = "https://github.com/personalrobotics/ssgrasping?rev=b7b57775718c3ddf68403b154eb1885034dbc3d9" },
     { name = "ssmjviser", specifier = "==1.0.0" },
     { name = "ssrobot", extras = ["mujoco", "planning"], git = "https://github.com/personalrobotics/ssrobot?rev=6445900f339f4d5a82566e3647c1b42396dbe1a2" },
-    { name = "sstsr", git = "https://github.com/personalrobotics/sstsr?rev=6a5e482cd7c5ccb728d41f013bb24597e2dc7742" },
+    { name = "sstsr", git = "https://github.com/personalrobotics/sstsr?rev=10f776aac0128395b3ff114f4a2d76fa3d9e65bc" },
 ]
 
 [package.metadata.requires-dev]
@@ -1047,8 +1047,8 @@ planning = [
 
 [[package]]
 name = "sstsr"
-version = "4.0.1.dev3"
-source = { git = "https://github.com/personalrobotics/sstsr?rev=6a5e482cd7c5ccb728d41f013bb24597e2dc7742#6a5e482cd7c5ccb728d41f013bb24597e2dc7742" }
+version = "4.0.1.dev4"
+source = { git = "https://github.com/personalrobotics/sstsr?rev=10f776aac0128395b3ff114f4a2d76fa3d9e65bc#10f776aac0128395b3ff114f4a2d76fa3d9e65bc" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },

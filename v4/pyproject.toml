@@ -24,7 +24,7 @@ dependencies = [
     "prl-assets @ git+https://github.com/personalrobotics/prl_assets@9453f39ffc5f92891ebc9dead7e613b50a4cfbc6",
     # ssrobot's reference pin for Geodude (references/robots.toml): the 2F-140 driven like
     # the real gripper (geodude_assets#38), with its declared completion detector (#40).
-    "geodude-assets @ git+https://github.com/personalrobotics/geodude_assets@e8f4b720687d7fcfa8a26c9dc9d7734f5f82b59e",
+    "geodude-assets @ git+https://github.com/personalrobotics/geodude_assets@0844a5d2b1d0730e543329516cecdd339a9a7cfe",
 ]
 
 [project.scripts]

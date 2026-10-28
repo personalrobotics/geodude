@@ -274,7 +274,6 @@ def grasp_spec(ctx: RobotContext, obj: str, arm: Arm) -> GraspSpec:
         normal=UP,
         pregrasps=regions.pregrasps(geometry, object_pose(ctx, obj)),
         approach_m=regions.STANDOFF_M,
-        held_opening=(0.2, 0.95),
         lift_m=0.06,
         line_tolerance_m=LINE_TOLERANCE_M,
         clearance_m=CLEARANCE_M,

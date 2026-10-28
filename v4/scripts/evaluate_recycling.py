@@ -1,14 +1,18 @@
 """Evaluate the recycling demo over a seeded corpus of mixed rounds (#201).
 
 Each round stages ``recycling.mix(seed, OBJECTS)``, the legacy demo's five objects drawn
-from its nine types, and recycles them with ``recycling.recycle``, racing both arms with
-lookahead, as the demo runs. The evaluation is one JSON artifact:
+from its nine types, and sorts them into the bins with ``recycling.sort_all``, as the demo
+runs: racing both arms with lookahead, recovering a failed attempt where that is safe,
+and retrying an object released back onto the worktop once. The evaluation is one JSON
+artifact:
 - what it ran: the corpus, its seeds, the Geodude commit and whether the tree was
   dirty, every ``recycling.SOURCES`` distribution, and the host's load;
-- per round: the staged objects and their poses, and per staged object its outcome, with
-  the deciding stage's detail, and its mechanism (``classify``);
-- the totals the bar is stated in: objects recycled out of every object staged,
-  including any never attempted because its round stopped, and rounds cleared.
+- per round: the staged objects and their poses, and per staged object every attempt's
+  outcome, with the deciding stage's detail and any recovery, where it finally rests,
+  and its verdict (``verdict``);
+- the totals the bar is stated in: objects recycled, judged by where each finally rests,
+  out of every object staged, including any never attempted because its round stopped;
+  how many of them at the first attempt; and rounds cleared.
 
 An evaluation in which any round errored is invalid (``"valid": false``): it has no
 ``summary``, only a ``partial_summary`` of the rounds that finished, and the script exits
@@ -47,8 +51,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-FORMAT = 1
-"""The evaluation artifact's format: raised whenever a field's meaning changes."""
+FORMAT = 2
+"""The evaluation artifact's format: raised whenever a field's meaning changes. 2: per
+object, its attempts, where it finally rests, and its verdict, in place of one outcome
+and its mechanism."""
 CORPORA = {"development": range(0, 40), "acceptance": range(1000, 1040)}
 OBJECTS = 5
 """Objects per round: the legacy demo's ``spawn_count``."""
@@ -76,10 +82,15 @@ def run_round(seed: int) -> dict[str, Any]:
         )
         staged = json.loads((scene.parent / "manifest.json").read_text())["objects"]
         with RobotContext(package.description, recycling.runtime(package, scene)) as ctx:
-            outcomes = recycling.recycle(ctx, package, sorted(ctx.info.objects))
+            result = recycling.sort_all(ctx, package)
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    return {"seed": seed, "staged": staged, "outcomes": outcomes}
+    return {
+        "seed": seed,
+        "staged": staged,
+        "outcomes": result["attempts"],
+        "final": result["objects"],
+    }
 
 
 def _timed_out(round_: dict[str, Any]) -> bool:
@@ -124,22 +135,46 @@ def classify(outcome: dict[str, Any] | None) -> str:
     return f"{skill}.{stage}"
 
 
+def verdict(attempts: list[dict[str, Any]], final: dict[str, Any]) -> str:
+    """One staged object's verdict, by where it finally rests and its attempts:
+    ``recycled`` at the first attempt, ``recycled_after_retry`` or
+    ``recycled_after_recovery`` (released over its bin after a slip), or, resting outside
+    every bin, the mechanism of its last attempt (``classify``)."""
+    if final["bin"] is not None:
+        if attempts and attempts[0]["succeeded"]:
+            return "recycled"
+        if any(a["succeeded"] for a in attempts):
+            return "recycled_after_retry"
+        return "recycled_after_recovery"
+    if attempts and attempts[-1]["succeeded"]:
+        return "left_its_bin"  # landed in it, and rests elsewhere by the end
+    return classify(attempts[-1] if attempts else None)
+
+
 def _summary(rounds: list[dict[str, Any]]) -> dict[str, Any]:
     kinds: dict[str, Counter[bool]] = {}
     mechanisms: Counter[str] = Counter()
-    recycled = staged = cleared = 0
+    recycled = first = staged = cleared = 0
     for round_ in rounds:
-        verdicts = [o["mechanism"] for o in round_["objects"]]
+        verdicts = [o["verdict"] for o in round_["objects"]]
         staged += len(verdicts)
-        recycled += verdicts.count("recycled")
-        cleared += all(v == "recycled" for v in verdicts)
+        recycled += sum(v.startswith("recycled") for v in verdicts)
+        first += verdicts.count("recycled")
+        cleared += all(v.startswith("recycled") for v in verdicts)
         for o in round_["objects"]:
-            kinds.setdefault(o["kind"], Counter())[o["mechanism"] == "recycled"] += 1
-            if o["mechanism"] != "recycled":
-                mechanisms[o["mechanism"]] += 1
+            kinds.setdefault(o["kind"], Counter())[o["verdict"].startswith("recycled")] += 1
+            if not o["verdict"].startswith("recycled"):
+                mechanisms[o["verdict"]] += 1
     return {
         "objects_staged": staged,
         "objects_recycled": recycled,
+        "recycled_at_first_attempt": first,
+        "recycled_after_retry": sum(
+            o["verdict"] == "recycled_after_retry" for r in rounds for o in r["objects"]
+        ),
+        "recycled_after_recovery": sum(
+            o["verdict"] == "recycled_after_recovery" for r in rounds for o in r["objects"]
+        ),
         "rounds": len(rounds),
         "rounds_cleared": cleared,
         "by_kind": {
@@ -150,18 +185,21 @@ def _summary(rounds: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _objects(round_: dict[str, Any]) -> list[dict[str, Any]]:
-    """Every staged object of a round, with its outcome and mechanism."""
-    by_name = {o["object"]: o for o in round_["outcomes"]}
+    """Every staged object of a round, with its attempts, where it finally rests, and
+    its verdict."""
     out = []
     for placement in round_["staged"]:
-        outcome = by_name.get(placement["name"])
+        name = placement["name"]
+        attempts = [o for o in round_["outcomes"] if o["object"] == name]
+        final = round_["final"][name]
         out.append(
             {
-                "object": placement["name"],
+                "object": name,
                 "kind": placement["kind"],
                 "staged": placement,
-                "mechanism": classify(outcome),
-                "outcome": outcome,
+                "verdict": verdict(attempts, final),
+                "attempts": attempts,
+                "final": final,
             }
         )
     return out

@@ -41,12 +41,14 @@ from ssgrasping import (
     Candidates,
     DropSpec,
     GraspSpec,
+    LandingSpec,
     Lookahead,
     PlaceSpec,
     SkillExecution,
     SkillResult,
     drop,
     grasp,
+    landing,
     place,
     run_together,
 )
@@ -301,12 +303,15 @@ def drop_in_bin(
     arm: Arm,
     planners: tuple[Planner, Planner],
     tick: Callable[[], None] = lambda: None,
-) -> SkillResult:
+) -> tuple[SkillResult, SkillResult | None]:
     """Drop the held ``obj`` into the bin on ``arm``'s side, from the legacy demo's drop
-    zone over it, and check it came to rest inside."""
+    zone over it, then observe whether it came to rest inside (``landing_spec``). The
+    drop's result, and the landing's when the release was confirmed."""
     planner, checker = planners
-    spec = drop_spec(obj, arm)
-    return drive(ctx, drop(ctx, planner, spec, check_planner=checker), tick)
+    dropped = drive(ctx, drop(ctx, planner, drop_spec(obj, arm), check_planner=checker), tick)
+    if not _released(dropped):
+        return dropped, None
+    return dropped, drive(ctx, landing(ctx, landing_spec(obj, arm)), tick)
 
 
 def drop_spec(obj: str, arm: Arm) -> DropSpec:
@@ -324,10 +329,15 @@ def drop_spec(obj: str, arm: Arm) -> DropSpec:
         normal=UP,
         regions=[regions.drop_zone(container, base, height)],
         retreat_m=0.0,  # the next can's motion starts from the drop: no retreat (#223)
-        inside=[regions.interior(container, base)],
         carry_scaling=CARRY_SCALING,
         clearance_m=CLEARANCE_M,
     )
+
+
+def landing_spec(obj: str, arm: Arm) -> LandingSpec:
+    """Where ``obj``, dropped by ``arm``, must come to rest: inside that arm's bin."""
+    name, base = arm.bin
+    return LandingSpec(object=obj, inside=[regions.interior(meta(kind_of(name)), base)])
 
 
 def sources() -> dict[str, Any]:
@@ -408,12 +418,18 @@ def worktop_outcome(
 
 
 def bin_outcome(
-    ctx: RobotContext, obj: str, arm: Arm, picked: SkillResult, dropped: SkillResult | None
+    ctx: RobotContext,
+    obj: str,
+    arm: Arm,
+    picked: SkillResult,
+    dropped: SkillResult | None,
+    landed: SkillResult | None,
 ) -> dict[str, Any]:
-    """What a pick and drop achieved, observed after it ends: every stage, whether the
-    release was confirmed, where ``obj`` rests (from its pose channel) relative to the
-    bin's base, and what is still attached. ``succeeded`` requires every stage to
-    succeed, nothing attached, and the object's centre within the bin's prl_assets
+    """What a pick, drop, and landing achieved, observed when the landing ends, or the
+    drop when it released nothing: every stage, whether the release was confirmed, where
+    ``obj`` rests (from its pose channel) relative to the bin's base, and what is still
+    attached, which may be the next object. ``succeeded`` requires every stage to
+    succeed, ``obj`` no longer attached, and its centre within the bin's prl_assets
     interior: inside its inner walls, over its floor, below its rim."""
     name, base = arm.bin
     geometry = meta(kind_of(name))["geometric_properties"]
@@ -425,7 +441,8 @@ def bin_outcome(
         "grasped": picked.succeeded,
         "dropped": dropped is not None and dropped.succeeded,
         "released": _released(dropped),
-        "nothing_attached": not attached,
+        "landed": landed is not None and landed.succeeded,
+        "detached": obj not in attached,
         "in_bin": abs(local[0]) <= inner[0] / 2
         and abs(local[1]) <= inner[1] / 2
         and outer[2] - inner[2] <= local[2] <= outer[2],
@@ -436,6 +453,7 @@ def bin_outcome(
         "bin": {"name": name, "base": list(base)},
         "grasp": _stages(picked),
         "drop": _stages(dropped),
+        "landing": _stages(landed),
         "final_pose": _pose(final),
         "position_in_bin_m": local,
         "attached": attached,
@@ -462,13 +480,14 @@ def demo(
     chosen = planners(package, arm)
     picked = pick(ctx, obj, arm=arm, planners=chosen, tick=tick)
     after: SkillResult | None = None
+    landed: SkillResult | None = None
     if picked.succeeded and to == "bin":
-        after = drop_in_bin(ctx, obj, arm=arm, planners=chosen, tick=tick)
+        after, landed = drop_in_bin(ctx, obj, arm=arm, planners=chosen, tick=tick)
     elif picked.succeeded:
         after = place_on_worktop(ctx, package, obj, TARGET, arm=arm, planners=chosen, tick=tick)
     ctx.snapshot()
     if to == "bin":
-        result = bin_outcome(ctx, obj, arm, picked, after)
+        result = bin_outcome(ctx, obj, arm, picked, after, landed)
     else:
         result = worktop_outcome(ctx, package, obj, TARGET, picked, after)
     return {"arm": arm.side, **result}
@@ -497,7 +516,7 @@ def candidates(
     ]
 
 
-def landing(obj: str, arm: Arm) -> Pose:
+def expected_rest(obj: str, arm: Arm) -> Pose:
     """Where ``obj``, dropped by ``arm``, is expected to rest: upright on the floor of
     that arm's bin, at its centre. For planning the next can only; never checked."""
     name, (x, y, z) = arm.bin
@@ -521,10 +540,12 @@ def recycle(
     the drop into its own bin, plans; otherwise the other arm, if its prefix plans. The
     drop has no retreat. The next object's race is planned while this drop's transfer
     carries the object to its bin, on the transfer's prediction, which expects the object
-    released there to rest on the bin's floor (``landing``), the gripper open as it
+    released there to rest on the bin's floor (``expected_rest``), the gripper open as it
     started, and every object dropped before it unsettled, since it may still be rolling
-    in its bin. The winner's pregrasp then continues from where the transfer ended, once
-    the release is confirmed and the object has landed.
+    in its bin. The winner's pregrasp then continues from where the transfer ended, as
+    soon as the release is confirmed. Where each released object comes to rest is
+    observed alongside the objects after it (ssgrasping's ``landing``), and its outcome
+    is recorded when that ends; the round ends once every landing has.
     Within the grasp, the approach is planned during the pregrasp. Returns each object's
     ``bin_outcome``, with the arm and the race.
 
@@ -541,10 +562,23 @@ def recycle(
     looking: Lookahead | None = None
     pending: Candidates | None = None
     released: list[str] = []  # dropped, and possibly still settling in a bin
+    # Each released object's landing, still observed, and how to record its outcome.
+    landings: list[tuple[SkillExecution, Callable[[SkillResult], None]]] = []
+
+    def stepped() -> None:
+        """After each step: ``tick``, then advance every landing still observed, and
+        record each object's outcome as its landing ends."""
+        tick()
+        for observed, record in list(landings):
+            observed.advance()
+            if observed.result is not None:
+                landings.remove((observed, record))
+                record(observed.result)
+
     for i, obj in enumerate(objects):
         if pending is None:
             pending = Candidates(ctx, candidates(ctx, obj, arms, race=race), unsettled=released)
-        run_together(ctx, [pending], max_ticks=MAX_TICKS, tick=tick)  # blocks; no steps
+        run_together(ctx, [pending], max_ticks=MAX_TICKS, tick=stepped)  # blocks; no steps
         selection, report = pending.selection, pending.report
         pending = None
         if selection is None:
@@ -553,7 +587,7 @@ def recycle(
         arm = Arm(selection.candidate.label)
         planner, checker = arms[arm.side]
         looking = Lookahead(unsettled=tuple(released)) if lookahead else None
-        picked = drive(ctx, selection.grasp(ctx, lookahead=looking), tick)
+        picked = drive(ctx, selection.grasp(ctx, lookahead=looking), stepped)
         dropped = None
         if picked.succeeded:
             following = objects[i + 1] if lookahead and i + 1 < len(objects) else None
@@ -573,11 +607,11 @@ def recycle(
                     candidates(ctx, following, arms, race=race),
                     after=transfer,
                     unsettled=released,
-                    releases={obj: landing(obj, arm)},
+                    releases={obj: expected_rest(obj, arm)},
                     joints=opened[arm.side],
                 )
 
-            pending = _drop_racing_next(ctx, dropping, race_next if following else None, tick)
+            pending = _drop_racing_next(ctx, dropping, race_next if following else None, stepped)
             assert dropping.result is not None
             dropped = dropping.result
             released.append(obj)
@@ -586,15 +620,37 @@ def recycle(
                 # rather than let it finish, and race again.
                 pending.close()
                 pending = None
-        outcome = bin_outcome(ctx, obj, arm, picked, dropped)
         logs = {
             skill: result.values.get("lookahead", [])
             for skill, result in (("grasp", picked), ("drop", dropped))
             if result is not None
         }
-        outcomes.append({"arm": arm.side, "race": report, "lookahead": logs, **outcome})
+        entry: dict[str, Any] = {"arm": arm.side, "race": report, "lookahead": logs}
+        outcomes.append(entry)
+        if _released(dropped):
+
+            def record(
+                landed: SkillResult,
+                entry: dict[str, Any] = entry,
+                obj: str = obj,
+                arm: Arm = arm,
+                picked: SkillResult = picked,
+                dropped: SkillResult | None = dropped,
+            ) -> None:
+                entry.update(bin_outcome(ctx, obj, arm, picked, dropped, landed))
+
+            observed = landing(ctx, landing_spec(obj, arm))
+            observed.advance()
+            landings.append((observed, record))
+        else:
+            entry.update(bin_outcome(ctx, obj, arm, picked, dropped, None))
         if ctx.scene.attachment(obj) is not None:
             break  # still held: recovery is #209/#210's
+    for _ in range(MAX_TICKS):  # the last landings, with nothing else to do
+        if not landings:
+            break
+        ctx.step()
+        stepped()
     return outcomes
 
 

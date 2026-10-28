@@ -47,6 +47,16 @@ pregrasp continues once the release has happened. The demo can also place a sing
 upright at a target on the worktop under a force-guarded descent, instead of dropping
 it.
 
+The legacy demo's round stages five objects drawn, by the seed, from its nine types:
+`can`, `spam_can`, `cracker_box`, `gelatin_box`, `sugar_box`, `pocky_box`,
+`pop_tarts_case`, `fuze_bottle` and `plastic_glass` (`recycling.MIX_KINDS`).
+`recycling.sort_all` sorts them all into the bins, racing both arms as above. An attempt
+that fails is recovered only where releasing the object is safe: a lift that did not
+plan releases it where it was grasped, and an object that slipped in the carry is
+released over the bin. An object released back onto the worktop upright is tried once
+more. Anything else stops the round, the object still declared held. The table is
+clear once every object rests in a bin.
+
 ## Running it
 
 From a clone, the application has its own [uv](https://docs.astral.sh/uv/) project and
@@ -81,6 +91,16 @@ uv run geodude-recycling --seed 4 --cans 4 --record out/four
 
 ```text
 {"can_0": true, "can_1": true, "can_2": true, "can_3": true}
+```
+
+Sort a round of the legacy demo's mix:
+
+```sh
+uv run geodude-recycling --seed 0 --mix 5 --record out/mix
+```
+
+```text
+{"cracker_box_0": "recycle_bin_0", "fuze_bottle_0": "recycle_bin_0", "gelatin_box_0": "recycle_bin_0", "pop_tarts_case_0": "recycle_bin_1", "sugar_box_0": "recycle_bin_1"}
 ```
 
 `--to worktop` places the can upright on the worktop instead of dropping it, and
@@ -131,13 +151,19 @@ bundle](https://github.com/personalrobotics/mj_viser#replay-a-run-bundle).
 | Pick one can and drop it into the bin on its side | Implemented; tested from the source tree and from the built wheel in a clean environment |
 | Pick one can and place it upright on the worktop | Implemented; tested |
 | Recycle several cans, racing both arms and planning each can during the previous transfer | Implemented; four cans tested |
+| Pick and drop each of the legacy demo's nine object types | Implemented; each type tested alone (`test_object_types`) |
+| Sort a five-object round of the mix into the bins, recovering where it is safe | Implemented; seed 0 tested twice, its bundles verified (`test_sort_all`) |
 | Perception | Not implemented; object poses come from privileged simulator channels |
 | The physical robot | Not yet supported; it depends on ssrobot's hardware runtime |
 | The 3.x application's other tasks | Still served by the application at the repository root |
 
-Not every seed recycles every can. A run that fails reports the stage that decided it,
-such as a can slipping in the fingers during a carry or no arm finding a feasible
-prefix, and the record preserves the evidence needed to diagnose it.
+Not every seed recycles every object. A run that fails reports the stage that decided
+it, such as no arm finding a feasible prefix, and the record preserves the evidence
+needed to diagnose it. `scripts/evaluate_recycling.py` measures reliability over fixed
+corpora of rounds (personalrobotics/geodude#201): `development`, seeds 0-39, for
+diagnosis and every fix, and `acceptance`, seeds 1000-1039, run once, whole, from a
+clean tree. On the development corpus, 196 of 200 objects are recycled and 37 of 40
+rounds cleared.
 
 ## Development
 

@@ -15,13 +15,17 @@ dependencies = [
     "numpy>=1.26",
     "pyyaml>=6.0",
     "ssmjviser==1.0.0",
+    # Imported directly (regions.py): the Robotiq hands' closed reach and a box's scaled
+    # default margin (sstsr#193, #195).
+    "sstsr==4.1.0",
     # Pinned by commit: the contracts and skills this app is proven against.
     "ssrobot[mujoco,planning] @ git+https://github.com/personalrobotics/ssrobot@6445900f339f4d5a82566e3647c1b42396dbe1a2",
     "ssgrasping @ git+https://github.com/personalrobotics/ssgrasping@8d8cd078eb75e59f5c54cde27b5a861317cb8903",
-    "prl-assets @ git+https://github.com/personalrobotics/prl_assets@b632aafcf916c560e0ca928e7e3ff098ce51f465",
-    # ssrobot's reference pin for Geodude (references/robots.toml): the 2F-140 driven like
-    # the real gripper (geodude_assets#38), with its declared completion detector (#40).
-    "geodude-assets @ git+https://github.com/personalrobotics/geodude_assets@e8f4b720687d7fcfa8a26c9dc9d7734f5f82b59e",
+    "prl-assets @ git+https://github.com/personalrobotics/prl_assets@9453f39ffc5f92891ebc9dead7e613b50a4cfbc6",
+    # The 2F-140 driven like the real gripper (geodude_assets#38), with its declared
+    # completion detector (#40), and each pad's torsional friction its contact face's
+    # (#41). One commit past ssrobot's reference pin for Geodude (references/robots.toml).
+    "geodude-assets @ git+https://github.com/personalrobotics/geodude_assets@d139e8c06e9d9a2f2c3bce30bd867e7e937c1ad4",
 ]
 
 [project.scripts]

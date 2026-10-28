@@ -24,9 +24,9 @@ def main():
     # This is done by setting ctrl to 0 and letting the model have no damping
     robot.model.dof_damping[:] = 0.1  # Small damping for stability
 
-    # Start at home
-    q_right = np.array(robot.named_poses["home"]["right"])
-    q_left = np.array(robot.named_poses["home"]["left"])
+    # Start at the ready pose
+    q_right = np.array(robot.named_poses["ready"]["right"])
+    q_left = np.array(robot.named_poses["ready"]["left"])
 
     robot.right_arm.set_joint_positions(q_right)
     robot.left_arm.set_joint_positions(q_left)

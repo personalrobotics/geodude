@@ -26,6 +26,7 @@ import argparse
 import importlib.metadata
 import json
 import math
+import random
 import shutil
 import sys
 import tempfile
@@ -130,6 +131,19 @@ PREFERRED = 1
 """The race priority of the arm on an object's side, over the other arm's 0. Raced at
 equal priority, the shorter prefix won, and it was often the other arm's: a long
 cross-body carry, from which cans slipped out of the grasp (personalrobotics/geodude#223)."""
+MIX_KINDS = (
+    "can",
+    "spam_can",
+    "cracker_box",
+    "gelatin_box",
+    "sugar_box",
+    "pocky_box",
+    "fuze_bottle",
+    "pop_tarts_case",
+    "plastic_glass",
+)
+"""The legacy demo's graspable types (``src/geodude/demos/recycling.py``), from which its
+mix of objects is drawn."""
 MAX_TICKS = 200_000
 SOURCES = (
     "geodude",
@@ -206,6 +220,13 @@ def object_pose(ctx: RobotContext, name: str) -> Pose:
     assert isinstance(value, tuple)
     x, y, z, w, i, j, k = value
     return Pose(position=(x, y, z), quat_wxyz=(w, i, j, k))
+
+
+def mix(seed: int, count: int) -> dict[str, int]:
+    """The legacy demo's mix: ``count`` objects drawn, with a generator seeded by
+    ``seed``, from ``MIX_KINDS``, as ``stage_scene``'s counts by type."""
+    drawn = random.Random(seed).choices(MIX_KINDS, k=count)
+    return {kind: drawn.count(kind) for kind in sorted(set(drawn))}
 
 
 def kind_of(name: str) -> str:
@@ -358,6 +379,21 @@ def _stages(result: SkillResult | None) -> list[list[Any]] | None:
     return None if result is None else [[s.name, s.succeeded] for s in result.stages]
 
 
+def _failure(*results: SkillResult | None) -> dict[str, Any] | None:
+    """The stage that decided the first of ``results`` that did not succeed: its skill,
+    name, detail, and evidence kind. None when every result present succeeded."""
+    for result in results:
+        if result is not None and not result.succeeded:
+            stage = result.stage
+            return {
+                "skill": result.skill,
+                "stage": stage.name,
+                "detail": stage.detail,
+                "evidence": stage.evidence.value,
+            }
+    return None
+
+
 def _released(result: SkillResult | None) -> bool:
     return result is not None and any(s.name == "release" and s.succeeded for s in result.stages)
 
@@ -458,6 +494,7 @@ def bin_outcome(
         "position_in_bin_m": local,
         "attached": attached,
         "checks": checks,
+        "failure": _failure(picked, dropped, landed),
         "succeeded": all(checks.values()),
     }
 

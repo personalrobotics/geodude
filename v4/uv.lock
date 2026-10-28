@@ -250,6 +250,7 @@ dependencies = [
     { name = "ssgrasping" },
     { name = "ssmjviser" },
     { name = "ssrobot", extra = ["mujoco", "planning"] },
+    { name = "sstsr" },
 ]
 
 [package.dev-dependencies]
@@ -269,6 +270,7 @@ requires-dist = [
     { name = "ssgrasping", git = "https://github.com/personalrobotics/ssgrasping?rev=b7b57775718c3ddf68403b154eb1885034dbc3d9" },
     { name = "ssmjviser", specifier = "==1.0.0" },
     { name = "ssrobot", extras = ["mujoco", "planning"], git = "https://github.com/personalrobotics/ssrobot?rev=6445900f339f4d5a82566e3647c1b42396dbe1a2" },
+    { name = "sstsr", git = "https://github.com/personalrobotics/sstsr?rev=6a5e482cd7c5ccb728d41f013bb24597e2dc7742" },
 ]
 
 [package.metadata.requires-dev]
@@ -1045,18 +1047,14 @@ planning = [
 
 [[package]]
 name = "sstsr"
-version = "4.0.0"
-source = { registry = "https://pypi.org/simple" }
+version = "4.0.1.dev3"
+source = { git = "https://github.com/personalrobotics/sstsr?rev=6a5e482cd7c5ccb728d41f013bb24597e2dc7742#6a5e482cd7c5ccb728d41f013bb24597e2dc7742" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pyyaml" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ab/5a/e589a8b06810eafa956a7b1438e96d7a4fd99f07b6c6178747ac88111ec4/sstsr-4.0.0.tar.gz", hash = "sha256:6808a16ad72a16585ad1f19abaa721477bece507a5ffd9891ade4e282d9e1bf6", size = 1846141, upload-time = "2026-10-26T04:37:50.934Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/1c/8b/05206864796743960aa3391c3ad988fc8f2f2194c097628eb4ecca760567/sstsr-4.0.0-py3-none-any.whl", hash = "sha256:ff2b51ac9a262dcee46adf795dd391864a2f1d4be795094e41c8baa87b0899d9", size = 135600, upload-time = "2026-10-26T04:37:49.258Z" },
 ]
 
 [[package]]

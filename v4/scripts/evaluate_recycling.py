@@ -51,8 +51,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-FORMAT = 1
-"""The evaluation artifact's format: raised whenever a field's meaning changes."""
+FORMAT = 2
+"""The evaluation artifact's format: raised whenever a field's meaning changes. 2: per
+object, its attempts, where it finally rests, and its verdict, in place of one outcome
+and its mechanism."""
 CORPORA = {"development": range(0, 40), "acceptance": range(1000, 1040)}
 OBJECTS = 5
 """Objects per round: the legacy demo's ``spawn_count``."""

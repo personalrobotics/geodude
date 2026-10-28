@@ -17,7 +17,7 @@ dependencies = [
     "ssmjviser==1.0.0",
     # Pinned by commit: the contracts and skills this app is proven against.
     "ssrobot[mujoco,planning] @ git+https://github.com/personalrobotics/ssrobot@6445900f339f4d5a82566e3647c1b42396dbe1a2",
-    "ssgrasping @ git+https://github.com/personalrobotics/ssgrasping@db5b844c5b3e29b7d49c3f585eddad9070607dba",
+    "ssgrasping @ git+https://github.com/personalrobotics/ssgrasping@b7b57775718c3ddf68403b154eb1885034dbc3d9",
     # Measurement only: sstsr#194 and prl_assets#24's floor, not for merge.
     "sstsr @ git+https://github.com/personalrobotics/sstsr@10f776aac0128395b3ff114f4a2d76fa3d9e65bc",
     "prl-assets @ git+https://github.com/personalrobotics/prl_assets@2c088b9fa2a6fd5a9b692507bc3e6b74bffdf4dd",

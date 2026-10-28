@@ -14,6 +14,7 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
+import mujoco
 import numpy as np
 from ssrobot import Pose, Tsr
 from tsr.hands.parallel_jaw import Robotiq2F140
@@ -43,15 +44,15 @@ def matrix(pose: Pose) -> np.ndarray:
 
 
 def pose(transform: np.ndarray) -> Pose:
-    """A 4x4 homogeneous transform as a ``Pose``."""
-    r = transform[:3, :3]
-    w = math.sqrt(max(0.0, 1 + r[0, 0] + r[1, 1] + r[2, 2])) / 2
-    x = math.copysign(math.sqrt(max(0.0, 1 + r[0, 0] - r[1, 1] - r[2, 2])) / 2, r[2, 1] - r[1, 2])
-    y = math.copysign(math.sqrt(max(0.0, 1 - r[0, 0] + r[1, 1] - r[2, 2])) / 2, r[0, 2] - r[2, 0])
-    z = math.copysign(math.sqrt(max(0.0, 1 - r[0, 0] - r[1, 1] + r[2, 2])) / 2, r[1, 0] - r[0, 1])
-    n = math.sqrt(w * w + x * x + y * y + z * z)
+    """A 4x4 homogeneous transform as a ``Pose``. The quaternion is MuJoCo's
+    (``mju_mat2Quat``), which recovers every rotation, including the half turns whose
+    signs cannot be read from the matrix's antisymmetric part (the roll-180° cylinder side
+    grasps, for one)."""
+    quat = np.empty(4)
+    mujoco.mju_mat2Quat(quat, np.ascontiguousarray(transform[:3, :3], dtype=float).flatten())
+    w, x, y, z = (float(v) for v in quat / np.linalg.norm(quat))
     px, py, pz = (float(v) for v in transform[:3, 3])
-    return Pose(position=(px, py, pz), quat_wxyz=(w / n, x / n, y / n, z / n))
+    return Pose(position=(px, py, pz), quat_wxyz=(w, x, y, z))
 
 
 def tsr(region: Any) -> Tsr:

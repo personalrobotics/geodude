@@ -117,8 +117,8 @@ def classify(outcome: dict[str, Any] | None) -> str:
         failed = sorted(k for k, ok in outcome["checks"].items() if not ok)
         return "checks:" + "+".join(failed)
     skill, stage, detail = str(failure["skill"]), str(failure["stage"]), str(failure["detail"])
-    if stage == "acquired":
-        return f"{skill}.acquired:" + detail.split(":", 1)[0]  # missed or indeterminate
+    if stage in ("obstructed", "acquired"):
+        return f"{skill}.{stage}:" + detail.split(":", 1)[0]  # missed, or lost in the lift
     if detail.startswith("planning "):
         return f"{skill}.{stage}:" + detail.split(":", 1)[0].removeprefix("planning ")
     return f"{skill}.{stage}"

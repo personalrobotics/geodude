@@ -134,6 +134,70 @@ def drop_zone(
     )
 
 
+def held_drop_zones(
+    container: Mapping[str, Any],
+    base: tuple[float, float, float],
+    held: Mapping[str, Any],
+    grasp: Pose,
+    clearance: float,
+) -> list[Tsr]:
+    """Where to release an object with ``held`` geometry, held at ``grasp`` (its pose in
+    the end effector's frame), over an upright open box standing at ``base``, so that
+    it falls clear of the rim: the end effector pointing straight down, at the legacy
+    drop zone's height (``drop_zone``), at each yaw a multiple of a quarter turn, and
+    only where the held object's footprint lies inside the box's inner walls by
+    ``clearance``. A cylinder's footprint is its bounding box's.
+
+    The legacy zone lets the hand anywhere within ``drop_zone_margin`` of the walls at
+    any yaw, whatever it holds. Over #201's development corpus, the 11 objects released
+    from it that did not land, all tall boxes and bottles, came to rest on or above the
+    rim (0.805 to 0.892 m above the bin's base, against an 0.80 m rim), 10 of them more
+    than 5 cm off-centre in x or y. A yaw at which the footprint does not fit has no zone."""
+    geometry = container["geometric_properties"]
+    if geometry["type"] != "open_box":
+        raise ValueError(f"cannot drop into a {geometry['type']}")
+    outer, inner = geometry["outer_size"], geometry["inner_size"]
+    if held["type"] == "cylinder":
+        half = np.array([held["radius"], held["radius"], held["height"] / 2])
+    else:
+        half = np.array(held["size"], dtype=float) / 2
+    corners = (np.array(np.meshgrid([-1, 1], [-1, 1], [-1, 1])).T.reshape(-1, 3) * half).T
+    in_hand = matrix(grasp)
+    in_hand = in_hand[:3, :3] @ corners + in_hand[:3, 3:4]  # the object's corners, hand frame
+    down = np.diag([1.0, -1.0, -1.0])  # the hand's z pointing down, its x along the world's
+    x, y, z = base
+    above = float(outer[2]) + max(0.25, height(held) + 0.10)
+    zones = []
+    for quarter in range(4):
+        yaw = quarter * math.pi / 2
+        c, s = math.cos(yaw), math.sin(yaw)
+        turned = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]) @ down
+        footprint = turned @ in_hand  # each corner's offset from the hand, in the world
+        bounds = []
+        for axis in range(2):
+            limit = float(inner[axis]) / 2 - clearance
+            low = -limit - float(footprint[axis].min())
+            high = limit - float(footprint[axis].max())
+            bounds.append((low, high))
+        if any(low > high for low, high in bounds):
+            continue
+        offset = np.eye(4)
+        offset[:3, :3] = turned
+        zones.append(
+            Tsr(  # bounds in the world's axes: the origin is unturned, the hand's turn offset
+                origin=Pose(position=(x, y, z + above), quat_wxyz=(1.0, 0.0, 0.0, 0.0)),
+                offset=pose(offset),
+                position_bounds=(
+                    (bounds[0][0], bounds[0][1]),
+                    (bounds[1][0], bounds[1][1]),
+                    (-0.05, 0.02),
+                ),
+                rotation_bounds=((0.0, 0.0), (0.0, 0.0), (0.0, 0.0)),
+            )
+        )
+    return zones
+
+
 def interior(container: Mapping[str, Any], base: tuple[float, float, float]) -> Tsr:
     """Where an object's frame may rest inside an upright open box (prl_assets
     ``meta.yaml``) standing at ``base``: over its floor, below its rim, any orientation."""

@@ -50,11 +50,22 @@ class Recording:
     def validator(self, request: Any, scene: Any) -> Any:
         return self._inner.validator(request, scene)
 
+    def __getattr__(self, name: str) -> Any:
+        # Anything else a caller probes for (RobotContext looks for ``rebase``) is the
+        # inner planner's, so recording never changes what is planned.
+        return getattr(self._inner, name)
+
     def plan(self, request: Any, scene: Any, *, abort: Any = None) -> Any:
-        result = self._inner.plan(request, scene, abort=abort)
+        return self._record("plan", request, scene, self._inner.plan(request, scene, abort=abort))
+
+    def rebase(self, plan: Any, request: Any, scene: Any) -> Any:
+        return self._record("rebase", request, scene, self._inner.rebase(plan, request, scene))
+
+    def _record(self, call: str, request: Any, scene: Any, result: Any) -> Any:
         snapshot = scene.snapshot
         entry = {
             "planner": self._label,
+            "call": call,
             "snapshot": request.snapshot,
             "materialized": fingerprint(snapshot),
             "revision": request.revision,

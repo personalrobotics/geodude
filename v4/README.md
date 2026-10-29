@@ -105,7 +105,15 @@ uv run geodude-recycling --seed 0 --mix 5 --record out/mix
 
 `--to worktop` places the can upright on the worktop instead of dropping it, and
 `--viser` serves a live view of the run at <http://localhost:8080>. The seed selects
-the staged scene, and a deterministic run gives the same outcome for the same seed.
+the staged scene, and a deterministic run gives the same outcome for the same seed on
+the same OpenBLAS kernel.
+
+OpenBLAS picks its kernel for the CPU, and the kernels round differently, so one ulp of a
+grasp region's orientation can change a round's outcome. CI checks the tests' outcomes
+on the Haswell kernel, which every x86-64 host with AVX2 runs; select it with
+`OPENBLAS_CORETYPE=Haswell`. `recycling.json` names the
+kernel a run used, and `null` when numpy does not use its bundled OpenBLAS, as on macOS
+on Apple silicon.
 
 ## Geodude's choices
 

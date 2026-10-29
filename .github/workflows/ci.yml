@@ -60,6 +60,8 @@ jobs:
         working-directory: v4
     env:
       UV_NO_SOURCES: "false"
+      # Outcomes are claimed on one OpenBLAS kernel (geodude.recycling.REFERENCE_BLAS_KERNEL).
+      OPENBLAS_CORETYPE: Haswell
     steps:
       - uses: actions/checkout@v4
 
@@ -77,6 +79,11 @@ jobs:
 
       - name: Ruff
         run: uv run ruff check . && uv run ruff format --check .
+
+      - name: The reference OpenBLAS kernel
+        run: |
+          uv run python -c "from geodude.recycling import REFERENCE_BLAS_KERNEL as want, blas_kernel
+          assert blas_kernel() == want, f'numpy runs on {blas_kernel()}, not {want}'"
 
       - name: Mypy
         run: uv run mypy

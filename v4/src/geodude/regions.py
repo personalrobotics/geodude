@@ -164,7 +164,7 @@ def held_drop_zones(
     A cylinder's footprint is its bounding box's.
 
     Released above the rim, an object strays sideways as the pads let go of one side
-    first, by up to 12 mm before it falls past the rim (``scripts/calibrate_release.py``,
+    first, by up to 16 mm before it falls past the rim (``scripts/calibrate_release.py``,
     83 free releases): a corner that strays over the rim strikes it. Seed 0's pop-tarts
     case, released 4.7 mm inside the walls and 3.6 cm above the rim, swept 1 cm onto it
     and wedged there (#237). A margin of that sweep leaves no zone for a horizontally held

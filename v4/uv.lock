@@ -265,7 +265,7 @@ dev = [
 requires-dist = [
     { name = "geodude-assets", git = "https://github.com/personalrobotics/geodude_assets?rev=d139e8c06e9d9a2f2c3bce30bd867e7e937c1ad4" },
     { name = "numpy", specifier = ">=1.26" },
-    { name = "prl-assets", git = "https://github.com/personalrobotics/prl_assets?rev=9453f39ffc5f92891ebc9dead7e613b50a4cfbc6" },
+    { name = "prl-assets", git = "https://github.com/personalrobotics/prl_assets?rev=6b6b4439ba71365409c4b7ff4b6a1f31fbca1411" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ssgrasping", git = "https://github.com/personalrobotics/ssgrasping?rev=8d8cd078eb75e59f5c54cde27b5a861317cb8903" },
     { name = "ssmjviser", specifier = "==1.0.0" },
@@ -720,7 +720,7 @@ wheels = [
 [[package]]
 name = "prl-assets"
 version = "0.1.0"
-source = { git = "https://github.com/personalrobotics/prl_assets?rev=9453f39ffc5f92891ebc9dead7e613b50a4cfbc6#9453f39ffc5f92891ebc9dead7e613b50a4cfbc6" }
+source = { git = "https://github.com/personalrobotics/prl_assets?rev=6b6b4439ba71365409c4b7ff4b6a1f31fbca1411#6b6b4439ba71365409c4b7ff4b6a1f31fbca1411" }
 dependencies = [
     { name = "fast-simplification" },
     { name = "trimesh" },

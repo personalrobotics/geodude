@@ -12,7 +12,8 @@ Run it, watch it, and record it::
 
 ``--viser`` serves a live view at http://localhost:8080; ``--record`` writes the run as
 a bundle (``out/bundle``) that mj_viser replays, and its outcome as ``out/recycling.json``:
-the sources it ran from, the seed, every skill stage, and where the can came to rest.
+the sources it ran from, the OpenBLAS kernel, the seed, every skill stage, and where the
+can came to rest.
 The installed command ``geodude-recycling`` is the same.
 
 ``--cans 4`` stages four cans and recycles them all (``recycle``): both arms race for
@@ -23,6 +24,7 @@ can is carried to its bin (personalrobotics/geodude#223).
 from __future__ import annotations
 
 import argparse
+import ctypes
 import dataclasses
 import importlib.metadata
 import json
@@ -161,10 +163,19 @@ SOURCES = (
     "ssik",
     "sstsr",
     "mujoco",
+    "numpy",
     "prl-assets",
     "geodude-assets",
 )
 """The distributions a run's outcome names."""
+REFERENCE_BLAS_KERNEL = "Haswell"
+"""The OpenBLAS kernel a claimed outcome is measured on (personalrobotics/geodude#241).
+
+OpenBLAS picks its kernel for the CPU it runs on, and kernels round differently: a
+quaternion's norm comes out one ulp apart on AVX-512 and AVX2 processors, which moves a
+grasp region, its plans, and the outcome. A run is deterministic on one kernel, so a
+claim names one. Haswell is the kernel every x86-64 host with AVX2 can run; select it
+with ``OPENBLAS_CORETYPE=Haswell`` before numpy loads."""
 
 
 @dataclass(frozen=True)
@@ -291,7 +302,7 @@ def grasp_spec(ctx: RobotContext, obj: str, arm: Arm) -> GraspSpec:
         object=obj,
         support="vention_base",
         normal=UP,
-        pregrasps=regions.pregrasps(geometry, object_pose(ctx, obj)),
+        pregrasps=regions.pregrasps(geometry, object_pose(ctx, obj), CLEARANCE_M),
         approach_m=regions.STANDOFF_M,
         lift_m=0.06,
         line_tolerance_m=LINE_TOLERANCE_M,
@@ -424,6 +435,24 @@ def sources() -> dict[str, Any]:
             "source": None if direct is None else json.loads(direct),
         }
     return out
+
+
+def blas_kernel() -> str | None:
+    """The OpenBLAS kernel numpy's linear algebra runs on, or None when numpy is not
+    built on the OpenBLAS it bundles (on macOS on Apple silicon it uses Accelerate)."""
+    import numpy
+
+    root = Path(numpy.__file__).parent
+    for library in sorted(
+        [*root.parent.glob("numpy.libs/*openblas*"), *root.glob(".dylibs/*openblas*")]
+    ):
+        loaded = ctypes.CDLL(str(library))
+        for symbol in ("scipy_openblas_get_corename64_", "scipy_openblas_get_corename"):
+            corename = getattr(loaded, symbol, None)
+            if corename is not None:
+                corename.restype = ctypes.c_char_p
+                return str(corename().decode())
+    return None
 
 
 def _stages(result: SkillResult | None) -> list[list[Any]] | None:
@@ -1095,6 +1124,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             report = {
                 "seed": args.seed,
                 "sources": sources(),
+                "blas_kernel": blas_kernel(),
                 "scene": json.loads((scene.parent / "manifest.json").read_text()),
                 **result,
             }

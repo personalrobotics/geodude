@@ -105,15 +105,27 @@ uv run geodude-recycling --seed 0 --mix 5 --record out/mix
 
 `--to worktop` places the can upright on the worktop instead of dropping it, and
 `--viser` serves a live view of the run at <http://localhost:8080>. The seed selects
-the staged scene, and a deterministic run gives the same outcome for the same seed.
+the staged scene, and a deterministic run gives the same outcome for the same seed on
+the same OpenBLAS kernel.
+
+OpenBLAS picks its kernel for the CPU, and the kernels round differently, so one ulp of a
+grasp region's orientation can change a round's outcome. CI checks the tests' outcomes
+on the Haswell kernel, which every x86-64 host with AVX2 runs; select it with
+`OPENBLAS_CORETYPE=Haswell`. `recycling.json` names the
+kernel a run used, and `null` when numpy does not use its bundled OpenBLAS, as on macOS
+on Apple silicon.
 
 ## Geodude's choices
 
 The regions offered to each skill are built in `src/geodude/regions.py` from each
 object's prl_assets geometry. Grasps are sstsr's templates for the 2F-140, backed off
-along the approach so that the skill can move straight in. The drop zone over a bin and
-the region a dropped can must come to rest in are the 3.x demo's, computed from the
-bin's geometry. These are Geodude's choices rather than ssgrasping's, because another
+along the approach so that the skill can move straight in, and keep a box's fingertips
+at least the planning clearance off the box. A drop releases the held object with its
+lowest point just below the bin's rim, its footprint and, where they reach below the rim,
+the open fingers inside the walls: released above the rim, an object strays sideways as
+the pads let go, and can come to rest across it (#237). The region a dropped object must
+come to rest in is the 3.x demo's, computed from the bin's geometry. These are Geodude's
+choices rather than ssgrasping's, because another
 robot or task would offer different grasps and containers.
 
 The speeds, forces, and tolerances are set in `src/geodude/recycling.py`. Where a value
@@ -163,8 +175,9 @@ needed to diagnose it. `scripts/evaluate_recycling.py` measures reliability over
 corpora of rounds (personalrobotics/geodude#201): `development`, seeds 0-39, for
 diagnosis and every fix, and two frozen corpora, each run once, whole, from a clean
 tree: `acceptance`, seeds 1000-1039, #201's, now spent, and `cutover`, seeds 2000-2039,
-for the Geodude 4.0 cutover (#213). On the development corpus, 196 of 200 objects are recycled and 37 of 40
-rounds cleared.
+for the Geodude 4.0 cutover (#213), on the Haswell kernel. On the development
+corpus, on the Haswell kernel, 190 of 200 objects are recycled and 37 of 40 rounds
+cleared.
 
 ## Development
 

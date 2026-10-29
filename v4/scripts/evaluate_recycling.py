@@ -7,7 +7,7 @@ and retrying an object released back onto the worktop once. The evaluation is on
 artifact:
 - what it ran: the corpus, its seeds, the Geodude commit and whether the tree was
   dirty, every ``recycling.SOURCES`` distribution, and the host: its platform, Python,
-  CPU model and count, and load;
+  CPU model and count, OpenBLAS kernel (``recycling.blas_kernel``), and load;
 - per round: the staged objects and their poses, and per staged object every attempt's
   outcome, with the deciding stage's detail and any recovery, where it finally rests,
   and its verdict (``verdict``);
@@ -25,7 +25,9 @@ records a planning timeout is then run again alone, and its verdict is that run'
 round records which run its verdict came from.
 
 The corpora are fixed: ``development`` (seeds 0-39), for diagnosis and every fix, and
-two frozen corpora, each run once, whole, from a clean tree, or not at all:
+two frozen corpora, each run once, whole, from a clean tree, on the reference OpenBLAS
+kernel (``recycling.REFERENCE_BLAS_KERNEL``, selected with ``OPENBLAS_CORETYPE``), or not
+at all:
 - ``acceptance`` (seeds 1000-1039) was #201's, and is spent: it is refused;
 - ``cutover`` (seeds 2000-2039) is the Geodude 4.0 cutover's (#213), run once on its
   final pins::
@@ -237,6 +239,7 @@ def _provenance() -> dict[str, Any]:
             "platform": platform.platform(),
             "python": platform.python_version(),
             "cpu": _cpu_model(),
+            "blas_kernel": recycling.blas_kernel(),
         },
     }
 
@@ -374,10 +377,19 @@ def main() -> int:
     if args.corpus in SPENT:
         parser.error(f"the {args.corpus} corpus is spent: {SPENT[args.corpus]}")
     if args.corpus in FROZEN:
+        from geodude import recycling
+
         if args.seeds:
             parser.error(f"the {args.corpus} corpus runs whole: --seeds is refused")
         if _provenance()["dirty"]:
             parser.error(f"the {args.corpus} corpus runs from a clean tree")
+        kernel = recycling.blas_kernel()
+        if kernel != recycling.REFERENCE_BLAS_KERNEL:
+            parser.error(
+                f"the {args.corpus} corpus runs on the {recycling.REFERENCE_BLAS_KERNEL} "
+                f"OpenBLAS kernel, not {kernel}: set "
+                f"OPENBLAS_CORETYPE={recycling.REFERENCE_BLAS_KERNEL}"
+            )
     elif args.seeds:
         chosen = [int(s) for s in args.seeds.split(",")]
         if not set(chosen) <= set(seeds):

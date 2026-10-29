@@ -28,6 +28,14 @@ MIN_SIDE_DEPTH_M = 0.099
 the modelled 2F-140's fingers stay parallel; its deep (84 mm) grasps fold them, and the can
 slips in the carry (sstsr#189, geodude_assets#36). Over 100 seeds of four cans, racing,
 with no clearance: 344 cans recycled against 313 with every depth."""
+RELEASE_SWEEP_M = 0.0123
+"""How far an object's footprint can stray sideways as the 2F-140 releases it, before the
+object has fallen below a bin's rim: the pads let go of one side first, so the object
+tilts and drifts as it slides out. It is the most of 83 free releases of the legacy demo's
+nine types, picked and dropped by the demo's skills away from any bin, on the Haswell
+OpenBLAS kernel (a pocky box, tilted 0.23 rad): ``scripts/calibrate_release.py``, seeds
+5000-5009, at 69ffe35. With 2 mm to spare, a pop-tarts case swept 1 cm onto the rim and
+wedged there (#237)."""
 
 
 def matrix(pose: Pose) -> np.ndarray:
@@ -146,7 +154,8 @@ def held_drop_zones(
     it falls clear of the rim: the end effector pointing straight down, at the legacy
     drop zone's height (``drop_zone``), at each yaw a multiple of a quarter turn, and
     only where the held object's footprint lies inside the box's inner walls by
-    ``clearance``. A cylinder's footprint is its bounding box's.
+    ``clearance`` and the release's sideways sweep (``RELEASE_SWEEP_M``). A cylinder's
+    footprint is its bounding box's.
 
     The legacy zone lets the hand anywhere within ``drop_zone_margin`` of the walls at
     any yaw, whatever it holds. Over #201's development corpus, the 11 objects released
@@ -175,7 +184,7 @@ def held_drop_zones(
         footprint = turned @ in_hand  # each corner's offset from the hand, in the world
         bounds = []
         for axis in range(2):
-            limit = float(inner[axis]) / 2 - clearance
+            limit = float(inner[axis]) / 2 - clearance - RELEASE_SWEEP_M
             low = -limit - float(footprint[axis].min())
             high = limit - float(footprint[axis].max())
             bounds.append((low, high))

@@ -150,7 +150,7 @@ bundle](https://github.com/personalrobotics/mj_viser#replay-a-run-bundle).
 | --- | --- |
 | Pick one can and drop it into the bin on its side | Implemented; tested from the source tree and from the built wheel in a clean environment |
 | Pick one can and place it upright on the worktop | Implemented; tested |
-| Recycle several cans, racing both arms and planning each can during the previous transfer | Implemented; four cans tested |
+| Recycle several cans, racing both arms and planning each can during the previous transfer | Implemented; four cans tested, and the same round with planning delayed by up to 3 s gives the same trace (`test_planning_latency`) |
 | Pick and drop each of the legacy demo's nine object types | Implemented; each type tested alone (`test_object_types`) |
 | Sort a five-object round of the mix into the bins, recovering where it is safe | Implemented; seed 0 tested twice, its bundles verified (`test_sort_all`) |
 | Perception | Not implemented; object poses come from privileged simulator channels |

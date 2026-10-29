@@ -1049,9 +1049,9 @@ def _drop_racing_next(
 ) -> Candidates | None:
     """Drive ``dropping`` to its end; once its transfer is executing, start ``race_next``
     on it. Returns the race, possibly still planning. As ``run_together`` does, while
-    every unfinished one waits only on a plan made on a worker and not yet ready, the
-    clock does not step: the run's timeline does not depend on how long planning
-    takes."""
+    every unfinished one waits only on a plan made on a worker, such as a transfer
+    planned during the lift and not yet ready, the clock does not step: the run's
+    timeline does not depend on how long planning takes."""
     pending: Candidates | None = None
     dropping.advance()
     for _ in range(MAX_TICKS):

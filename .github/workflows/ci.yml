@@ -36,13 +36,16 @@ jobs:
           python-version: "3.13"
       - run: sudo apt-get update && sudo apt-get install -y libeigen3-dev
       - run: uv sync --locked
-      - run: uv run python scripts/diag_241.py "$GITHUB_WORKSPACE/v4/diag"
+      - run: lscpu | grep "Model name" | tee "$GITHUB_WORKSPACE/v4/cpu.txt"
+      - run: uv run python scripts/diag_241b.py "$GITHUB_WORKSPACE/v4/diag/default"
+      - run: uv run python scripts/diag_241b.py "$GITHUB_WORKSPACE/v4/diag/haswell"
+        env:
+          OPENBLAS_CORETYPE: Haswell
       - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: diag-${{ matrix.n }}
+          name: diagb-${{ matrix.n }}
           path: |
-            v4/diag/host.json
-            v4/diag/calls.json
-            v4/diag/requests/
-            v4/diag/run/recycling.json
+            v4/cpu.txt
+            v4/diag/default/probe.json
+            v4/diag/haswell/probe.json

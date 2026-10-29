@@ -6,7 +6,8 @@ runs: racing both arms with lookahead, recovering a failed attempt where that is
 and retrying an object released back onto the worktop once. The evaluation is one JSON
 artifact:
 - what it ran: the corpus, its seeds, the Geodude commit and whether the tree was
-  dirty, every ``recycling.SOURCES`` distribution, and the host's load;
+  dirty, every ``recycling.SOURCES`` distribution, and the host: its platform, Python,
+  CPU model and count, and load;
 - per round: the staged objects and their poses, and per staged object every attempt's
   outcome, with the deciding stage's detail and any recovery, where it finally rests,
   and its verdict (``verdict``);
@@ -23,13 +24,15 @@ would not alone. Rounds run in parallel, at most ``--jobs`` at once; every round
 records a planning timeout is then run again alone, and its verdict is that run's. Each
 round records which run its verdict came from.
 
-The corpora are fixed (#201): ``development`` (seeds 0-39), for diagnosis and every fix,
-and ``acceptance`` (seeds 1000-1039), run once, on the final pins::
+The corpora are fixed: ``development`` (seeds 0-39), for diagnosis and every fix, and
+two frozen corpora, each run once, whole, from a clean tree, or not at all:
+- ``acceptance`` (seeds 1000-1039) was #201's, and is spent: it is refused;
+- ``cutover`` (seeds 2000-2039) is the Geodude 4.0 cutover's (#213), run once on its
+  final pins::
 
     uv run python scripts/evaluate_recycling.py development out/development.json
 
-``--seeds 3,7`` evaluates only those seeds of the development corpus. The acceptance
-corpus runs whole, from a clean tree, or not at all.
+``--seeds 3,7`` evaluates only those seeds of the development corpus.
 
 ``--classify EVALUATION OUT`` reclassifies an existing evaluation, without running
 anything, after a change to ``classify``. It never touches ``EVALUATION``: ``OUT`` is a
@@ -42,6 +45,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -55,7 +59,15 @@ FORMAT = 2
 """The evaluation artifact's format: raised whenever a field's meaning changes. 2: per
 object, its attempts, where it finally rests, and its verdict, in place of one outcome
 and its mechanism."""
-CORPORA = {"development": range(0, 40), "acceptance": range(1000, 1040)}
+CORPORA = {
+    "development": range(0, 40),
+    "acceptance": range(1000, 1040),
+    "cutover": range(2000, 2040),
+}
+FROZEN = {"acceptance", "cutover"}
+"""Corpora that run once, whole, from a clean tree."""
+SPENT = {"acceptance": "it was run once, for #201, and stays that claim's evidence"}
+"""Frozen corpora already run: their outcomes are known, so they are never run again."""
 OBJECTS = 5
 """Objects per round: the legacy demo's ``spawn_count``."""
 JOBS = 16
@@ -221,7 +233,30 @@ def _provenance() -> dict[str, Any]:
         "sources": recycling.sources(),
         "load": list(os.getloadavg()),
         "cpus": os.cpu_count(),
+        "host": {
+            "platform": platform.platform(),
+            "python": platform.python_version(),
+            "cpu": _cpu_model(),
+        },
     }
+
+
+def _cpu_model() -> str:
+    """The CPU's model name, as the OS reports it, or ``unknown``."""
+    try:
+        if sys.platform == "darwin":
+            return subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.brand_string"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("model name"):
+                return line.split(":", 1)[1].strip()
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    return "unknown"
 
 
 def _round_in_subprocess(seed: int) -> dict[str, Any]:
@@ -336,11 +371,13 @@ def main() -> int:
     if args.corpus is None or args.out is None:
         parser.error("a corpus and an output path are needed")
     seeds = list(CORPORA[args.corpus])
-    if args.corpus == "acceptance":
+    if args.corpus in SPENT:
+        parser.error(f"the {args.corpus} corpus is spent: {SPENT[args.corpus]}")
+    if args.corpus in FROZEN:
         if args.seeds:
-            parser.error("the acceptance corpus runs whole: --seeds is refused")
+            parser.error(f"the {args.corpus} corpus runs whole: --seeds is refused")
         if _provenance()["dirty"]:
-            parser.error("the acceptance corpus runs from a clean tree")
+            parser.error(f"the {args.corpus} corpus runs from a clean tree")
     elif args.seeds:
         chosen = [int(s) for s in args.seeds.split(",")]
         if not set(chosen) <= set(seeds):

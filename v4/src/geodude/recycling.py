@@ -68,6 +68,7 @@ from ssrobot import (
     Pose,
     RobotContext,
     RobotPackage,
+    SceneSnapshot,
     WrenchGuard,
     WrenchPart,
     load_installed_package,
@@ -218,6 +219,19 @@ def planners(package: RobotPackage, arm: Arm) -> tuple[Planner, Planner]:
         )
 
     return make(), make(max_iterations=CHECK_ITERATIONS)
+
+
+def warm_planning(ctx: RobotContext, snapshot: SceneSnapshot, arms: Sequence[Arm]) -> float:
+    """Build each of ``arms``' planning model and native collision scene now, from
+    ``snapshot``, before any skill starts, and return the wall-clock seconds it took.
+    ssrobot keeps one of each per group, whatever the clearance (ssrobot#182), so every
+    later plan reuses them. Without this, the first plan for each arm builds them while
+    the robot waits: 0.66 s for both arms on the measurement host (#224). It moves that
+    work to bring-up; it does not remove it."""
+    began = time.perf_counter()
+    for arm in arms:
+        ctx.planning_scene(snapshot, arm.manipulator)
+    return time.perf_counter() - began
 
 
 def object_pose(ctx: RobotContext, name: str) -> Pose:
@@ -559,8 +573,9 @@ def demo(
     if to not in DESTINATIONS:
         raise ValueError(f"no destination {to!r}; one of {DESTINATIONS}")
     obj = "can_0"
-    ctx.snapshot()
+    start = ctx.snapshot()
     arm = arm_for(object_pose(ctx, obj).position)
+    warm_planning(ctx, start, [arm])
     chosen = planners(package, arm)
     picked = pick(ctx, obj, arm=arm, planners=chosen, tick=tick)
     after: SkillResult | None = None
@@ -759,6 +774,7 @@ def recycle(
     object's turn comes. Both are for comparison."""
     arms = {side: planners(package, Arm(side)) for side in BIN_OF}
     start = ctx.snapshot()
+    warm_planning(ctx, start, [Arm(side) for side in BIN_OF])
     opened = {  # every gripper starts open; a release opens it again
         side: {j: start.position(j) for j in ctx.description.gripper(Arm(side).gripper).joints}
         for side in BIN_OF

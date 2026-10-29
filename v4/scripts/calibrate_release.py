@@ -1,15 +1,16 @@
-"""How far an object released by the 2F-140 strays sideways before it falls past a bin's
-rim (#237).
+"""How far an object released above a bin's rim by the 2F-140 strays sideways before it
+falls past the rim (#237).
 
-A drop zone keeps the held object's footprint inside the bin's opening, but the release
-itself moves it: the pads let go of one side first, so the object tilts and drifts as it
-slides out, and a corner that sweeps past the opening's edge before the object's bottom
-has fallen below the rim strikes it. This script measures that sweep, away from any bin.
+The release itself moves an object: the pads let go of one side first, so it tilts and
+drifts as it slides out, and a corner that sweeps over the rim before the object's bottom
+has fallen below it strikes the rim. This script measures that sweep, away from any bin.
+It is why ``regions.held_drop_zones`` releases below the rim instead.
 
 Each trial stages one object of a legacy type (``recycling.MIX_KINDS``) at a seed, with
 the bins staged far out of reach, and runs the demo's own skills on it: ``pick``, then
-``drop`` with ``held_drop_spec``, whose zones are computed over the bin's real base as
-the demo's are. Nothing is there to strike, so the object falls freely. From the start of
+``drop`` from the legacy zone over the bin's real base (``recycling.drop_spec``), which
+releases ``max(0.25, height + 0.10)`` above the rim. Nothing is there to strike, so the
+object falls freely. From the start of
 the drop's ``release`` stage until the object's lowest corner falls below the rim's
 height, every physics step is read, and the trial records:
 - ``sweep_m``: the most any side of the footprint (the bounding box of the object's
@@ -149,9 +150,7 @@ def trial(kind: str, seed: int) -> dict[str, Any]:
             picked = recycling.pick(ctx, obj, arm=arm, planners=planners)
             if not picked.succeeded:
                 return {**out, "outcome": "not picked"}
-            spec = recycling.held_drop_spec(ctx, recycling.drop_spec(obj, arm), arm)
-            if spec is None:
-                return {**out, "outcome": "no zone"}
+            spec = recycling.drop_spec(obj, arm)
             dropped = recycling.drive(
                 ctx, drop(ctx, planners[0], spec, check_planner=planners[1]), lambda: None
             )

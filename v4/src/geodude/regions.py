@@ -28,6 +28,11 @@ MIN_SIDE_DEPTH_M = 0.099
 the modelled 2F-140's fingers stay parallel; its deep (84 mm) grasps fold them, and the can
 slips in the carry (sstsr#189, geodude_assets#36). Over 100 seeds of four cans, racing,
 with no clearance: 344 cans recycled against 313 with every depth."""
+OPEN_HAND_HALF_M = (0.0375, 0.105)
+"""Half the fully open 2F-140's extent across its grasp site's x and y (y the fingers'
+axis): the bounding boxes of geodude_assets' gripper collision geoms, open as the robot
+starts, in the grasp site's frame. Its reach along the approach is sstsr's
+``Robotiq2F140.finger_length``, measured from the same model."""
 
 
 def matrix(pose: Pose) -> np.ndarray:
@@ -142,11 +147,21 @@ def held_drop_zones(
     clearance: float,
 ) -> list[Tsr]:
     """Where to release an object with ``held`` geometry, held at ``grasp`` (its pose in
-    the end effector's frame), over an upright open box standing at ``base``, so that
-    it falls clear of the rim: the end effector pointing straight down, at the legacy
-    drop zone's height (``drop_zone``), at each yaw a multiple of a quarter turn, and
-    only where the held object's footprint lies inside the box's inner walls by
-    ``clearance``. A cylinder's footprint is its bounding box's.
+    the end effector's frame), into an upright open box standing at ``base``, so that no
+    part of it can come to rest on the rim: the end effector pointing straight down, low
+    enough that the object's lowest point is ``clearance`` below the rim, at each yaw a
+    multiple of a quarter turn, and only where the held object's footprint lies inside
+    the box's inner walls by ``clearance``. Where the open fingers then reach below the
+    rim too, the open hand's footprint (``OPEN_HAND_HALF_M``) must also lie inside them.
+    A cylinder's footprint is its bounding box's.
+
+    Released above the rim, an object strays sideways as the pads let go of one side
+    first, by up to 12 mm before it falls past the rim (``scripts/calibrate_release.py``,
+    83 free releases): a corner that strays over the rim strikes it. Seed 0's pop-tarts
+    case, released 4.7 mm inside the walls and 3.6 cm above the rim, swept 1 cm onto it
+    and wedged there (#237). A margin of that sweep leaves no zone for a horizontally held
+    0.21 m bottle or box in the 0.238 m opening. Released below the rim, a straying
+    corner meets the inner wall's face instead, and slides down it.
 
     The legacy zone lets the hand anywhere within ``drop_zone_margin`` of the walls at
     any yaw, whatever it holds. Over #201's development corpus, the 11 objects released
@@ -166,13 +181,20 @@ def held_drop_zones(
     in_hand = in_hand[:3, :3] @ corners + in_hand[:3, 3:4]  # the object's corners, hand frame
     down = np.diag([1.0, -1.0, -1.0])  # the hand's z pointing down, its x along the world's
     x, y, z = base
-    above = float(outer[2]) + max(0.25, height(held) + 0.10)
+    rim = z + float(outer[2])
+    lowest = float((down @ in_hand)[2].min())  # the object's lowest point, from the hand
+    hand_z = rim - clearance - lowest
+    reaches = hand_z - Robotiq2F140().finger_length < rim + clearance
+    hx, hy = OPEN_HAND_HALF_M
+    hand = np.array([[sx * hx, sy * hy, 0.0] for sx in (-1, 1) for sy in (-1, 1)]).T
     zones = []
     for quarter in range(4):
         yaw = quarter * math.pi / 2
         c, s = math.cos(yaw), math.sin(yaw)
         turned = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]) @ down
         footprint = turned @ in_hand  # each corner's offset from the hand, in the world
+        if reaches:  # the open fingers must clear the walls as well
+            footprint = np.hstack([footprint, turned @ hand])
         bounds = []
         for axis in range(2):
             limit = float(inner[axis]) / 2 - clearance
@@ -185,12 +207,12 @@ def held_drop_zones(
         offset[:3, :3] = turned
         zones.append(
             Tsr(  # bounds in the world's axes: the origin is unturned, the hand's turn offset
-                origin=Pose(position=(x, y, z + above), quat_wxyz=(1.0, 0.0, 0.0, 0.0)),
+                origin=Pose(position=(x, y, hand_z), quat_wxyz=(1.0, 0.0, 0.0, 0.0)),
                 offset=pose(offset),
                 position_bounds=(
                     (bounds[0][0], bounds[0][1]),
                     (bounds[1][0], bounds[1][1]),
-                    (-0.05, 0.02),
+                    (0.0, 0.0),
                 ),
                 rotation_bounds=((0.0, 0.0), (0.0, 0.0), (0.0, 0.0)),
             )

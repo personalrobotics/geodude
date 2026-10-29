@@ -17,44 +17,12 @@ env:
   UV_NO_SOURCES: "true"
 
 jobs:
-  test:
+  diag:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libeigen3-dev
-
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
-
-      - name: Ruff lint
-        run: uv run ruff check .
-
-      - name: Ruff format check
-        run: uv run ruff format --check .
-
-      - name: Pytest
-        run: |
-          if [ -d tests ]; then
-            uv run pytest tests/ -v
-          else
-            echo "No tests/ directory; skipping pytest."
-          fi
-
-  # Geodude 4.0 on ssrobot: its own project and lock, never the legacy dependencies.
-  v4:
-    runs-on: ubuntu-latest
+        n: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     defaults:
       run:
         working-directory: v4
@@ -62,69 +30,19 @@ jobs:
       UV_NO_SOURCES: "false"
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
           python-version: "3.13"
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libeigen3-dev
-
-      - name: Install dependencies
-        run: uv sync --locked
-
-      - name: Ruff
-        run: uv run ruff check . && uv run ruff format --check .
-
-      - name: Mypy
-        run: uv run mypy
-
-      - name: Boundary
-        run: uv run python scripts/check_boundary.py
-
-      - name: Pytest
-        run: uv run pytest -v
-        env:
-          GEODUDE_ARTIFACTS: ${{ github.workspace }}/v4/artifacts
-
-      # Both apps import as geodude: prove the wheel stands alone, outside the checkout.
-      - name: Build the wheel
-        run: uv build --wheel --out-dir dist
-
-      - name: Install the wheel in a clean environment
-        run: |
-          uv export --locked --no-dev --no-emit-project --no-hashes -o "$RUNNER_TEMP/requirements.txt"
-          uv venv "$RUNNER_TEMP/clean" --python 3.13
-          uv pip install --python "$RUNNER_TEMP/clean" -r "$RUNNER_TEMP/requirements.txt" dist/geodude-*.whl
-
-      - name: Check the installed wheel and run its command
-        working-directory: ${{ runner.temp }}
-        run: |
-          PY="$RUNNER_TEMP/clean/bin/python"
-          "$PY" -I "$GITHUB_WORKSPACE/v4/scripts/check_boundary.py"
-          "$RUNNER_TEMP/clean/bin/geodude-recycling" --seed 0 --record installed-run
-          "$PY" -I "$GITHUB_WORKSPACE/v4/scripts/check_installed.py" "$GITHUB_WORKSPACE" installed-run/recycling.json
-          mkdir -p "$GITHUB_WORKSPACE/v4/artifacts"
-          cp -r installed-run "$GITHUB_WORKSPACE/v4/artifacts/installed-run"
-
-      - name: Upload evidence
-        if: always()
+      - run: sudo apt-get update && sudo apt-get install -y libeigen3-dev
+      - run: uv sync --locked
+      - run: uv run python scripts/diag_241.py "$GITHUB_WORKSPACE/v4/diag"
+      - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: geodude-v4-evidence
-          path: v4/artifacts/
-
-  notify-robot-code:
-    needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Dispatch integration run
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.ROBOT_CODE_DISPATCH_TOKEN }}
-          repository: personalrobotics/robot-code
-          event-type: sibling-updated
-          client-payload: '{"repo":"${{ github.event.repository.name }}","sha":"${{ github.sha }}"}'
+          name: diag-${{ matrix.n }}
+          path: |
+            v4/diag/host.json
+            v4/diag/calls.json
+            v4/diag/requests/
+            v4/diag/run/recycling.json

@@ -76,12 +76,18 @@ def height(geometry: Mapping[str, Any]) -> float:
     return float(geometry["height"] if geometry["type"] == "cylinder" else geometry["size"][2])
 
 
-def pregrasps(geometry: Mapping[str, Any], centre: Pose) -> list[Tsr]:
+def pregrasps(geometry: Mapping[str, Any], centre: Pose, clearance: float) -> list[Tsr]:
     """sstsr's grasps of an object with ``geometry`` (prl_assets ``geometric_properties``)
     standing at ``centre``, the families the legacy demo uses: a cylinder from the side,
     no deeper than ``MIN_SIDE_DEPTH_M``; a box on its x and y faces, from the top, and
     from the bottom. Each is backed off by ``STANDOFF_M`` along its approach. sstsr frames
-    a grasped object at the middle of its base."""
+    a grasped object at the middle of its base.
+
+    A box's grasps keep their fingertips at least ``clearance`` off its edges and its far
+    face, as well as sstsr's default margin, a tenth of the fingers' reach into the box:
+    closed from the top on a 28 mm gelatin box, that default left the fingertips 2.8 mm
+    above its base, and the four-bar fingers, swinging forward as they close, came to
+    rest on the worktop, so the lift started in contact with it (#237)."""
     hand = Robotiq2F140()
     if geometry["type"] == "cylinder":
         templates = [
@@ -91,14 +97,16 @@ def pregrasps(geometry: Mapping[str, Any], centre: Pose) -> list[Tsr]:
         ]
     elif geometry["type"] == "box":
         templates = []
-        for family in (
-            hand.grasp_box_face_x,
-            hand.grasp_box_face_y,
-            hand.grasp_box_top,
-            hand.grasp_box_bottom,
+        for family, axis in (
+            (hand.grasp_box_face_x, 0),
+            (hand.grasp_box_face_y, 1),
+            (hand.grasp_box_top, 2),
+            (hand.grasp_box_bottom, 2),
         ):
+            extent = float(geometry["size"][axis])  # the box's extent along the approach
+            margin = max(clearance, hand.clearance_fraction * min(hand.finger_length, extent))
             try:
-                templates += family(*geometry["size"])
+                templates += family(*geometry["size"], clearance=margin)
             except ValueError:  # no grasp of this family fits the gripper
                 continue
     else:

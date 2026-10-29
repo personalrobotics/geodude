@@ -33,6 +33,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Sequence
+from concurrent.futures import FIRST_COMPLETED, wait
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -937,7 +938,10 @@ def _drop_racing_next(
     tick: Callable[[], None],
 ) -> Candidates | None:
     """Drive ``dropping`` to its end; once its transfer is executing, start ``race_next``
-    on it. Returns the race, possibly still planning."""
+    on it. Returns the race, possibly still planning. As ``run_together`` does, while
+    every unfinished one waits only on a plan made on a worker and not yet ready, the
+    clock does not step: the run's timeline does not depend on how long planning
+    takes."""
     pending: Candidates | None = None
     dropping.advance()
     for _ in range(MAX_TICKS):
@@ -947,8 +951,12 @@ def _drop_racing_next(
         if pending is None and race_next is not None and dropping.stage == "transfer" and active:
             pending = race_next(active)
             pending.advance()
-        ctx.step()
-        tick()
+        planning = [x.planning for x in (dropping, pending) if x is not None and not x.done]
+        if all(planning):
+            wait([f for futures in planning for f in futures], return_when=FIRST_COMPLETED)
+        else:
+            ctx.step()
+            tick()
         dropping.advance()
         if pending is not None:
             pending.advance()

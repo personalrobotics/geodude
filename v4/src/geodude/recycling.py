@@ -459,6 +459,23 @@ def _stages(result: SkillResult | None) -> list[list[Any]] | None:
     return None if result is None else [[s.name, s.succeeded] for s in result.stages]
 
 
+def _times(
+    picked: SkillResult, dropped: SkillResult | None, landed: SkillResult | None
+) -> dict[str, int | None]:
+    """When, on the runtime clock, an attempt's grasp recorded its first stage, its drop
+    released, and its landing was judged."""
+    released = (
+        None
+        if dropped is None
+        else next((s.time_ns for s in dropped.stages if s.name == "release"), None)
+    )
+    return {
+        "grasp": picked.stages[0].time_ns if picked.stages else None,
+        "released": released,
+        "landed": landed.stages[-1].time_ns if landed is not None and landed.stages else None,
+    }
+
+
 def _failure(*results: SkillResult | None) -> dict[str, Any] | None:
     """The stage that decided the first of ``results`` that did not succeed: its skill,
     name, detail, and evidence kind. None when every result present succeeded."""
@@ -577,6 +594,7 @@ def bin_outcome(
         "to": "bin",
         "object": obj,
         "bin": {"name": name, "base": list(base)},
+        "times_ns": _times(picked, dropped, landed),
         "grasp": _stages(picked),
         "drop": _stages(dropped),
         "landing": _stages(landed),

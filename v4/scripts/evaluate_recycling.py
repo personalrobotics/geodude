@@ -11,6 +11,9 @@ artifact:
 - per round: the staged objects and their poses, and per staged object every attempt's
   outcome, with the deciding stage's detail and any recovery, where it finally rests,
   and its verdict (``verdict``);
+- per round, on the runtime clock (``timing``): how long it ran, and how much of that
+  no command was active; and the same per staged object, from its first grasp's first
+  stage to its last attempt's landing judged, or else its release or grasp;
 - the totals the bar is stated in: objects recycled, judged by where each finally rests,
   out of every object staged, including any never attempted because its round stopped;
   how many of them at the first attempt; and rounds cleared.
@@ -57,7 +60,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-FORMAT = 2
+FORMAT = 3
 """The evaluation artifact's format: raised whenever a field's meaning changes. 2: per
 object, its attempts, where it finally rests, and its verdict, in place of one outcome
 and its mechanism."""
@@ -95,8 +98,11 @@ def run_round(seed: int) -> dict[str, Any]:
             seed=seed,
         )
         staged = json.loads((scene.parent / "manifest.json").read_text())["objects"]
-        with RobotContext(package.description, recycling.runtime(package, scene)) as ctx:
+        idle = Idle()
+        runtime = recycling.runtime(package, scene)
+        with RobotContext(package.description, runtime, sinks=[idle]) as ctx:
             result = recycling.sort_all(ctx, package)
+            ended = ctx.now.time_ns
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return {
@@ -104,7 +110,53 @@ def run_round(seed: int) -> dict[str, Any]:
         "staged": staged,
         "outcomes": result["attempts"],
         "final": result["objects"],
+        "timing": _timing(result["attempts"], idle.intervals, ended),
     }
+
+
+class Idle:
+    """A trace sink: the intervals of runtime time in which no command was active."""
+
+    def __init__(self) -> None:
+        self.active: set[str] = set()
+        self.intervals: list[list[int]] = []
+        self.time_ns = 0
+
+    def __call__(self, record: Any) -> None:
+        from ssrobot import TraceKind
+
+        if record.kind is TraceKind.SUBMITTED:
+            self.active.add(record.payload.execution)
+        elif record.kind is TraceKind.STATUS and record.payload.state.terminal:
+            self.active.discard(record.payload.execution)
+        elif record.kind is TraceKind.STEPPED:
+            if not self.active:
+                if self.intervals and self.intervals[-1][1] == self.time_ns:
+                    self.intervals[-1][1] = record.time_ns
+                else:
+                    self.intervals.append([self.time_ns, record.time_ns])
+            self.time_ns = record.time_ns
+
+
+def _idle_within(intervals: list[list[int]], start: int, end: int) -> int:
+    return sum(max(0, min(b, end) - max(a, start)) for a, b in intervals)
+
+
+def _timing(attempts: list[dict[str, Any]], idle: list[list[int]], ended: int) -> dict[str, Any]:
+    """How long the round ran and how much of it no command was active, in total and per
+    attempted object (see the module)."""
+    objects: dict[str, Any] = {}
+    for attempt in attempts:
+        times = attempt.get("times_ns") or {}
+        if times.get("grasp") is None:
+            continue
+        end = times["landed"] or times["released"] or times["grasp"]
+        span = objects.setdefault(attempt["object"], {"start_ns": times["grasp"]})
+        span["end_ns"] = end
+    for span in objects.values():
+        span["sim_ns"] = span["end_ns"] - span["start_ns"]
+        span["idle_ns"] = _idle_within(idle, span["start_ns"], span["end_ns"])
+    return {"sim_ns": ended, "idle_ns": _idle_within(idle, 0, ended), "objects": objects}
 
 
 def _timed_out(round_: dict[str, Any]) -> bool:
@@ -191,6 +243,8 @@ def _summary(rounds: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "rounds": len(rounds),
         "rounds_cleared": cleared,
+        "sim_ns": sum(r["timing"]["sim_ns"] for r in rounds),
+        "idle_ns": sum(r["timing"]["idle_ns"] for r in rounds),
         "by_kind": {
             k: {"recycled": c[True], "staged": c[True] + c[False]} for k, c in sorted(kinds.items())
         },

@@ -32,8 +32,11 @@ two frozen corpora, each run once, whole, from a clean tree, on the reference Op
 kernel (``recycling.REFERENCE_BLAS_KERNEL``, selected with ``OPENBLAS_CORETYPE``), or not
 at all:
 - ``acceptance`` (seeds 1000-1039) was #201's, and is spent: it is refused;
-- ``cutover`` (seeds 2000-2039) is the Geodude 4.0 cutover's (#213), run once on its
-  final pins::
+- ``cutover`` (seeds 2000-2039) was the Geodude 4.0 cutover's (#213), and is spent: it
+  is refused. Its evaluation is ``evidence/cutover/``.
+
+A spent corpus's seeds are refused one at a time too (``--round``). The development
+corpus runs as::
 
     uv run python scripts/evaluate_recycling.py development out/development.json
 
@@ -71,7 +74,10 @@ CORPORA = {
 }
 FROZEN = {"acceptance", "cutover"}
 """Corpora that run once, whole, from a clean tree."""
-SPENT = {"acceptance": "it was run once, for #201, and stays that claim's evidence"}
+SPENT = {
+    "acceptance": "it was run once, for #201, and stays that claim's evidence",
+    "cutover": "it was run once, for #213, and stays that claim's evidence (evidence/cutover/)",
+}
 """Frozen corpora already run: their outcomes are known, so they are never run again."""
 OBJECTS = 5
 """Objects per round: the legacy demo's ``spawn_count``."""
@@ -416,6 +422,9 @@ def main() -> int:
     )
     args = parser.parse_args()
     if args.round is not None:
+        for corpus, reason in SPENT.items():
+            if args.round in CORPORA[corpus]:
+                parser.error(f"seed {args.round} is of the spent {corpus} corpus: {reason}")
         print(json.dumps(run_round(args.round)))
         return 0
     if args.classify is not None:

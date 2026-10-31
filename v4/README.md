@@ -174,10 +174,11 @@ it, such as no arm finding a feasible prefix, and the record preserves the evide
 needed to diagnose it. `scripts/evaluate_recycling.py` measures reliability over fixed
 corpora of rounds (personalrobotics/geodude#201): `development`, seeds 0-39, for
 diagnosis and every fix, and two frozen corpora, each run once, whole, from a clean
-tree: `acceptance`, seeds 1000-1039, #201's, now spent, and `cutover`, seeds 2000-2039,
-for the Geodude 4.0 cutover (#213), on the Haswell kernel. On the development
-corpus, on the Haswell kernel, 190 of 200 objects are recycled and 37 of 40 rounds
-cleared.
+tree: `acceptance`, seeds 1000-1039, #201's, and `cutover`, seeds 2000-2039, the Geodude
+4.0 cutover's (#213), on the Haswell kernel. Both are spent. On the cutover corpus, 199
+of 200 objects were recycled and 39 of 40 rounds cleared; its evaluation is
+[`evidence/cutover/`](evidence/cutover/). On the development corpus, on the Haswell
+kernel, 191 of 200 objects are recycled and 38 of 40 rounds cleared.
 
 ## Development
 

@@ -45,6 +45,7 @@ from ssgrasping import (
     Candidate,
     Candidates,
     DropSpec,
+    Follow,
     GraspSpec,
     LandingSpec,
     Lookahead,
@@ -57,6 +58,7 @@ from ssgrasping import (
     place,
     run_together,
 )
+from ssgrasping.drop import transfer_request
 from ssrobot import (
     ClockMode,
     Execution,
@@ -67,10 +69,13 @@ from ssrobot import (
     JsonlTrace,
     ObservationRequest,
     Planner,
+    PlanningRequest,
     Pose,
+    PredictedSnapshot,
     RobotContext,
     RobotPackage,
     SceneSnapshot,
+    ValidationError,
     WrenchGuard,
     WrenchPart,
     load_installed_package,
@@ -399,22 +404,53 @@ NO_ZONE = {
 """The failure recorded when ``held_drop_spec`` finds no zone: nothing was dropped."""
 
 
-def held_drop_spec(ctx: RobotContext, raced: DropSpec, arm: Arm) -> DropSpec | None:
+def held_drop_spec(
+    ctx: RobotContext, raced: DropSpec, arm: Arm, transform: Pose | None = None
+) -> DropSpec | None:
     """``raced``, the drop the race planned with the legacy zone (``drop_spec``), over the
-    zones where the object, as it is now held, falls clear of the bin's rim
-    (``regions.held_drop_zones``), a ``CLEARANCE_M`` inside its walls. None when no zone
-    fits: the object, held so, cannot be dropped clear of the rim."""
-    attachment = ctx.scene.attachment(raced.object)
-    assert attachment is not None  # a grasp that succeeded left it attached
+    zones where the object, held at ``transform`` (by default, as it is now held), falls
+    clear of the bin's rim (``regions.held_drop_zones``), a ``CLEARANCE_M`` inside its
+    walls. None when no zone fits: the object, held so, cannot be dropped clear of the
+    rim."""
+    if transform is None:
+        attachment = ctx.scene.attachment(raced.object)
+        assert attachment is not None  # a grasp that succeeded left it attached
+        transform = attachment.transform
     name, base = arm.bin
     zones = regions.held_drop_zones(
         meta(kind_of(name)),
         base,
         meta(kind_of(raced.object))["geometric_properties"],
-        attachment.transform,
+        transform,
         CLEARANCE_M,
     )
     return dataclasses.replace(raced, regions=zones) if zones else None
+
+
+def transfer_follow(ctx: RobotContext, raced: DropSpec, arm: Arm, planner: Planner) -> Follow:
+    """The drop's transfer, for the grasp to plan while its lift runs (ssgrasping's
+    ``Follow``): into ``held_drop_spec``'s zones for the object as the lift's prediction
+    holds it, the transform the drop will find. No zone fits, and nothing is planned
+    ahead, when the object held so cannot be dropped clear of the rim."""
+
+    def request(prediction: PredictedSnapshot) -> PlanningRequest:
+        held = next(a for a in prediction.state.attachments if a.object == raced.object)
+        spec = held_drop_spec(ctx, raced, arm, held.transform)
+        if spec is None:
+            raise ValidationError(
+                "no_drop_zone", "no drop zone fits the object as it is held", path="transfer"
+            )
+        return transfer_request(ctx, spec)(prediction)
+
+    return Follow("transfer", request, planner)
+
+
+def _abandon(ahead: Any) -> None:
+    """Stop a transfer planned ahead that no drop will continue, and wait until its
+    planner is free again."""
+    if ahead is not None:
+        ahead.cancel()
+        ahead.future.result()
 
 
 def landing_spec(obj: str, arm: Arm) -> LandingSpec:
@@ -869,16 +905,27 @@ def recycle(
         arm = Arm(selection.candidate.label)
         planner, checker = arms[arm.side]
         looking = Lookahead(unsettled=tuple(released)) if lookahead else None
-        picked = drive(ctx, selection.grasp(ctx, lookahead=looking), stepped)
+        raced = selection.candidate.drop
+        assert raced is not None  # every candidate drops
+        follow = transfer_follow(ctx, raced, arm, planner) if lookahead else None
+        grasping = selection.grasp(ctx, lookahead=looking, follow=follow)
+        picked = drive(ctx, grasping, stepped)
         dropped = None
         spec = None
         if picked.succeeded:
-            raced = selection.candidate.drop
-            assert raced is not None  # every candidate drops
             spec = held_drop_spec(ctx, raced, arm)
-        if spec is not None:
+        if spec is None:
+            _abandon(grasping.upcoming)
+        else:
             following = queue[i + 1] if lookahead and i + 1 < len(queue) else None
-            dropping = drop(ctx, planner, spec, check_planner=checker, lookahead=looking)
+            dropping = drop(
+                ctx,
+                planner,
+                spec,
+                check_planner=checker,
+                lookahead=looking,
+                planned=grasping.upcoming,
+            )
 
             def race_next(
                 transfer: Execution,

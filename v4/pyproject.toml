@@ -19,13 +19,13 @@ dependencies = [
     # default margin (sstsr#193, #195).
     "sstsr==4.1.0",
     # Pinned by commit: the contracts and skills this app is proven against.
-    "ssrobot[mujoco,planning] @ git+https://github.com/personalrobotics/ssrobot@6445900f339f4d5a82566e3647c1b42396dbe1a2",
-    "ssgrasping @ git+https://github.com/personalrobotics/ssgrasping@8d8cd078eb75e59f5c54cde27b5a861317cb8903",
+    "ssrobot[mujoco,planning] @ git+https://github.com/personalrobotics/ssrobot@9a0195b9b516560bf8ce6af0b9789c1488979306",
+    "ssgrasping @ git+https://github.com/personalrobotics/ssgrasping@cec3d5533a9e756674062b8344d8edadb15ddeba",
     "prl-assets @ git+https://github.com/personalrobotics/prl_assets@6b6b4439ba71365409c4b7ff4b6a1f31fbca1411",
     # The 2F-140 driven like the real gripper (geodude_assets#38), with its declared
     # completion detector (#40), and each pad's torsional friction its contact face's
-    # (#41). One commit past ssrobot's reference pin for Geodude (references/robots.toml).
-    "geodude-assets @ git+https://github.com/personalrobotics/geodude_assets@d139e8c06e9d9a2f2c3bce30bd867e7e937c1ad4",
+    # (#41), and its MuJoCo rest criteria (#46): ssrobot's reference pin for Geodude.
+    "geodude-assets @ git+https://github.com/personalrobotics/geodude_assets@e7be8b437cd954285a9fb515a6de39fb94b3fc42",
 ]
 
 [project.scripts]

@@ -1,0 +1,68 @@
+commit 3bddbef9933ed12802a00d80b6de9e6f0e102086 dirty=0
+cwd /home/siddh/code/geodude-cutover/v4
+command OPENBLAS_CORETYPE=Haswell ~/.local/bin/uv run --locked python scripts/evaluate_recycling.py cutover runs/20261031-070726-cutover.json
+ 07:07:26 up 8 days, 53 min,  2 users,  load average: 0.15, 0.05, 0.33
+64
+geodude             4.0.0.dev0      /home/siddh/code/geodude-cutover/v4
+geodude-assets      0.1.0
+mujoco              3.14.0
+numpy               2.5.4
+prl-assets          0.1.0
+sscbirrt            3.15.0
+ssgrasping          0.0.1
+ssik                8.2.0
+ssrobot             0.0.0
+sstsr               4.1.0
+{
+ "objects_staged": 200,
+ "objects_recycled": 199,
+ "recycled_at_first_attempt": 197,
+ "recycled_after_retry": 0,
+ "recycled_after_recovery": 2,
+ "rounds": 40,
+ "rounds_cleared": 39,
+ "sim_ns": 1320678000000,
+ "idle_ns": 107992000000,
+ "by_kind": {
+  "can": {
+   "recycled": 22,
+   "staged": 22
+  },
+  "cracker_box": {
+   "recycled": 20,
+   "staged": 20
+  },
+  "fuze_bottle": {
+   "recycled": 19,
+   "staged": 19
+  },
+  "gelatin_box": {
+   "recycled": 21,
+   "staged": 21
+  },
+  "plastic_glass": {
+   "recycled": 26,
+   "staged": 26
+  },
+  "pocky_box": {
+   "recycled": 21,
+   "staged": 21
+  },
+  "pop_tarts_case": {
+   "recycled": 23,
+   "staged": 24
+  },
+  "spam_can": {
+   "recycled": 15,
+   "staged": 15
+  },
+  "sugar_box": {
+   "recycled": 32,
+   "staged": 32
+  }
+ },
+ "mechanisms": {
+  "no_arm_plans:approach+lift+pregrasp": 1
+ }
+}
+EXIT=0

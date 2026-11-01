@@ -49,6 +49,7 @@ from ssgrasping import (
     LandingSpec,
     Lookahead,
     PlaceSpec,
+    Reason,
     SkillExecution,
     SkillResult,
     drop,
@@ -393,10 +394,13 @@ def drop_spec(obj: str, arm: Arm) -> DropSpec:
 NO_ZONE = {
     "skill": "drop",
     "stage": "zone",
+    "reason": "no_drop_zone",
+    "cause": None,
     "detail": "no drop zone fits the object as it is held",
     "evidence": "planned",
 }
-"""The failure recorded when ``held_drop_spec`` finds no zone: nothing was dropped."""
+"""The failure recorded when ``held_drop_spec`` finds no zone: nothing was dropped. Its
+held and attached state are the grasp's, as it ended."""
 
 
 def held_drop_spec(ctx: RobotContext, raced: DropSpec, arm: Arm) -> DropSpec | None:
@@ -478,15 +482,20 @@ def _times(
 
 def _failure(*results: SkillResult | None) -> dict[str, Any] | None:
     """The stage that decided the first of ``results`` that did not succeed: its skill,
-    name, detail, and evidence kind. None when every result present succeeded."""
+    name, reason and cause, detail, evidence kind, and whether the object was then held
+    and declared attached. None when every result present succeeded."""
     for result in results:
         if result is not None and not result.succeeded:
             stage = result.stage
             return {
                 "skill": result.skill,
                 "stage": stage.name,
+                "reason": None if stage.reason is None else stage.reason.value,
+                "cause": stage.cause,
                 "detail": stage.detail,
                 "evidence": stage.evidence.value,
+                "held": stage.held,
+                "attached": stage.attached,
             }
     return None
 
@@ -712,6 +721,21 @@ def _release(
     return None
 
 
+def safe_release(failure: dict[str, Any] | None) -> str | None:
+    """Where an object still held after ``failure`` (from ``bin_outcome``) may be released:
+    ``RELEASE_IN_PLACE``, ``RELEASE_OVER_BIN``, or None, nowhere known (``recover``). By
+    the failed stage, its reason, and the object still declared attached; never by its
+    detail, which is prose."""
+    if failure is None or not failure["attached"]:
+        return None
+    where = (failure["skill"], failure["stage"], failure["reason"])
+    if where == ("grasp", "lift", Reason.NOT_PLANNED):
+        return RELEASE_IN_PLACE
+    if where == ("drop", "release", Reason.ATTACHMENT_LOST):
+        return RELEASE_OVER_BIN
+    return None
+
+
 def recover(
     ctx: RobotContext,
     obj: str,
@@ -722,25 +746,23 @@ def recover(
     tick: Callable[[], None],
 ) -> dict[str, Any]:
     """After an attempt that failed with ``obj`` still attached, release it where that is
-    safe, by the failed stage (``failure``, from ``bin_outcome``), a narrow slice of
-    personalrobotics/geodude#210's recovery:
-    - **A lift that did not plan** (``grasp.lift``, planning): the arm never moved after
-      closing, so the object still rests where it was grasped, on its support. Open,
-      detach once the fingers have opened, and back the hand out along its approach by
-      ``spec.approach_m``.
-    - **A carry the attachment monitor saw the object leave** (``drop.release``): the
-      transfer ended with the hand over the bin, in a zone the object, as held, fits
-      (``held_drop_spec``). Open there, and detach once the fingers have opened; where
-      the object comes to rest is then observed (``landing``).
+    safe (``safe_release``), a narrow slice of personalrobotics/geodude#210's recovery:
+    - **A lift that did not plan** (``grasp.lift``, ``not_planned``): the arm never moved
+      after closing, so the object still rests where it was grasped, on its support.
+      Open, detach once the fingers have opened, and back the hand out along its approach
+      by ``spec.approach_m``.
+    - **A carry the attachment monitor saw the object leave** (``drop.release``,
+      ``attachment_lost``): the transfer ended with the hand over the bin, in a zone the
+      object, as held, fits (``held_drop_spec``). Open there, and detach once the fingers
+      have opened; where the object comes to rest is then observed (``landing``).
     - **Anything else:** the object may be suspended, or its support unknown, so nothing
       is done, and it stays declared held.
     The fingers are never opened onto nothing known, and ``obj`` is detached only after
     they reached open. Returns what was done: its ``action`` (None when nothing),
     whether ``obj`` was ``released``, and a ``detail``."""
-    skill, stage, detail = (
-        ("", "", "") if failure is None else (failure["skill"], failure["stage"], failure["detail"])
-    )
-    if skill == "grasp" and stage == "lift" and detail.startswith("planning "):
+    skill, stage = ("", "") if failure is None else (failure["skill"], failure["stage"])
+    action = safe_release(failure)
+    if action == RELEASE_IN_PLACE:
         refused = _release(ctx, obj, arm, spec, tick)
         if refused is not None:
             return {"action": RELEASE_IN_PLACE, "released": False, "detail": refused}
@@ -763,7 +785,7 @@ def recover(
             "released": True,
             "detail": f"released where grasped; backed out: {retreat}",
         }
-    if skill == "drop" and stage == "release" and detail.startswith("attachment monitor"):
+    if action == RELEASE_OVER_BIN:
         refused = _release(ctx, obj, arm, spec, tick)
         return {
             "action": RELEASE_OVER_BIN,
@@ -936,7 +958,8 @@ def recycle(
         else:
             entry.update(bin_outcome(ctx, obj, arm, picked, dropped, None))
             if picked.succeeded and spec is None:
-                entry["failure"] = dict(NO_ZONE)
+                ended = picked.stage
+                entry["failure"] = {**NO_ZONE, "held": ended.held, "attached": ended.attached}
         if ctx.scene.attachment(obj) is None:
             continue
         recovery = recover(

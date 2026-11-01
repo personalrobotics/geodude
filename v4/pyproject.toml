@@ -20,7 +20,7 @@ dependencies = [
     "sstsr==4.1.0",
     # Pinned by commit: the contracts and skills this app is proven against.
     "ssrobot[mujoco,planning] @ git+https://github.com/personalrobotics/ssrobot@c1a5c002a52135ce608b8852242e9b34b609feb5",
-    "ssgrasping @ git+https://github.com/personalrobotics/ssgrasping@ca18812333edbc4d15212083b0c85ff80deaea11",
+    "ssgrasping @ git+https://github.com/personalrobotics/ssgrasping@85ed9f593fdb329ab74228e598c43f11372fad1e",
     "prl-assets @ git+https://github.com/personalrobotics/prl_assets@6b6b4439ba71365409c4b7ff4b6a1f31fbca1411",
     # The 2F-140 driven like the real gripper (geodude_assets#38), with its declared
     # completion detector (#40), and each pad's torsional friction its contact face's

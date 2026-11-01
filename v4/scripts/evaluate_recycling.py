@@ -71,8 +71,9 @@ and its mechanism. 3: each round's and object's ``timing``. 4: a failure's ``rea
 ``cause`` (ssgrasping#34) and its ``held`` and ``attached`` state, and each raced plan's
 ``plan_status``; timeouts and mechanisms are judged from these, never from detail. 5:
 each attempt's ``transitions``, the skills' estimates with the attachment monitor's
-``ground_truth`` (ssgrasping#28), and the summary's ``transitions``: how often each
-estimate came with each truth. A carry the object left now fails with
+``reference`` (ssgrasping#28): a privileged reference, not ground truth, which can
+report lost an object still in the hand. The summary's ``transitions`` counts how often
+each estimate came with each reference. A carry the object left now fails with
 ``transition_refuted``, and its recovery detaches the object (``detach the lost
 object``) instead of releasing it over the bin."""
 CORPORA = {
@@ -266,13 +267,13 @@ def _summary(rounds: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _transition_counts(rounds: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
-    """Per transition, how often each estimate came with each ground truth
-    (``estimate/truth``, ``none`` where the simulator had no truth of the object)."""
+    """Per transition, how often each estimate came with each privileged reference
+    (``estimate/reference``, ``none`` where the simulator had no reference)."""
     counts: dict[str, Counter[str]] = {}
     for round_ in rounds:
         for outcome in round_["outcomes"]:
             for t in outcome.get("transitions", []):
-                key = f"{t['outcome']}/{t['ground_truth'] or 'none'}"
+                key = f"{t['outcome']}/{t['reference'] or 'none'}"
                 counts.setdefault(t["transition"], Counter())[key] += 1
     return {k: dict(sorted(c.items())) for k, c in sorted(counts.items())}
 

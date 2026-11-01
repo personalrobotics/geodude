@@ -483,15 +483,15 @@ def _times(
 
 def _transitions(*results: SkillResult | None) -> list[dict[str, Any]]:
     """Every transition the skills estimated, in order: where, the estimate, and, where
-    the simulator had truth of the object, the attachment monitor's (``ground_truth``),
-    for evaluation only."""
+    the simulator had state of the object, the attachment monitor's (``reference``): a
+    privileged reference, not ground truth, for evaluation only."""
     out = []
     for result in results:
         if result is None:
             continue
-        truth = {(e.estimate.stage, e.estimate.transition): e for e in result.evaluations}
+        scored = {(e.estimate.stage, e.estimate.transition): e for e in result.evaluations}
         for t in result.transitions:
-            judged = truth.get((t.stage, t.transition))
+            judged = scored.get((t.stage, t.transition))
             out.append(
                 {
                     "skill": result.skill,
@@ -499,7 +499,8 @@ def _transitions(*results: SkillResult | None) -> list[dict[str, Any]]:
                     "transition": t.transition.value,
                     "outcome": t.outcome.value,
                     "reason": t.reason.value,
-                    "ground_truth": None if judged is None else judged.ground_truth.value,
+                    "reference": None if judged is None else judged.reference.value,
+                    "reference_source": None if judged is None else judged.source,
                 }
             )
     return out
@@ -750,14 +751,17 @@ def _release(
 def safe_release(failure: dict[str, Any] | None) -> str | None:
     """How an object still declared attached after ``failure`` (from ``bin_outcome``) may
     be let go: ``RELEASE_IN_PLACE``, ``RELEASE_LOST``, or None, nowhere known
-    (``recover``). By the failed stage, its reason and cause, and the object still
-    declared attached; never by its detail, which is prose."""
+    (``recover``). By the failed stage, its reason and cause, whether the skill then
+    believed the object held, and the object still declared attached; never by its
+    detail, which is prose. A lost object is detached only if the skill reported it not
+    held (``held`` exactly False)."""
     if failure is None or not failure["attached"]:
         return None
     where = (failure["skill"], failure["stage"], failure["reason"])
     if where == ("grasp", "lift", Reason.NOT_PLANNED):
         return RELEASE_IN_PLACE
-    if (failure["reason"], failure["cause"]) == (Reason.TRANSITION_REFUTED, Transition.RETAINED):
+    lost = (failure["reason"], failure["cause"]) == (Reason.TRANSITION_REFUTED, Transition.RETAINED)
+    if lost and failure["held"] is False:
         return RELEASE_LOST
     return None
 

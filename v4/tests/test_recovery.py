@@ -66,7 +66,9 @@ CASES = (
 def test_release_is_chosen_by_stage_reason_and_attachment_not_detail() -> None:
     for (skill, stage, reason, cause, evidence), today, action in CASES:
         for detail in DETAILS:
-            result = _failed(skill, stage, reason, cause, detail or today, evidence)
+            result = _failed(
+                skill, stage, reason, cause, today if detail is None else detail, evidence
+            )
             assert safe_release(_failure(result)) == action, (skill, stage, detail)
         # The same stage failing otherwise, or with nothing still attached, has no known
         # support to release onto.

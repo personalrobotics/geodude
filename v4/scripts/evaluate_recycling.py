@@ -67,7 +67,9 @@ from typing import Any
 FORMAT = 4
 """The evaluation artifact's format: raised whenever a field's meaning changes. 2: per
 object, its attempts, where it finally rests, and its verdict, in place of one outcome
-and its mechanism."""
+and its mechanism. 3: each round's and object's ``timing``. 4: a failure's ``reason`` and
+``cause`` (ssgrasping#34) and its ``held`` and ``attached`` state, and each raced plan's
+``plan_status``; timeouts and mechanisms are judged from these, never from detail."""
 CORPORA = {
     "development": range(0, 40),
     "acceptance": range(1000, 1040),

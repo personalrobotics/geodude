@@ -141,8 +141,10 @@ Control runs on what a physical robot has: joint, gripper and wrist channels, an
 registration of the objects on the table (#248). Contexts keep registered object poses
 (ssrobot's `ObjectPoses.REGISTERED`), so planning and every decision use the poses last
 registered, never the simulator's. Objects on the table are registered when a round
-begins, before every race planned from a fresh snapshot, and after a recovery, before a
-retry. A dropped object, once its release is confirmed, is assumed to have landed and is
+begins, before a race planned from a fresh snapshot once the scene has changed, and
+after a recovery, before a retry. A grasp that closes on nothing (`missed`) may mean the
+object moved: what was planned ahead is discarded, the table is registered again, and
+the object is retried once. A dropped object, once its release is confirmed, is assumed to have landed and is
 removed from the scene; a placed one is registered again where it rests.
 
 The demo has no perception yet, so registration reads each object's privileged pose
@@ -150,7 +152,8 @@ channel, the simulator's ground truth, as the 3.x demo has always done, and the 
 records that source (`pose_stub`). Privileged state is otherwise read only to evaluate:
 where each object came to rest, and how often an assumed landing was wrong.
 `tests/test_registered_control.py` runs a round with every privileged channel withheld
-and shows the same decisions.
+and shows the same decisions, and moves a can behind registration's back: the grasp
+misses, the table is registered again, and the retry succeeds.
 
 ## Scenes and evidence
 

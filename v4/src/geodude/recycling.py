@@ -961,13 +961,18 @@ def recycle(
     An attempt that fails with the object still attached is recovered by ``recover``. If
     nothing is safe, the round stops there, the object declared held. An object released
     back onto the worktop, upright, is raced again from the current state, up to
-    ``retries`` more times.
+    ``retries`` more times. So is an object the grasp observably missed (``missed``: the
+    fingers closed on nothing), which may have moved since it was registered: whatever
+    was planned ahead is discarded, every free object on the table is registered again,
+    and the object is raced again from a fresh snapshot. Each attempt records the scene
+    revision of the registration its race planned on (``registration``).
 
     Without ``race``, the only candidate is ``arm_for``'s arm; without ``lookahead``,
     nothing is planned during motion, and each race is planned on a snapshot when its
     object's turn comes. Both are for comparison."""
     arms = {side: planners(package, Arm(side)) for side in BIN_OF}
     register(ctx, on_table(ctx), read)
+    registration = ctx.scene.revision  # the table as last registered
     start = ctx.snapshot()
     warm_planning(ctx, start, [Arm(side) for side in BIN_OF])
     opened = {  # every gripper starts open; a release opens it again
@@ -998,8 +1003,11 @@ def recycle(
         i += 1
         obj = queue[i]
         attempts[obj] = attempts.get(obj, 0) + 1
-        if pending is None:  # nothing in flight: the table is registered again
+        if pending is None and ctx.scene.revision != registration:
+            # Nothing in flight, and the scene has changed: the table is registered again.
             register(ctx, on_table(ctx), read)
+            registration = ctx.scene.revision
+        if pending is None:
             pending = Candidates(ctx, candidates(ctx, obj, arms, race=race), unsettled=released)
         run_together(ctx, [pending], max_ticks=MAX_TICKS, tick=stepped)  # blocks; no steps
         selection, report = pending.selection, pending.report
@@ -1011,6 +1019,7 @@ def recycle(
                     "attempt": attempts[obj],
                     "arm": None,
                     "race": report,
+                    "registration": registration,
                     "succeeded": False,
                 }
             )
@@ -1071,6 +1080,7 @@ def recycle(
             "attempt": attempts[obj],
             "arm": arm.side,
             "race": report,
+            "registration": registration,
             "lookahead": logs,
         }
         outcomes.append(entry)
@@ -1095,6 +1105,17 @@ def recycle(
             if picked.succeeded and spec is None:
                 ended = picked.stage
                 entry["failure"] = {**NO_ZONE, "held": ended.held, "attached": ended.attached}
+        if not picked.succeeded and picked.stage.reason is Reason.MISSED:
+            # Portable evidence that the object was not where it was registered: what was
+            # planned ahead is void, and the table is registered again before a retry.
+            if pending is not None:
+                pending.close()
+                pending = None
+            register(ctx, on_table(ctx), read)
+            registration = ctx.scene.revision
+            if attempts[obj] <= retries:
+                queue.append(obj)
+            continue
         if ctx.scene.attachment(obj) is None:
             continue
         recovery = recover(

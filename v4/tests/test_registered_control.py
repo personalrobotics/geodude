@@ -23,6 +23,14 @@ The claims:
 ``B``'s final placement is read from MuJoCo after its round, for the report. The
 evidence is ``registered_control.json``; ``B`` writes byte-identical records twice.
 
+A second test, ``moved_and_retried.json``, moves one can ``MOVE_M`` along the worktop
+in MuJoCo after it was registered, as a bump would, with every privileged channel
+withheld. The grasp, planned on the registered pose, closes on nothing (``missed``,
+portable evidence). The table is registered again, at the can's new pose, and the one
+retry, raced from a fresh snapshot, picks it up and drops it in a bin. Both attempts are
+recorded, each with the registration its race planned on; the run is repeated
+identically.
+
 Reproduce with ``uv run pytest tests/test_registered_control.py``.
 """
 
@@ -30,6 +38,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 import tempfile
 from collections import Counter
 from pathlib import Path
@@ -232,3 +241,98 @@ def test_control_runs_on_registered_poses_alone(artifacts: Path, tmp_path: Path)
     assert a["provenance"]["registered_poses_not_their_registration"] == 0
     assert "measured" not in b["provenance"]["object_states"]
     assert b["final_bins"] == a["final_bins"]
+
+
+MOVED_SEED = 1
+"""A one-can scene whose can, moved ``MOVE_M`` along y, is missed cleanly: the fingers
+close beside it without touching it, and either arm can still reach it."""
+MOVE_M = 0.10
+"""How far the can is moved, along the worktop's y, after it was registered."""
+
+
+def _moved_and_retried(work: Path) -> dict[str, Any]:
+    package = load_installed_package("geodude_assets")
+    scene = stage_scene(
+        work / "scene", package, objects={"can": 1}, fixtures=recycling.BINS, seed=MOVED_SEED
+    )
+    inner = recycling.runtime(package, scene)
+    runtime = Unprivileged(inner)
+    records: list[TraceRecord] = []
+    counts: Counter[str] = Counter()
+    moved: list[Pose] = []
+
+    def move_once() -> None:
+        """After the first step, while the grasp is under way: the can is pushed along the
+        worktop, behind registration's back."""
+        if moved:
+            return
+        model, data = inner._model, inner._data
+        at = int(model.jnt_qposadr[int(model.body_jntadr[model.body("can_0").id])])
+        data.qpos[at + 1] += MOVE_M
+        data.qvel[int(model.jnt_dofadr[int(model.body_jntadr[model.body("can_0").id])]) :][:6] = 0
+        moved.append(_perceived(inner)(ctx, "can_0")[0])
+
+    with RobotContext(
+        package.description,
+        runtime,
+        sinks=[records.append],
+        object_poses=recycling.OBJECT_POSES,
+    ) as ctx:
+        attempts = recycling.recycle(
+            ctx,
+            package,
+            ["can_0"],
+            move_once,
+            retries=1,
+            read=_counted(_perceived(inner), counts),
+            evaluate=False,
+        )
+        pose, _ = _perceived(inner)(ctx, "can_0")
+        final = [
+            Arm(side).bin[0] for side in recycling.BIN_OF if recycling._in_bin(pose, Arm(side))
+        ]
+    registered = [
+        r.payload.registration("can_0")
+        for r in records
+        if isinstance(r.payload, SceneState) and r.source == recycling.REGISTRATION
+    ]
+    return {
+        "attempts": [
+            {
+                "attempt": a["attempt"],
+                "registration": a["registration"],
+                "race": [
+                    [c["label"], c["outcome"]] for c in (a.get("race") or {}).get("candidates", [])
+                ],
+                "grasp": a.get("grasp"),
+                "failure": None if a.get("failure") is None else a["failure"]["reason"],
+                "released": (a.get("checks") or {}).get("released"),
+            }
+            for a in attempts
+        ],
+        "registrations": counts["can_0"],
+        "registered_at_move_m": [
+            round(math.dist(r.pose.position, moved[0].position), 6) for r in registered if r
+        ],
+        "privileged_readings": _provenance(records, set(runtime.withheld))["privileged_readings"],
+        "final_bin": final[0] if final else None,
+    }
+
+
+def test_a_missed_grasp_registers_the_table_again_and_retries(
+    artifacts: Path, tmp_path: Path
+) -> None:
+    first = _moved_and_retried(tmp_path / "first")
+    again = _moved_and_retried(tmp_path / "again")
+    (artifacts / "moved_and_retried.json").write_text(json.dumps(first, indent=2) + "\n")
+
+    assert first == again
+    missed, retried = first["attempts"]
+    assert missed["failure"] == "missed" and missed["grasp"][-1] == ["obstructed", False]
+    assert retried["failure"] is None and retried["released"]
+    # The retry planned on a later registration, which saw the can where it was moved.
+    assert retried["registration"] > missed["registration"]
+    assert first["registered_at_move_m"][-1] < 0.01 < first["registered_at_move_m"][0]
+    assert first["registrations"] == 2
+    assert first["privileged_readings"] == 0
+    assert first["final_bin"] is not None

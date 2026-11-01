@@ -52,6 +52,7 @@ from ssgrasping import (
     Reason,
     SkillExecution,
     SkillResult,
+    Transition,
     drop,
     grasp,
     landing,
@@ -480,6 +481,31 @@ def _times(
     }
 
 
+def _transitions(*results: SkillResult | None) -> list[dict[str, Any]]:
+    """Every transition the skills estimated, in order: where, the estimate, and, where
+    the simulator had state of the object, the attachment monitor's (``reference``): a
+    privileged reference, not ground truth, for evaluation only."""
+    out = []
+    for result in results:
+        if result is None:
+            continue
+        scored = {(e.estimate.stage, e.estimate.transition): e for e in result.evaluations}
+        for t in result.transitions:
+            judged = scored.get((t.stage, t.transition))
+            out.append(
+                {
+                    "skill": result.skill,
+                    "stage": t.stage,
+                    "transition": t.transition.value,
+                    "outcome": t.outcome.value,
+                    "reason": t.reason.value,
+                    "reference": None if judged is None else judged.reference.value,
+                    "reference_source": None if judged is None else judged.source,
+                }
+            )
+    return out
+
+
 def _failure(*results: SkillResult | None) -> dict[str, Any] | None:
     """The stage that decided the first of ``results`` that did not succeed: its skill,
     name, reason and cause, detail, evidence kind, and whether the object was then held
@@ -612,6 +638,7 @@ def bin_outcome(
         "attached": attached,
         "checks": checks,
         "failure": _failure(picked, dropped, landed),
+        "transitions": _transitions(picked, dropped),
         "succeeded": all(checks.values()),
     }
 
@@ -686,7 +713,7 @@ RETRIES = 1
 released, upright, back on the worktop: once, so that an evaluation can count successes
 at the first attempt and after a retry apart (#201)."""
 RELEASE_IN_PLACE = "release in place"
-RELEASE_OVER_BIN = "release over the bin"
+RELEASE_LOST = "detach the lost object"
 
 
 def _wait(ctx: RobotContext, execution: Execution, tick: Callable[[], None]) -> ExecutionStatus:
@@ -722,17 +749,20 @@ def _release(
 
 
 def safe_release(failure: dict[str, Any] | None) -> str | None:
-    """Where an object still held after ``failure`` (from ``bin_outcome``) may be released:
-    ``RELEASE_IN_PLACE``, ``RELEASE_OVER_BIN``, or None, nowhere known (``recover``). By
-    the failed stage, its reason, and the object still declared attached; never by its
-    detail, which is prose."""
+    """How an object still declared attached after ``failure`` (from ``bin_outcome``) may
+    be let go: ``RELEASE_IN_PLACE``, ``RELEASE_LOST``, or None, nowhere known
+    (``recover``). By the failed stage, its reason and cause, whether the skill then
+    believed the object held, and the object still declared attached; never by its
+    detail, which is prose. A lost object is detached only if the skill reported it not
+    held (``held`` exactly False)."""
     if failure is None or not failure["attached"]:
         return None
     where = (failure["skill"], failure["stage"], failure["reason"])
     if where == ("grasp", "lift", Reason.NOT_PLANNED):
         return RELEASE_IN_PLACE
-    if where == ("drop", "release", Reason.ATTACHMENT_LOST):
-        return RELEASE_OVER_BIN
+    lost = (failure["reason"], failure["cause"]) == (Reason.TRANSITION_REFUTED, Transition.RETAINED)
+    if lost and failure["held"] is False:
+        return RELEASE_LOST
     return None
 
 
@@ -751,10 +781,10 @@ def recover(
       after closing, so the object still rests where it was grasped, on its support.
       Open, detach once the fingers have opened, and back the hand out along its approach
       by ``spec.approach_m``.
-    - **A carry the attachment monitor saw the object leave** (``drop.release``,
-      ``attachment_lost``): the transfer ended with the hand over the bin, in a zone the
-      object, as held, fits (``held_drop_spec``). Open there, and detach once the fingers
-      have opened; where the object comes to rest is then observed (``landing``).
+    - **A carry the object left** (``transition_refuted``, cause ``retained``): the
+      gripper's opening showed the fingers close past it, and the carry stopped there.
+      Nothing is in the hand, so opening it releases nothing: open, and detach once the
+      fingers have opened, so the scene no longer carries the object.
     - **Anything else:** the object may be suspended, or its support unknown, so nothing
       is done, and it stays declared held.
     The fingers are never opened onto nothing known, and ``obj`` is detached only after
@@ -785,12 +815,12 @@ def recover(
             "released": True,
             "detail": f"released where grasped; backed out: {retreat}",
         }
-    if action == RELEASE_OVER_BIN:
+    if action == RELEASE_LOST:
         refused = _release(ctx, obj, arm, spec, tick)
         return {
-            "action": RELEASE_OVER_BIN,
+            "action": RELEASE_LOST,
             "released": refused is None,
-            "detail": refused or "released over the bin",
+            "detail": refused or "detached: the object had left the hand",
         }
     return {
         "action": None,
@@ -968,18 +998,7 @@ def recycle(
         entry["recovery"] = recovery
         if not recovery["released"]:
             break  # still held, and nothing safe to do: the round stops, declared so
-        if recovery["action"] == RELEASE_OVER_BIN:
-
-            def recovered(
-                landed: SkillResult, entry: dict[str, Any] = entry, obj: str = obj, arm: Arm = arm
-            ) -> None:
-                entry["recovery"]["landing"] = _stages(landed)
-                entry["recovery"]["in_bin"] = landed.succeeded
-
-            observed = landing(ctx, landing_spec(obj, arm))
-            observed.advance()
-            landings.append((observed, recovered))
-        elif attempts[obj] <= retries and _upright_on_worktop(ctx, obj, start):
+        if attempts[obj] <= retries and _upright_on_worktop(ctx, obj, start):
             queue.append(obj)
     for _ in range(MAX_TICKS):  # the last landings, with nothing else to do
         if not landings:

@@ -64,7 +64,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-FORMAT = 5
+FORMAT = 6
 """The evaluation artifact's format: raised whenever a field's meaning changes. 2: per
 object, its attempts, where it finally rests, and its verdict, in place of one outcome
 and its mechanism. 3: each round's and object's ``timing``. 4: a failure's ``reason`` and
@@ -75,7 +75,12 @@ each attempt's ``transitions``, the skills' estimates with the attachment monito
 report lost an object still in the hand. The summary's ``transitions`` counts how often
 each estimate came with each reference. A carry the object left now fails with
 ``transition_refuted``, and its recovery detaches the object (``detach the lost
-object``) instead of releasing it over the bin."""
+object``) instead of releasing it over the bin. 6: control runs on registered object
+poses (geodude#248): each transition records whether the demo ``assumed`` it, ``placed``
+and ``landed`` being ``unobserved``; a landing scores ``landed`` (its stage is
+``observed``, and an attempt's ``landed`` check is its reference); and the summary's
+``assumptions`` counts, per assumed transition, how often the privileged reference
+confirmed or refuted the assumption, and the rate at which it refuted it."""
 CORPORA = {
     "development": range(0, 40),
     "acceptance": range(1000, 1040),
@@ -115,7 +120,9 @@ def run_round(seed: int) -> dict[str, Any]:
         staged = json.loads((scene.parent / "manifest.json").read_text())["objects"]
         idle = Idle()
         runtime = recycling.runtime(package, scene)
-        with RobotContext(package.description, runtime, sinks=[idle]) as ctx:
+        with RobotContext(
+            package.description, runtime, sinks=[idle], object_poses=recycling.OBJECT_POSES
+        ) as ctx:
             result = recycling.sort_all(ctx, package)
             ended = ctx.now.time_ns
     finally:
@@ -263,6 +270,7 @@ def _summary(rounds: list[dict[str, Any]]) -> dict[str, Any]:
         },
         "mechanisms": dict(mechanisms.most_common()),
         "transitions": _transition_counts(rounds),
+        "assumptions": _assumptions(rounds),
     }
 
 
@@ -276,6 +284,29 @@ def _transition_counts(rounds: list[dict[str, Any]]) -> dict[str, dict[str, int]
                 key = f"{t['outcome']}/{t['reference'] or 'none'}"
                 counts.setdefault(t["transition"], Counter())[key] += 1
     return {k: dict(sorted(c.items())) for k, c in sorted(counts.items())}
+
+
+def _assumptions(rounds: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Per transition the demo assumed, how often the privileged reference confirmed,
+    refuted, or could not judge the assumption, and the rate at which it refuted it
+    among those it judged."""
+    counts: dict[str, Counter[str]] = {}
+    for round_ in rounds:
+        for outcome in round_["outcomes"]:
+            for t in outcome.get("transitions", []):
+                if t.get("assumed"):
+                    counts.setdefault(t["transition"], Counter())[t["reference"] or "none"] += 1
+    out: dict[str, dict[str, Any]] = {}
+    for name, c in sorted(counts.items()):
+        judged = c["confirmed"] + c["refuted"]
+        out[name] = {
+            "assumed": sum(c.values()),
+            "confirmed": c["confirmed"],
+            "refuted": c["refuted"],
+            "none": c["none"],
+            "refuted_rate": c["refuted"] / judged if judged else None,
+        }
+    return out
 
 
 def _objects(round_: dict[str, Any]) -> list[dict[str, Any]]:

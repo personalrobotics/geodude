@@ -3,8 +3,13 @@
 Steps 1 to 3 of the port, in a seeded scene staged from prl_assets: one can, picked with
 ssgrasping's ``grasp`` by the arm on its side of the worktop, and dropped with its
 ``drop`` into the bin on that arm's side (the default) or placed upright on the worktop
-with its ``place`` (``--to worktop``). Perception is the ground-truth stub the demo has
-always used: each object's privileged pose channel (ssrobot#101).
+with its ``place`` (``--to worktop``). Control runs on what a physical robot has: joint,
+gripper and wrist channels, and the registration of the objects on the table
+(personalrobotics/geodude#248). Contexts keep registered object poses
+(``ObjectPoses.REGISTERED``), and ``register`` is the only way an object's pose enters
+control. Its source is the ground-truth stub the demo has always used, each object's
+privileged pose channel (ssrobot#101), until a perception source exists. Privileged
+state is otherwise read only for evaluation.
 
 Run it, watch it, and record it::
 
@@ -53,6 +58,8 @@ from ssgrasping import (
     SkillExecution,
     SkillResult,
     Transition,
+    TransitionEstimate,
+    TransitionOutcome,
     drop,
     grasp,
     landing,
@@ -67,12 +74,15 @@ from ssrobot import (
     GripperCommand,
     GripperTermination,
     JsonlTrace,
+    ObjectPoses,
+    ObjectStatus,
     ObservationRequest,
     Planner,
     Pose,
     RobotContext,
     RobotPackage,
     SceneSnapshot,
+    Timestamp,
     WrenchGuard,
     WrenchPart,
     load_installed_package,
@@ -247,12 +257,65 @@ def warm_planning(ctx: RobotContext, snapshot: SceneSnapshot, arms: Sequence[Arm
     return time.perf_counter() - began
 
 
-def object_pose(ctx: RobotContext, name: str) -> Pose:
-    """An object's pose, from its privileged pose channel: the ground-truth stub."""
-    value = ctx.observe(ObservationRequest(channels=(f"{name}.pose",))).readings[0].value
+OBJECT_POSES = ObjectPoses.REGISTERED
+"""How recycling's contexts keep object poses: registered, never read live."""
+REGISTRATION = "pose_stub"
+"""The registration source the trace records: the privileged pose channel, standing in
+for perception (ssrobot#101)."""
+
+Read = Callable[[RobotContext, str], tuple[Pose, Timestamp]]
+"""A registration source: an object's pose, and when it was observed."""
+
+
+def true_pose(ctx: RobotContext, name: str) -> Pose:
+    """An object's pose, from its privileged pose channel: for evaluation, never control."""
+    return pose_channel(ctx, name)[0]
+
+
+def pose_channel(ctx: RobotContext, name: str) -> tuple[Pose, Timestamp]:
+    """An object's pose and when it was read, from its privileged pose channel: the
+    registration stub until a perception source exists (ssrobot#101)."""
+    observation = ctx.observe(ObservationRequest(channels=(f"{name}.pose",)))
+    value = observation.readings[0].value
     assert isinstance(value, tuple)
     x, y, z, w, i, j, k = value
-    return Pose(position=(x, y, z), quat_wxyz=(w, i, j, k))
+    return Pose(position=(x, y, z), quat_wxyz=(w, i, j, k)), observation.stamp
+
+
+def register(ctx: RobotContext, objects: Sequence[str], read: Read = pose_channel) -> None:
+    """Register each of ``objects`` where ``read`` reports it: the only way an object's
+    pose enters control."""
+    for name in objects:
+        pose, stamp = read(ctx, name)
+        ctx.register(name, pose, stamp=stamp, source=REGISTRATION)
+
+
+def on_table(ctx: RobotContext) -> list[str]:
+    """The objects neither held nor removed as landed: those registration covers."""
+    return [
+        name
+        for name in ctx.info.objects
+        if ctx.scene.object_status(name) in (ObjectStatus.REGISTERED, ObjectStatus.UNKNOWN)
+    ]
+
+
+def registered_pose(ctx: RobotContext, name: str) -> Pose:
+    """An object's pose as last registered: what control knows of it."""
+    registration = ctx.scene.registration(name)
+    if registration is None:
+        raise ValueError(f"{name!r} is {ctx.scene.object_status(name).value}, not registered")
+    return registration.pose
+
+
+def assume_landed(ctx: RobotContext, obj: str) -> Callable[[TransitionEstimate], None]:
+    """The demo's policy for a dropped object's unobserved ``landed``: assumed, so it is
+    removed from the active scene (personalrobotics/geodude#248). Where it truly came to
+    rest is evaluated, never assumed."""
+
+    def remove(estimate: TransitionEstimate) -> None:
+        ctx.remove(obj, source="assumed_landed")
+
+    return remove
 
 
 def mix(seed: int, count: int) -> dict[str, int]:
@@ -304,7 +367,7 @@ def grasp_spec(ctx: RobotContext, obj: str, arm: Arm) -> GraspSpec:
         object=obj,
         support="vention_base",
         normal=UP,
-        pregrasps=regions.pregrasps(geometry, object_pose(ctx, obj), CLEARANCE_M),
+        pregrasps=regions.pregrasps(geometry, registered_pose(ctx, obj), CLEARANCE_M),
         approach_m=regions.STANDOFF_M,
         lift_m=0.06,
         line_tolerance_m=LINE_TOLERANCE_M,
@@ -346,7 +409,11 @@ def place_on_worktop(
         region_tolerance=(PLACE_TOLERANCE_M, PLACE_TILT_RAD),
         carry_scaling=CARRY_SCALING,
     )
-    return drive(ctx, place(ctx, planner, spec, check_planner=checker), tick)
+    # Released, the object rests on the worktop, where registration sees it again.
+    placing = place(
+        ctx, planner, spec, check_planner=checker, released=lambda _: register(ctx, [obj])
+    )
+    return drive(ctx, placing, tick)
 
 
 def drop_in_bin(
@@ -365,10 +432,11 @@ def drop_in_bin(
     spec = held_drop_spec(ctx, drop_spec(obj, arm), arm)
     if spec is None:
         raise ValueError(f"no drop zone over {arm.bin[0]} fits {obj!r} as it is held")
-    dropped = drive(ctx, drop(ctx, planner, spec, check_planner=checker), tick)
+    dropping = drop(ctx, planner, spec, check_planner=checker, released=assume_landed(ctx, obj))
+    dropped = drive(ctx, dropping, tick)
     if not _released(dropped):
         return dropped, None
-    return dropped, drive(ctx, landing(ctx, landing_spec(obj, arm)), tick)
+    return dropped, drive(ctx, landing(ctx, landing_spec(obj, arm), _landed(dropped)), tick)
 
 
 def drop_spec(obj: str, arm: Arm) -> DropSpec:
@@ -481,15 +549,31 @@ def _times(
     }
 
 
+ASSUMED = (Transition.LANDED, Transition.PLACED)
+"""The transitions the demo assumes true when no portable signal can tell (``unobserved``):
+a confirmed release counts as landed, or placed (personalrobotics/geodude#248)."""
+
+
+def _landed(dropped: SkillResult) -> TransitionEstimate:
+    """The drop's ``landed`` estimate, made at its confirmed release."""
+    return next(t for t in dropped.transitions if t.transition is Transition.LANDED)
+
+
 def _transitions(*results: SkillResult | None) -> list[dict[str, Any]]:
-    """Every transition the skills estimated, in order: where, the estimate, and, where
-    the simulator had state of the object, the attachment monitor's (``reference``): a
-    privileged reference, not ground truth, for evaluation only."""
+    """Every transition the skills estimated, in order: where, the estimate, whether the
+    demo assumed it (``ASSUMED``, when unobserved), and, where the simulator had the
+    object's privileged state, its reference (``reference``): privileged, not ground
+    truth, for evaluation only. A landing's evaluation scores the drop's ``landed``."""
+    scored = {
+        (e.estimate.stage, e.estimate.transition): e
+        for result in results
+        if result is not None
+        for e in result.evaluations
+    }
     out = []
     for result in results:
         if result is None:
             continue
-        scored = {(e.estimate.stage, e.estimate.transition): e for e in result.evaluations}
         for t in result.transitions:
             judged = scored.get((t.stage, t.transition))
             out.append(
@@ -499,6 +583,8 @@ def _transitions(*results: SkillResult | None) -> list[dict[str, Any]]:
                     "transition": t.transition.value,
                     "outcome": t.outcome.value,
                     "reason": t.reason.value,
+                    "assumed": t.outcome is TransitionOutcome.UNOBSERVED
+                    and t.transition in ASSUMED,
                     "reference": None if judged is None else judged.reference.value,
                     "reference_source": None if judged is None else judged.source,
                 }
@@ -547,8 +633,9 @@ def worktop_outcome(
     far its axis is from upright, its base's height above the worktop, and what is still
     attached. ``succeeded`` requires every stage to succeed, nothing attached, and the
     object upright within ``PLACE_TILT_RAD``, its base on the worktop, and its centre
-    within ``PLACE_SLACK_M`` plus ``PLACE_TOLERANCE_M`` of ``target`` in x and y."""
-    final = object_pose(ctx, obj)
+    within ``PLACE_SLACK_M`` plus ``PLACE_TOLERANCE_M`` of ``target`` in x and y. An
+    evaluation: it reads the object's privileged pose."""
+    final = true_pose(ctx, obj)
     _, x, y, _ = final.quat_wxyz
     tilt = math.acos(max(-1.0, min(1.0, 1 - 2 * (x * x + y * y))))  # body z from world z
     offset = [final.position[i] - target[i] for i in range(2)]
@@ -570,6 +657,7 @@ def worktop_outcome(
         "target": list(target),
         "grasp": _stages(picked),
         "place": _stages(placed),
+        "transitions": _transitions(picked, placed),
         "final_pose": _pose(final),
         "tilt_rad": tilt,
         "base_above_worktop_m": base,
@@ -606,24 +694,32 @@ def bin_outcome(
     picked: SkillResult,
     dropped: SkillResult | None,
     landed: SkillResult | None,
+    *,
+    evaluate: bool = True,
 ) -> dict[str, Any]:
     """What a pick, drop, and landing achieved, observed when the landing ends, or the
-    drop when it released nothing: every stage, whether the release was confirmed, where
-    ``obj`` rests (from its pose channel) relative to the bin's base, and what is still
-    attached, which may be the next object. ``succeeded`` requires every stage to
-    succeed, ``obj`` no longer attached, and its centre within the bin's prl_assets
-    interior: inside its inner walls, over its floor, below its rim."""
+    drop when it released nothing: every stage, whether the release was confirmed, and
+    what is still attached, which may be the next object. With ``evaluate``, where
+    ``obj`` rests, from its privileged pose, relative to the bin's base: ``succeeded``
+    requires every stage to succeed, ``obj`` no longer attached, its landing scored
+    ``confirmed`` (``landed``), and its centre within the bin's prl_assets interior:
+    inside its inner walls, over its floor, below its rim. Without it, nothing
+    privileged is read, and what needs it is None."""
     name, base = arm.bin
-    final = object_pose(ctx, obj)
-    local = [final.position[i] - base[i] for i in range(3)]
+    final = true_pose(ctx, obj) if evaluate else None
+    local = None if final is None else [final.position[i] - base[i] for i in range(3)]
     attached = [a.object for a in ctx.scene.attachments]
-    checks = {
+    scored = next(
+        (e.reference for e in (landed.evaluations if landed is not None else ())),
+        None,
+    )
+    checks: dict[str, bool | None] = {
         "grasped": picked.succeeded,
         "dropped": dropped is not None and dropped.succeeded,
         "released": _released(dropped),
-        "landed": landed is not None and landed.succeeded,
+        "landed": None if not evaluate else scored is TransitionOutcome.CONFIRMED,
         "detached": obj not in attached,
-        "in_bin": _in_bin(final, arm),
+        "in_bin": None if final is None else _in_bin(final, arm),
     }
     return {
         "to": "bin",
@@ -633,13 +729,13 @@ def bin_outcome(
         "grasp": _stages(picked),
         "drop": _stages(dropped),
         "landing": _stages(landed),
-        "final_pose": _pose(final),
+        "final_pose": None if final is None else _pose(final),
         "position_in_bin_m": local,
         "attached": attached,
         "checks": checks,
         "failure": _failure(picked, dropped, landed),
-        "transitions": _transitions(picked, dropped),
-        "succeeded": all(checks.values()),
+        "transitions": _transitions(picked, dropped, landed),
+        "succeeded": all(checks.values()) if evaluate else None,
     }
 
 
@@ -656,8 +752,9 @@ def demo(
     if to not in DESTINATIONS:
         raise ValueError(f"no destination {to!r}; one of {DESTINATIONS}")
     obj = "can_0"
+    register(ctx, on_table(ctx))
     start = ctx.snapshot()
-    arm = arm_for(object_pose(ctx, obj).position)
+    arm = arm_for(registered_pose(ctx, obj).position)
     warm_planning(ctx, start, [arm])
     chosen = planners(package, arm)
     picked = pick(ctx, obj, arm=arm, planners=chosen, tick=tick)
@@ -682,7 +779,7 @@ def candidates(
     (``BIN_OF``), with that arm's planners. The arm on ``obj``'s side (``arm_for``) is
     preferred (``PREFERRED``); the other is the fallback, taken when the preferred arm's
     prefix does not plan. Without ``race``, only the preferred arm."""
-    preferred = arm_for(object_pose(ctx, obj).position).side
+    preferred = arm_for(registered_pose(ctx, obj).position).side
     if not race:
         arms = {preferred: arms[preferred]}
     return [
@@ -696,16 +793,6 @@ def candidates(
         )
         for side, (planner, checker) in arms.items()
     ]
-
-
-def expected_rest(obj: str, arm: Arm) -> Pose:
-    """Where ``obj``, dropped by ``arm``, is expected to rest: upright on the floor of
-    that arm's bin, at its centre. For planning the next can only; never checked."""
-    name, (x, y, z) = arm.bin
-    geometry = meta(kind_of(name))["geometric_properties"]
-    floor = geometry["outer_size"][2] - geometry["inner_size"][2]
-    height = regions.height(meta(kind_of(obj))["geometric_properties"])
-    return Pose(position=(x, y, z + floor + height / 2), quat_wxyz=(1.0, 0.0, 0.0, 0.0))
 
 
 RETRIES = 1
@@ -830,10 +917,11 @@ def recover(
 
 
 def _upright_on_worktop(ctx: RobotContext, obj: str, start: Any) -> bool:
-    """Whether ``obj`` rests upright, within ``PLACE_TILT_RAD``, at the height it was
-    staged at, within ``PLACE_TOLERANCE_M``: back on the worktop, as it began."""
-    now = object_pose(ctx, obj)
-    began = next(o.pose for o in start.objects if o.name == obj)
+    """Whether ``obj``, as last registered, rests upright, within ``PLACE_TILT_RAD``, at
+    the height it was registered at when the round began, within ``PLACE_TOLERANCE_M``:
+    back on the worktop, as it began."""
+    now = registered_pose(ctx, obj)
+    began = next(o.known_pose() for o in start.objects if o.name == obj)
     _, x, y, _ = now.quat_wxyz
     tilt = math.acos(max(-1.0, min(1.0, 1 - 2 * (x * x + y * y))))
     return tilt <= PLACE_TILT_RAD and abs(now.position[2] - began.position[2]) <= PLACE_TOLERANCE_M
@@ -848,18 +936,25 @@ def recycle(
     race: bool = True,
     lookahead: bool = True,
     retries: int = 0,
+    read: Read = pose_channel,
+    evaluate: bool = True,
 ) -> list[dict[str, Any]]:
     """Pick each of ``objects`` in turn and drop it in a bin, racing both arms for each
     (``Candidates``): the arm on its side takes it if its whole planned prefix, through
     the drop into its own bin, plans; otherwise the other arm, if its prefix plans. The
     drop has no retreat. The next object's race is planned while this drop's transfer
     carries the object to its bin, on the transfer's prediction, which expects the object
-    released there to rest on the bin's floor (``expected_rest``), the gripper open as it
-    started, and every object dropped before it unsettled, since it may still be rolling
-    in its bin. The winner's pregrasp then continues from where the transfer ended, as
-    soon as the release is confirmed. Where each released object comes to rest is
-    observed alongside the objects after it (ssgrasping's ``landing``), and its outcome
-    is recorded when that ends; the round ends once every landing has.
+    released there and removed from the scene as landed (``assume_landed``), and the
+    gripper open as it started. The winner's pregrasp then continues from where the
+    transfer ended, as soon as the release is confirmed.
+
+    Every object on the table is registered, by ``read``, when the round begins and
+    before every race planned from a snapshot, when no prediction is in flight; and an
+    object recovered onto the table, before it is raced again. Nothing else reads an
+    object's pose for control. With ``evaluate``, where each released object comes to
+    rest is scored alongside the objects after it (ssgrasping's ``landing``), and its
+    outcome is recorded when that ends; the round ends once every landing has. Without
+    it, nothing privileged is read at all.
     Within the grasp, the approach is planned during the pregrasp. Returns each attempt's
     ``bin_outcome``, with the object's attempt number, the arm and the race.
 
@@ -872,6 +967,7 @@ def recycle(
     nothing is planned during motion, and each race is planned on a snapshot when its
     object's turn comes. Both are for comparison."""
     arms = {side: planners(package, Arm(side)) for side in BIN_OF}
+    register(ctx, on_table(ctx), read)
     start = ctx.snapshot()
     warm_planning(ctx, start, [Arm(side) for side in BIN_OF])
     opened = {  # every gripper starts open; a release opens it again
@@ -883,7 +979,7 @@ def recycle(
     attempts: dict[str, int] = {}
     looking: Lookahead | None = None
     pending: Candidates | None = None
-    released: list[str] = []  # dropped, and possibly still settling in a bin
+    released: list[str] = []  # dropped, and assumed landed
     # Each released object's landing, still observed, and how to record its outcome.
     landings: list[tuple[SkillExecution, Callable[[SkillResult], None]]] = []
 
@@ -902,7 +998,8 @@ def recycle(
         i += 1
         obj = queue[i]
         attempts[obj] = attempts.get(obj, 0) + 1
-        if pending is None:
+        if pending is None:  # nothing in flight: the table is registered again
+            register(ctx, on_table(ctx), read)
             pending = Candidates(ctx, candidates(ctx, obj, arms, race=race), unsettled=released)
         run_together(ctx, [pending], max_ticks=MAX_TICKS, tick=stepped)  # blocks; no steps
         selection, report = pending.selection, pending.report
@@ -930,7 +1027,14 @@ def recycle(
             spec = held_drop_spec(ctx, raced, arm)
         if spec is not None:
             following = queue[i + 1] if lookahead and i + 1 < len(queue) else None
-            dropping = drop(ctx, planner, spec, check_planner=checker, lookahead=looking)
+            dropping = drop(
+                ctx,
+                planner,
+                spec,
+                check_planner=checker,
+                lookahead=looking,
+                released=assume_landed(ctx, obj),
+            )
 
             def race_next(
                 transfer: Execution,
@@ -944,7 +1048,7 @@ def recycle(
                     candidates(ctx, following, arms, race=race),
                     after=transfer,
                     unsettled=released,
-                    releases={obj: expected_rest(obj, arm)},
+                    removals=(obj,),
                     joints=opened[arm.side],
                 )
 
@@ -970,7 +1074,7 @@ def recycle(
             "lookahead": logs,
         }
         outcomes.append(entry)
-        if _released(dropped):
+        if _released(dropped) and evaluate:
 
             def record(
                 landed: SkillResult,
@@ -982,11 +1086,12 @@ def recycle(
             ) -> None:
                 entry.update(bin_outcome(ctx, obj, arm, picked, dropped, landed))
 
-            observed = landing(ctx, landing_spec(obj, arm))
+            assert dropped is not None  # released
+            observed = landing(ctx, landing_spec(obj, arm), _landed(dropped))
             observed.advance()
             landings.append((observed, record))
         else:
-            entry.update(bin_outcome(ctx, obj, arm, picked, dropped, None))
+            entry.update(bin_outcome(ctx, obj, arm, picked, dropped, None, evaluate=evaluate))
             if picked.succeeded and spec is None:
                 ended = picked.stage
                 entry["failure"] = {**NO_ZONE, "held": ended.held, "attached": ended.attached}
@@ -998,8 +1103,10 @@ def recycle(
         entry["recovery"] = recovery
         if not recovery["released"]:
             break  # still held, and nothing safe to do: the round stops, declared so
-        if attempts[obj] <= retries and _upright_on_worktop(ctx, obj, start):
-            queue.append(obj)
+        if attempts[obj] <= retries:
+            register(ctx, [obj], read)  # where the recovery left it, for the retry
+            if _upright_on_worktop(ctx, obj, start):
+                queue.append(obj)
     for _ in range(MAX_TICKS):  # the last landings, with nothing else to do
         if not landings:
             break
@@ -1009,30 +1116,38 @@ def recycle(
 
 
 def sort_all(
-    ctx: RobotContext, package: RobotPackage, tick: Callable[[], None] = lambda: None
+    ctx: RobotContext,
+    package: RobotPackage,
+    tick: Callable[[], None] = lambda: None,
+    *,
+    read: Read = pose_channel,
+    evaluate: bool = True,
 ) -> dict[str, Any]:
     """The legacy demo's ``sort_all``: recycle every object, racing the arms with
     lookahead (``recycle``), recovering a failed attempt where that is safe (``recover``),
     and racing an object released back onto the worktop once more (``RETRIES``), until
-    none is left to try. Returns every attempt, and per object, once every landing has
-    ended, which bin it rests in, if any. The table is ``cleared`` when every object
-    does."""
+    none is left to try. Returns every attempt, and per object its attempts, whether it is
+    still attached, and its state in the registered scene. With ``evaluate``, once every
+    landing has ended, also which bin it rests in, if any, from its privileged pose: the
+    table is ``cleared`` when every object does. Without it, ``bin`` and ``cleared`` are
+    None."""
     objects = sorted(ctx.info.objects)
-    attempts = recycle(ctx, package, objects, tick, retries=RETRIES)
-    final = {}
+    attempts = recycle(ctx, package, objects, tick, retries=RETRIES, read=read, evaluate=evaluate)
+    final: dict[str, dict[str, Any]] = {}
     for obj in objects:
-        pose = object_pose(ctx, obj)
-        bins = [Arm(side).bin[0] for side in BIN_OF if _in_bin(pose, Arm(side))]
         final[obj] = {
-            "bin": bins[0] if bins else None,
             "attempts": sum(1 for a in attempts if a["object"] == obj),
             "attached": ctx.scene.attachment(obj) is not None,
-            "final_pose": _pose(pose),
+            "status": ctx.scene.object_status(obj).value,
         }
+        if evaluate:
+            pose = true_pose(ctx, obj)
+            bins = [Arm(side).bin[0] for side in BIN_OF if _in_bin(pose, Arm(side))]
+            final[obj].update(bin=bins[0] if bins else None, final_pose=_pose(pose))
     return {
         "attempts": attempts,
         "objects": final,
-        "cleared": all(f["bin"] is not None for f in final.values()),
+        "cleared": all(f["bin"] is not None for f in final.values()) if evaluate else None,
     }
 
 
@@ -1126,7 +1241,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             channels = TraceChannels(package.description)  # feeds the viewer's channel panels
             sinks.append(channels)
-        with RobotContext(package.description, runtime(package, scene), sinks=sinks) as ctx:
+        with RobotContext(
+            package.description, runtime(package, scene), sinks=sinks, object_poses=OBJECT_POSES
+        ) as ctx:
             view: Any = None
             if channels is not None:
                 from mj_viser import ContactOverlay, LiveView

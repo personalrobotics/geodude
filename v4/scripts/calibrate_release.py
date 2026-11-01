@@ -142,9 +142,14 @@ def trial(kind: str, seed: int) -> dict[str, Any]:
         scene = stage_scene(
             Path(work) / "scene", package, objects={kind: 1}, fixtures=FAR, seed=seed
         )
-        with RobotContext(package.description, recycling.runtime(package, scene)) as ctx:
+        with RobotContext(
+            package.description,
+            recycling.runtime(package, scene),
+            object_poses=recycling.OBJECT_POSES,
+        ) as ctx:
             (obj,) = sorted(o for o in ctx.info.objects if not o.startswith("recycle_bin"))
-            arm = recycling.arm_for(recycling.object_pose(ctx, obj).position)
+            recycling.register(ctx, recycling.on_table(ctx))
+            arm = recycling.arm_for(recycling.registered_pose(ctx, obj).position)
             planners = recycling.planners(package, arm)
             out: dict[str, Any] = {"kind": kind, "seed": seed, "object": obj, "arm": arm.side}
             picked = recycling.pick(ctx, obj, arm=arm, planners=planners)

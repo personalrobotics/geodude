@@ -104,7 +104,11 @@ def sample(variant: str, seed: int, cans: int) -> dict[str, Any]:
             Path(work) / "scene", package, objects={"can": cans}, fixtures=recycling.BINS, seed=seed
         )
         clock["opened"] = time.perf_counter()
-        with RobotContext(package.description, recycling.runtime(package, scene)) as ctx:
+        with RobotContext(
+            package.description,
+            recycling.runtime(package, scene),
+            object_poses=recycling.OBJECT_POSES,
+        ) as ctx:
             submit, execute, cont = ctx.submit, ctx.execute, ctx.execute_continuation
 
             def first(key: str, call: Any) -> Any:

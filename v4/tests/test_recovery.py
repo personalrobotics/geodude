@@ -1,13 +1,16 @@
-"""Geodude chooses where to release a still-held object by what failed, never by prose
-(personalrobotics/ssgrasping#34).
+"""Geodude chooses how to let go of a still-attached object by what failed, never by
+prose (personalrobotics/ssgrasping#34).
 
-``recover`` opens the fingers only where the object has known support: in place after a
-lift that did not plan, or over the bin after the attachment monitor saw it leave the
-carry. ``safe_release`` decides that from the failed stage, its reason, and whether the
-object is still declared attached, as ``bin_outcome`` records them (``_failure``) from
-ssgrasping's own results. Each case here is a failure ssgrasping's end-to-end evidence
-produces (its ``obstructed`` lift and ``slipped`` release): the decision holds whatever
-the stage's detail says, and is withheld when the reason or the attachment differs.
+``recover`` opens the fingers only where that is known to be safe: in place after a lift
+that did not plan, where the object rests on its support, or after a carry whose
+gripper opening showed the object leave the hand (``transition_refuted``, cause
+``retained``, personalrobotics/ssgrasping#28), where nothing is left in it.
+``safe_release`` decides that from the failed stage, its reason and cause, and whether
+the object is still declared attached, as ``bin_outcome`` records them (``_failure``)
+from ssgrasping's own results. Each case here is a failure ssgrasping's end-to-end
+evidence produces (its ``obstructed`` lift and ``pulled`` transfer, and a lift the
+object leaves the same way): the decision holds whatever the stage's detail says, and is
+withheld when the reason or the attachment differs.
 
 Reproduce with ``uv run pytest tests/test_recovery.py``.
 """
@@ -16,7 +19,7 @@ from __future__ import annotations
 
 from ssgrasping import Evidence, Reason, SkillResult, SkillState, Stage
 
-from geodude.recycling import RELEASE_IN_PLACE, RELEASE_OVER_BIN, _failure, safe_release
+from geodude.recycling import RELEASE_IN_PLACE, RELEASE_LOST, _failure, safe_release
 
 DETAILS = (
     None,  # as ssgrasping words it today
@@ -56,9 +59,14 @@ CASES = (
         RELEASE_IN_PLACE,
     ),
     (
-        ("drop", "release", Reason.ATTACHMENT_LOST, None, Evidence.PRIVILEGED),
-        "attachment monitor: the object left its declared transform during the transfer",
-        RELEASE_OVER_BIN,
+        ("drop", "transfer", Reason.TRANSITION_REFUTED, "retained", Evidence.PORTABLE),
+        "the opening fell below 0.224: the object left the hand",
+        RELEASE_LOST,
+    ),
+    (
+        ("grasp", "lift", Reason.TRANSITION_REFUTED, "retained", Evidence.PORTABLE),
+        "the opening fell below 0.224: the object left the hand",
+        RELEASE_LOST,
     ),
 )
 

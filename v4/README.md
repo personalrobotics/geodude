@@ -52,8 +52,9 @@ The legacy demo's round stages five objects drawn, by the seed, from its nine ty
 `pop_tarts_case`, `fuze_bottle` and `plastic_glass` (`recycling.MIX_KINDS`).
 `recycling.sort_all` sorts them all into the bins, racing both arms as above. An attempt
 that fails is recovered only where releasing the object is safe: a lift that did not
-plan releases it where it was grasped, and an object that slipped in the carry is
-released over the bin. An object released back onto the worktop upright is tried once
+plan releases it where it was grasped, and an object whose gripper opening showed it
+leave the hand during a carry, which then stopped, is detached: nothing is left in the
+hand. An object released back onto the worktop upright is tried once
 more. Anything else stops the round, the object still declared held. The table is
 clear once every object rests in a bin.
 

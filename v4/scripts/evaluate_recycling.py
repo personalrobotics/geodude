@@ -64,12 +64,17 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-FORMAT = 4
+FORMAT = 5
 """The evaluation artifact's format: raised whenever a field's meaning changes. 2: per
 object, its attempts, where it finally rests, and its verdict, in place of one outcome
 and its mechanism. 3: each round's and object's ``timing``. 4: a failure's ``reason`` and
 ``cause`` (ssgrasping#34) and its ``held`` and ``attached`` state, and each raced plan's
-``plan_status``; timeouts and mechanisms are judged from these, never from detail."""
+``plan_status``; timeouts and mechanisms are judged from these, never from detail. 5:
+each attempt's ``transitions``, the skills' estimates with the attachment monitor's
+``ground_truth`` (ssgrasping#28), and the summary's ``transitions``: how often each
+estimate came with each truth. A carry the object left now fails with
+``transition_refuted``, and its recovery detaches the object (``detach the lost
+object``) instead of releasing it over the bin."""
 CORPORA = {
     "development": range(0, 40),
     "acceptance": range(1000, 1040),
@@ -211,7 +216,7 @@ def classify(outcome: dict[str, Any] | None) -> str:
 def verdict(attempts: list[dict[str, Any]], final: dict[str, Any]) -> str:
     """One staged object's verdict, by where it finally rests and its attempts:
     ``recycled`` at the first attempt, ``recycled_after_retry`` or
-    ``recycled_after_recovery`` (released over its bin after a slip), or, resting outside
+    ``recycled_after_recovery`` (in a bin after a failed attempt), or, resting outside
     every bin, the mechanism of its last attempt (``classify``)."""
     if final["bin"] is not None:
         if attempts and attempts[0]["succeeded"]:
@@ -256,7 +261,20 @@ def _summary(rounds: list[dict[str, Any]]) -> dict[str, Any]:
             k: {"recycled": c[True], "staged": c[True] + c[False]} for k, c in sorted(kinds.items())
         },
         "mechanisms": dict(mechanisms.most_common()),
+        "transitions": _transition_counts(rounds),
     }
+
+
+def _transition_counts(rounds: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    """Per transition, how often each estimate came with each ground truth
+    (``estimate/truth``, ``none`` where the simulator had no truth of the object)."""
+    counts: dict[str, Counter[str]] = {}
+    for round_ in rounds:
+        for outcome in round_["outcomes"]:
+            for t in outcome.get("transitions", []):
+                key = f"{t['outcome']}/{t['ground_truth'] or 'none'}"
+                counts.setdefault(t["transition"], Counter())[key] += 1
+    return {k: dict(sorted(c.items())) for k, c in sorted(counts.items())}
 
 
 def _objects(round_: dict[str, Any]) -> list[dict[str, Any]]:

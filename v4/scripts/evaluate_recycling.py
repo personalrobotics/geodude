@@ -9,7 +9,8 @@ artifact:
   dirty, every ``recycling.SOURCES`` distribution, and the host: its platform, Python,
   CPU model and count, OpenBLAS kernel (``recycling.blas_kernel``), and load;
 - per round: the staged objects and their poses, and per staged object every attempt's
-  outcome, with the deciding stage's detail and any recovery, where it finally rests,
+  outcome, with the deciding stage's reason, cause, and detail and any recovery, where it
+  finally rests,
   and its verdict (``verdict``);
 - per round, on the runtime clock (``timing``): how long it ran, and how much of that
   no command was active; and the same per staged object, from its first grasp's first
@@ -63,10 +64,12 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-FORMAT = 3
+FORMAT = 4
 """The evaluation artifact's format: raised whenever a field's meaning changes. 2: per
 object, its attempts, where it finally rests, and its verdict, in place of one outcome
-and its mechanism."""
+and its mechanism. 3: each round's and object's ``timing``. 4: a failure's ``reason`` and
+``cause`` (ssgrasping#34) and its ``held`` and ``attached`` state, and each raced plan's
+``plan_status``; timeouts and mechanisms are judged from these, never from detail."""
 CORPORA = {
     "development": range(0, 40),
     "acceptance": range(1000, 1040),
@@ -166,16 +169,14 @@ def _timing(attempts: list[dict[str, Any]], idle: list[list[int]], ended: int) -
 
 
 def _timed_out(round_: dict[str, Any]) -> bool:
-    """Whether any plan of the round ran out of its budget: a planning stage's detail,
-    or a raced plan's status."""
+    """Whether any plan of the round ran out of its budget: a stage not planned for a
+    timeout, or any raced plan the planner timed out (``plan_status``)."""
     for outcome in round_["outcomes"]:
         failure = outcome.get("failure") or {}
-        if "planning timeout" in failure.get("detail", ""):
+        if failure.get("reason") == "not_planned" and failure.get("cause") == "timeout":
             return True
         for candidate in outcome["race"]["candidates"]:
-            if "timeout" in candidate["detail"].lower() or any(
-                p["status"] == "timeout" for p in candidate["plans"]
-            ):
+            if any(p["plan_status"] == "timeout" for p in candidate["plans"]):
                 return True
     return False
 
@@ -199,11 +200,11 @@ def classify(outcome: dict[str, Any] | None) -> str:
     if failure is None:
         failed = sorted(k for k, ok in outcome["checks"].items() if not ok)
         return "checks:" + "+".join(failed)
-    skill, stage, detail = str(failure["skill"]), str(failure["stage"]), str(failure["detail"])
-    if stage in ("obstructed", "acquired"):
-        return f"{skill}.{stage}:" + detail.split(":", 1)[0]  # missed, or lost in the lift
-    if detail.startswith("planning "):
-        return f"{skill}.{stage}:" + detail.split(":", 1)[0].removeprefix("planning ")
+    skill, stage, reason, cause = (failure[k] for k in ("skill", "stage", "reason", "cause"))
+    if reason in ("missed", "lost"):  # nothing in the fingers, or lost in the lift
+        return f"{skill}.{stage}:{reason}"
+    if reason == "not_planned" and cause is not None:  # the planner's status
+        return f"{skill}.{stage}:{cause}"
     return f"{skill}.{stage}"
 
 

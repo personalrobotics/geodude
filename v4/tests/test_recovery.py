@@ -5,9 +5,9 @@ prose (personalrobotics/ssgrasping#34).
 that did not plan, where the object rests on its support, or after a carry whose gripper
 opening showed the object leave the hand (``transition_refuted``, cause ``retained``,
 personalrobotics/ssgrasping#28), where nothing is left in it. ``safe_release`` decides
-that from the failed stage, its reason and cause, whether the skill then believed the
-object held, and whether it is still declared attached, as ``bin_outcome`` records them
-(``_failure``) from ssgrasping's own results. Each case here is a failure ssgrasping's
+that from ssgrasping's failed ``Stage`` (``failed_stage``): its name, reason and cause,
+whether the skill then believed the object held, and whether it is still declared
+attached. Each case here is a failure ssgrasping's
 end-to-end evidence produces (its ``obstructed`` lift and ``pulled`` transfer, and a
 lift the object leaves the same way): the decision holds whatever the stage's detail
 says, and is withheld when the reason or the attachment differs, or, for a lost object,
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from ssgrasping import Evidence, Reason, SkillResult, SkillState, Stage
 
-from geodude.recycling import RELEASE_IN_PLACE, RELEASE_LOST, _failure, safe_release
+from geodude.recycling import RELEASE_IN_PLACE, RELEASE_LOST, failed_stage, safe_release
 
 DETAILS = (
     None,  # as ssgrasping words it today
@@ -82,17 +82,17 @@ def test_release_is_chosen_by_stage_reason_and_attachment_not_detail() -> None:
             result = _failed(
                 skill, stage, reason, cause, today if detail is None else detail, evidence, held
             )
-            assert safe_release(_failure(result)) == action, (skill, stage, detail)
+            assert safe_release(failed_stage(result)) == action, (skill, stage, detail)
         if action == RELEASE_LOST:
             # Detached only if the skill reported the object not held.
             for believed in (None, True):
                 kept = _failed(skill, stage, reason, cause, today, evidence, believed)
-                assert safe_release(_failure(kept)) is None, (skill, stage, believed)
+                assert safe_release(failed_stage(kept)) is None, (skill, stage, believed)
         # The same stage failing otherwise, or with nothing still attached, has no known
         # support to release onto.
         other = Reason.COMMAND_FAILED if reason is Reason.NOT_PLANNED else Reason.REFUSED
         otherwise = _failed(skill, stage, other, None, today, evidence, held)
-        assert safe_release(_failure(otherwise)) is None
+        assert safe_release(failed_stage(otherwise)) is None
         detached = _failed(skill, stage, reason, cause, today, evidence, held, attached=False)
-        assert safe_release(_failure(detached)) is None
+        assert safe_release(failed_stage(detached)) is None
     assert safe_release(None) is None

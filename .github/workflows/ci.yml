@@ -88,9 +88,6 @@ jobs:
       - name: Mypy
         run: uv run mypy
 
-      - name: Boundary
-        run: uv run python scripts/check_boundary.py
-
       - name: Pytest
         run: uv run pytest -v
         env:

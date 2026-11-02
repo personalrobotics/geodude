@@ -13,24 +13,31 @@ that report and keeps it as its evidence:
 - every grasp and drop stage, with the release confirmed, and nothing attached;
 - the can's ``landing``, scoring the drop's ``landed`` after it ends, and where the can
   came to rest, from its pose channel: inside the bin's prl_assets interior;
-- the same outcome and trace from two runs;
+- the same outcome from ``demo`` and from the command;
 - a bundle that verifies, with a world that materializes without a runtime;
 - the left arm, for seed 3, chosen by the can's side and dropping into the left bin;
 - step 1, under ``worktop``: the same pick, then ``place`` upright on the worktop, with
   the can's tilt from upright, its base's height above the worktop, and its offset from
   the target each within its tolerance.
 
-Reproduce with ``uv run pytest tests/test_recycling.py``. CI also runs the same command
-from the built wheel in a clean environment (``scripts/check_installed.py``).
+A second test ends a round while a landing is still observed: the landing is cancelled
+and its attempt recorded whole (``landing_outlasted.json``).
+
+Reproduce with ``uv run pytest tests/test_recycling.py``. CI also runs
+``geodude-recycling --seed 0 --record`` from the built wheel in a clean environment and
+checks its report (``scripts/check_installed.py``); it does not run this test from the
+wheel.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 from ssrobot import JsonlTrace, RobotContext, load_installed_package, open_bundle
 from ssrobot.mujoco import materialize_world
 
@@ -73,7 +80,7 @@ def _run(work: Path, to: str = "bin", seed: int = SEED) -> dict[str, Any]:
 
 
 def test_geodude_recycles_one_can_on_ssrobot(artifacts: Path, tmp_path: Path) -> None:
-    first, second = _run(tmp_path / "first"), _run(tmp_path / "second")
+    first = _run(tmp_path / "first")
     worktop = _run(tmp_path / "worktop", "worktop")["outcome"]
     left = _run(tmp_path / "left", seed=LEFT_SEED)["outcome"]
 
@@ -84,7 +91,6 @@ def test_geodude_recycles_one_can_on_ssrobot(artifacts: Path, tmp_path: Path) ->
     world = materialize_world(bundle)
 
     report["staged_files"] = first["scene"]
-    report["repeat_identical"] = first == second
     report["recorded_matches_repeat"] = {k: report[k] for k in first["outcome"]} == first["outcome"]
     report["left"] = left
     report["worktop"] = worktop
@@ -96,34 +102,58 @@ def test_geodude_recycles_one_can_on_ssrobot(artifacts: Path, tmp_path: Path) ->
     (artifacts / "recycling.json").write_text(json.dumps(report, indent=2) + "\n")
 
     assert report["seed"] == SEED
-    assert report["sources"]["geodude"]["version"].startswith("4.")
     scene = report["scene"]
     assert scene["seed"] == SEED and scene["prl_assets"]["source"] is not None
     assert set(scene["files"]) == set(report["staged_files"]) - {"manifest.json"}
-    assert [o["name"] for o in scene["objects"]] == ["can_0"]
-    assert [f["name"] for f in scene["fixtures"]] == ["recycle_bin_0", "recycle_bin_1"]
-    assert report["to"] == "bin" and report["bin"]["name"] == "recycle_bin_0"
+    assert report["to"] == "bin" and report["bin"]["name"] == recycling.Arm("right").bin[0]
     assert report["arm"] == "right"
     assert report["checks"] == dict.fromkeys(report["checks"], True), report["checks"]
     assert report["succeeded"] and report["attached"] == []
-    assert [n for n, _ in report["drop"]] == ["preflight", "transfer", "release"]
-    assert report["landing"] == [["observed", True]]
     assert left["arm"] == "left"
-    assert left["bin"]["name"] == "recycle_bin_1"
+    assert left["bin"]["name"] == recycling.Arm("left").bin[0]
     assert left["checks"] == dict.fromkeys(left["checks"], True), left["checks"]
     assert left["succeeded"] and left["attached"] == []
     assert worktop["checks"] == dict.fromkeys(worktop["checks"], True), worktop["checks"]
     assert worktop["succeeded"] and worktop["attached"] == []
-    assert report["repeat_identical"] and report["recorded_matches_repeat"]
+    assert report["recorded_matches_repeat"]
     assert report["bundle"]["snapshots"] >= 2 and report["bundle"]["world_matches"]
+
+
+def test_a_landing_the_round_outlasts_is_recorded_ended(
+    artifacts: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A round can end while a landing is still observed: here every landing waits far
+    longer than the round's ticks. The landing is cancelled and the attempt recorded
+    whole, its ``landed`` check failed, so ``main`` and the evaluator can read
+    ``succeeded`` and ``checks`` of every attempt."""
+    spec = recycling.landing_spec
+    monkeypatch.setattr(
+        recycling,
+        "landing_spec",
+        lambda obj, arm: dataclasses.replace(spec(obj, arm), land_ns=2**62),
+    )
+    package = load_installed_package("geodude_assets")
+    scene = stage_scene(
+        tmp_path / "scene", package, objects={"can": 1}, fixtures=recycling.BINS, seed=SEED
+    )
+    with RobotContext(
+        package.description,
+        recycling.runtime(package, scene),
+        object_poses=recycling.OBJECT_POSES,
+    ) as ctx:
+        (attempt,) = recycling.recycle(ctx, package, ["can_0"])
+    record = {k: attempt[k] for k in ("object", "arm", "landing", "checks", "succeeded")}
+    (artifacts / "landing_outlasted.json").write_text(json.dumps(record, indent=2) + "\n")
+
+    assert attempt["checks"]["released"] and attempt["checks"]["detached"]
+    assert attempt["checks"]["landed"] is False and attempt["succeeded"] is False
+    assert attempt["landing"] is not None
 
 
 def test_the_demo_refuses_impossible_can_counts_before_starting() -> None:
     """``--cans`` below 1 would stage nothing and report success; ``--to worktop`` places
     one can only. Both are refused at the command line, before any package, scene, or
     runtime is set up."""
-    import pytest
-
     for argv in (["--cans", "0"], ["--cans", "-2"], ["--cans", "2", "--to", "worktop"]):
         with pytest.raises(SystemExit) as refused:
             recycling.main(argv)

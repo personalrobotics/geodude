@@ -5,7 +5,7 @@ One seeded ``sort_all`` round of ``OBJECTS`` objects, run three ways in contexts
 registered object poses (``recycling.OBJECT_POSES``):
 - ``A``: as the demo runs, with evaluation: the registration stub reads each object's
   privileged pose channel, and landings are scored against privileged poses.
-- ``B``, twice: without evaluation, through a runtime that declares no privileged
+- ``B``: without evaluation, through a runtime that declares no privileged
   channel, so the context refuses any read of one. Registration reads MuJoCo directly,
   outside the context, standing in for a perception source, and the trace records it so
   (``perception_stand_in``), as ``A``'s records ``pose_stub``.
@@ -22,15 +22,15 @@ The claims:
   enters control except through ``recycling.register``.
 
 ``B``'s final placement is read from MuJoCo after its round, for the report. The
-evidence is ``registered_control.json``; ``B`` writes byte-identical records twice.
+evidence is ``registered_control.json``. Determinism is ``test_planning_latency``'s
+gate; ``A`` and ``B`` agreeing is this test's.
 
 A second test, ``moved_and_retried.json``, moves one can ``MOVE_M`` along the worktop
 in MuJoCo after it was registered, as a bump would, with every privileged channel
 withheld. The grasp, planned on the registered pose, closes on nothing (``missed``,
 portable evidence). The table is registered again, at the can's new pose, and the one
 retry, raced from a fresh snapshot, picks it up and drops it in a bin. Both attempts are
-recorded, each with the registration its race planned on; the run is repeated
-identically.
+recorded, each with the registration its race planned on.
 
 Reproduce with ``uv run pytest tests/test_registered_control.py``.
 """
@@ -40,7 +40,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import math
-import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -225,21 +224,13 @@ def _round(work: Path, unprivileged: bool) -> dict[str, Any]:
     }
 
 
-def _b() -> dict[str, Any]:
-    with tempfile.TemporaryDirectory() as work:
-        return _round(Path(work), unprivileged=True)
-
-
 def test_control_runs_on_registered_poses_alone(artifacts: Path, tmp_path: Path) -> None:
     a = _round(tmp_path / "a", unprivileged=False)
-    first = json.dumps(_b(), indent=2) + "\n"
-    again = json.dumps(_b(), indent=2) + "\n"
-    b = json.loads(first)
+    b = _round(tmp_path / "b", unprivileged=True)
     (artifacts / "registered_control.json").write_text(
-        json.dumps({"a": a, "b": b, "b_repeat_identical": first == again}, indent=2) + "\n"
+        json.dumps({"a": a, "b": b}, indent=2) + "\n"
     )
 
-    assert first == again
     assert b["control"] == a["control"]
     assert b["registrations"] == a["registrations"] and b["registrations"]
     assert b["provenance"]["privileged_readings"] == 0
@@ -334,10 +325,8 @@ def test_a_missed_grasp_registers_the_table_again_and_retries(
     artifacts: Path, tmp_path: Path
 ) -> None:
     first = _moved_and_retried(tmp_path / "first")
-    again = _moved_and_retried(tmp_path / "again")
     (artifacts / "moved_and_retried.json").write_text(json.dumps(first, indent=2) + "\n")
 
-    assert first == again
     missed, retried = first["attempts"]
     assert missed["failure"] == "missed" and missed["grasp"][-1] == ["obstructed", False]
     assert retried["failure"] is None and retried["released"]

@@ -1,0 +1,1900 @@
+{
+ "commits": {
+  "geodude": {
+   "baseline": "05f6359",
+   "snapshot": "0618279"
+  },
+  "ssgrasping": {
+   "baseline": "591f234",
+   "snapshot": "d29a4b4"
+  },
+  "ssrobot": {
+   "baseline": "116f3c8",
+   "snapshot": "0ecbd8d"
+  }
+ },
+ "geodude": {
+  "baseline": {
+   "commit": "05f6359d5da6ccb542097b3f7b6ab434ef97019b",
+   "excluded": {
+    "binary": 1,
+    "lockfile_or_audit": 1
+   },
+   "parts": {
+    "geodude-legacy": {
+     "categories": {
+      "config": {
+       "code": 183,
+       "files": 6,
+       "lines": 214
+      },
+      "docs": {
+       "code": 2065,
+       "files": 20,
+       "lines": 2594
+      },
+      "production": {
+       "classes": 20,
+       "code": 3955,
+       "files": 20,
+       "functions": 192,
+       "lines": 5283,
+       "modules": 20
+      },
+      "scripts": {
+       "classes": 0,
+       "code": 106,
+       "files": 2,
+       "functions": 3,
+       "lines": 162,
+       "modules": 2
+      },
+      "tests": {
+       "classes": 36,
+       "code": 1492,
+       "files": 11,
+       "functions": 166,
+       "lines": 2010,
+       "modules": 11
+      }
+     },
+     "cross_repository_imports": {},
+     "cross_repository_names": [],
+     "largest_functions": [
+      [
+       "src/geodude/demos/tune_ur5e_gains.py:main",
+       287
+      ],
+      [
+       "src/geodude/console.py:start_console",
+       282
+      ],
+      [
+       "src/geodude/chat.py:_build_tools",
+       181
+      ],
+      [
+       "src/geodude/chat.py:_execute_tool",
+       139
+      ],
+      [
+       "src/geodude/demos/tune_ur5e_gains.py:run_trajectory_and_measure",
+       137
+      ],
+      [
+       "src/geodude/robot.py:__init__",
+       109
+      ],
+      [
+       "src/geodude/chat.py:_run_conversation",
+       95
+      ],
+      [
+       "src/geodude/primitives.py:_go_home_inner",
+       93
+      ],
+      [
+       "src/geodude/robot.py:_create_arm",
+       93
+      ],
+      [
+       "src/geodude/bt/nodes.py:update",
+       88
+      ],
+      [
+       "src/geodude/demo_loader.py:_spawn_manipulable_objects",
+       83
+      ],
+      [
+       "src/geodude/primitives.py:_pickup_inner",
+       79
+      ],
+      [
+       "src/geodude/panels/chat_panel.py:_send_message",
+       76
+      ],
+      [
+       "src/geodude/robot.py:_plan_single",
+       65
+      ],
+      [
+       "src/geodude/panels/chat_panel.py:_render",
+       60
+      ]
+     ],
+     "largest_modules": [
+      [
+       "src/geodude/robot.py",
+       757
+      ],
+      [
+       "src/geodude/demos/tune_ur5e_gains.py",
+       718
+      ],
+      [
+       "src/geodude/chat.py",
+       663
+      ],
+      [
+       "src/geodude/vention_base.py",
+       300
+      ],
+      [
+       "src/geodude/primitives.py",
+       262
+      ],
+      [
+       "src/geodude/console.py",
+       253
+      ],
+      [
+       "src/geodude/demo_loader.py",
+       236
+      ],
+      [
+       "src/geodude/panels/chat_panel.py",
+       209
+      ],
+      [
+       "src/geodude/config.py",
+       183
+      ],
+      [
+       "src/geodude/bt/nodes.py",
+       105
+      ],
+      [
+       "src/geodude/__init__.py",
+       49
+      ],
+      [
+       "src/geodude/bt/subtrees.py",
+       46
+      ],
+      [
+       "src/geodude/cli.py",
+       45
+      ],
+      [
+       "src/geodude/panels/teleop_panel.py",
+       41
+      ],
+      [
+       "src/geodude/demos/recycling.py",
+       35
+      ]
+     ],
+     "public_exports": [
+      "Arm",
+      "DebugConfig",
+      "GeodudConfig",
+      "Geodude",
+      "GraspManager",
+      "PlanResult",
+      "SimContext",
+      "Trajectory",
+      "VentionBase",
+      "VentionBaseConfig",
+      "setup_logging"
+     ]
+    }
+   }
+  },
+  "commands": {
+   "baseline": {
+    "root": {
+     "geodude": "geodude.cli:main"
+    },
+    "v4/": {}
+   },
+   "snapshot": {
+    "root": {
+     "geodude": "geodude.cli:main"
+    },
+    "v4/": {
+     "geodude-recycling": "geodude.recycling:main"
+    }
+   }
+  },
+  "snapshot": {
+   "commit": "0618279186a833fe9b535fa6c0ef21ebd3604147",
+   "excluded": {
+    "binary": 2,
+    "lockfile_or_audit": 2
+   },
+   "parts": {
+    "geodude-legacy": {
+     "categories": {
+      "config": {
+       "code": 241,
+       "files": 6,
+       "lines": 285
+      },
+      "docs": {
+       "code": 2067,
+       "files": 20,
+       "lines": 2597
+      },
+      "production": {
+       "classes": 20,
+       "code": 3955,
+       "files": 20,
+       "functions": 192,
+       "lines": 5283,
+       "modules": 20
+      },
+      "scripts": {
+       "classes": 0,
+       "code": 106,
+       "files": 2,
+       "functions": 3,
+       "lines": 162,
+       "modules": 2
+      },
+      "tests": {
+       "classes": 36,
+       "code": 1492,
+       "files": 11,
+       "functions": 166,
+       "lines": 2010,
+       "modules": 11
+      }
+     },
+     "cross_repository_imports": {},
+     "cross_repository_names": [],
+     "largest_functions": [
+      [
+       "src/geodude/demos/tune_ur5e_gains.py:main",
+       287
+      ],
+      [
+       "src/geodude/console.py:start_console",
+       282
+      ],
+      [
+       "src/geodude/chat.py:_build_tools",
+       181
+      ],
+      [
+       "src/geodude/chat.py:_execute_tool",
+       139
+      ],
+      [
+       "src/geodude/demos/tune_ur5e_gains.py:run_trajectory_and_measure",
+       137
+      ],
+      [
+       "src/geodude/robot.py:__init__",
+       109
+      ],
+      [
+       "src/geodude/chat.py:_run_conversation",
+       95
+      ],
+      [
+       "src/geodude/primitives.py:_go_home_inner",
+       93
+      ],
+      [
+       "src/geodude/robot.py:_create_arm",
+       93
+      ],
+      [
+       "src/geodude/bt/nodes.py:update",
+       88
+      ],
+      [
+       "src/geodude/demo_loader.py:_spawn_manipulable_objects",
+       83
+      ],
+      [
+       "src/geodude/primitives.py:_pickup_inner",
+       79
+      ],
+      [
+       "src/geodude/panels/chat_panel.py:_send_message",
+       76
+      ],
+      [
+       "src/geodude/robot.py:_plan_single",
+       65
+      ],
+      [
+       "src/geodude/panels/chat_panel.py:_render",
+       60
+      ]
+     ],
+     "largest_modules": [
+      [
+       "src/geodude/robot.py",
+       757
+      ],
+      [
+       "src/geodude/demos/tune_ur5e_gains.py",
+       718
+      ],
+      [
+       "src/geodude/chat.py",
+       663
+      ],
+      [
+       "src/geodude/vention_base.py",
+       300
+      ],
+      [
+       "src/geodude/primitives.py",
+       262
+      ],
+      [
+       "src/geodude/console.py",
+       253
+      ],
+      [
+       "src/geodude/demo_loader.py",
+       236
+      ],
+      [
+       "src/geodude/panels/chat_panel.py",
+       209
+      ],
+      [
+       "src/geodude/config.py",
+       183
+      ],
+      [
+       "src/geodude/bt/nodes.py",
+       105
+      ],
+      [
+       "src/geodude/__init__.py",
+       49
+      ],
+      [
+       "src/geodude/bt/subtrees.py",
+       46
+      ],
+      [
+       "src/geodude/cli.py",
+       45
+      ],
+      [
+       "src/geodude/panels/teleop_panel.py",
+       41
+      ],
+      [
+       "src/geodude/demos/recycling.py",
+       35
+      ]
+     ],
+     "public_exports": [
+      "Arm",
+      "DebugConfig",
+      "GeodudConfig",
+      "Geodude",
+      "GraspManager",
+      "PlanResult",
+      "SimContext",
+      "Trajectory",
+      "VentionBase",
+      "VentionBaseConfig",
+      "setup_logging"
+     ]
+    },
+    "geodude-v4": {
+     "categories": {
+      "config": {
+       "code": 60,
+       "files": 2,
+       "lines": 71
+      },
+      "docs": {
+       "code": 206,
+       "files": 2,
+       "lines": 255
+      },
+      "evidence": {
+       "code": 68,
+       "files": 1,
+       "lines": 68
+      },
+      "production": {
+       "classes": 3,
+       "code": 1724,
+       "files": 4,
+       "functions": 75,
+       "lines": 1940,
+       "modules": 4
+      },
+      "scripts": {
+       "classes": 1,
+       "code": 966,
+       "files": 5,
+       "functions": 43,
+       "lines": 1116,
+       "modules": 5
+      },
+      "tests": {
+       "classes": 1,
+       "code": 810,
+       "files": 10,
+       "functions": 35,
+       "lines": 967,
+       "modules": 10
+      }
+     },
+     "cross_repository_imports": {
+      "production:ssgrasping": 1,
+      "production:ssrobot": 6,
+      "scripts:ssgrasping": 3,
+      "scripts:ssrobot": 6,
+      "tests:ssgrasping": 1,
+      "tests:ssrobot": 10
+     },
+     "cross_repository_names": [
+      "ssgrasping.Candidate",
+      "ssgrasping.Candidates",
+      "ssgrasping.DropSpec",
+      "ssgrasping.Evidence",
+      "ssgrasping.GraspSpec",
+      "ssgrasping.LandingSpec",
+      "ssgrasping.Lookahead",
+      "ssgrasping.PlaceSpec",
+      "ssgrasping.Reason",
+      "ssgrasping.Reason",
+      "ssgrasping.SkillExecution",
+      "ssgrasping.SkillResult",
+      "ssgrasping.SkillResult",
+      "ssgrasping.SkillState",
+      "ssgrasping.Stage",
+      "ssgrasping.Transition",
+      "ssgrasping.TransitionEstimate",
+      "ssgrasping.TransitionOutcome",
+      "ssgrasping.drop",
+      "ssgrasping.drop",
+      "ssgrasping.grasp",
+      "ssgrasping.landing",
+      "ssgrasping.place",
+      "ssgrasping.run_together",
+      "ssrobot.CBiRRT",
+      "ssrobot.ClockMode",
+      "ssrobot.Execution",
+      "ssrobot.ExecutionState",
+      "ssrobot.ExecutionState",
+      "ssrobot.ExecutionStatus",
+      "ssrobot.GripperCommand",
+      "ssrobot.GripperTermination",
+      "ssrobot.JsonlTrace",
+      "ssrobot.JsonlTrace",
+      "ssrobot.MujocoRuntime",
+      "ssrobot.ObjectPoses",
+      "ssrobot.ObjectStatus",
+      "ssrobot.ObjectStatus",
+      "ssrobot.Observation",
+      "ssrobot.ObservationRequest",
+      "ssrobot.ObservationRequest",
+      "ssrobot.Planner",
+      "ssrobot.Pose",
+      "ssrobot.Pose",
+      "ssrobot.Registration",
+      "ssrobot.Registration",
+      "ssrobot.RobotContext",
+      "ssrobot.RobotContext",
+      "ssrobot.RobotContext",
+      "ssrobot.RobotPackage",
+      "ssrobot.RuntimeInfo",
+      "ssrobot.SceneSnapshot",
+      "ssrobot.SceneSnapshot",
+      "ssrobot.SceneState",
+      "ssrobot.SsikKinematics",
+      "ssrobot.Timestamp",
+      "ssrobot.TraceKind",
+      "ssrobot.TraceKind",
+      "ssrobot.TraceRecord",
+      "ssrobot.Tsr",
+      "ssrobot.ValidationError",
+      "ssrobot.WrenchGuard",
+      "ssrobot.WrenchPart",
+      "ssrobot._cbirrt",
+      "ssrobot._runtime",
+      "ssrobot.fingerprint",
+      "ssrobot.load_installed_package",
+      "ssrobot.load_installed_package",
+      "ssrobot.load_installed_package",
+      "ssrobot.materialize_world",
+      "ssrobot.open_bundle",
+      "ssrobot.write_bundle"
+     ],
+     "largest_functions": [
+      [
+       "v4/src/geodude/recycling.py:recycle",
+       210
+      ],
+      [
+       "v4/src/geodude/recycling.py:main",
+       116
+      ],
+      [
+       "v4/src/geodude/regions.py:held_drop_zones",
+       79
+      ],
+      [
+       "v4/src/geodude/recycling.py:recover",
+       61
+      ],
+      [
+       "v4/src/geodude/recycling.py:worktop_outcome",
+       51
+      ],
+      [
+       "v4/src/geodude/recycling.py:bin_outcome",
+       50
+      ],
+      [
+       "v4/src/geodude/scene.py:place",
+       41
+      ],
+      [
+       "v4/src/geodude/regions.py:pregrasps",
+       40
+      ],
+      [
+       "v4/src/geodude/scene.py:_write",
+       40
+      ],
+      [
+       "v4/src/geodude/recycling.py:place_on_worktop",
+       39
+      ],
+      [
+       "v4/src/geodude/scene.py:_attach",
+       36
+      ],
+      [
+       "v4/src/geodude/scene.py:stage_scene",
+       36
+      ],
+      [
+       "v4/src/geodude/recycling.py:sort_all",
+       34
+      ],
+      [
+       "v4/src/geodude/recycling.py:_drop_racing_next",
+       32
+      ],
+      [
+       "v4/src/geodude/recycling.py:_transitions",
+       31
+      ]
+     ],
+     "largest_modules": [
+      [
+       "v4/src/geodude/recycling.py",
+       1199
+      ],
+      [
+       "v4/src/geodude/scene.py",
+       281
+      ],
+      [
+       "v4/src/geodude/regions.py",
+       240
+      ],
+      [
+       "v4/src/geodude/__init__.py",
+       4
+      ]
+     ],
+     "public_exports": []
+    }
+   }
+  }
+ },
+ "python": "3.14.7",
+ "ssgrasping": {
+  "baseline": {
+   "commit": "591f234c800c4f9cdeaa775e55d7aef445f1dbb0",
+   "excluded": {
+    "lockfile_or_audit": 1
+   },
+   "parts": {
+    "ssgrasping": {
+     "categories": {
+      "config": {
+       "code": 131,
+       "files": 6,
+       "lines": 148
+      },
+      "docs": {
+       "code": 69,
+       "files": 5,
+       "lines": 101
+      },
+      "production": {
+       "classes": 10,
+       "code": 1023,
+       "files": 7,
+       "functions": 61,
+       "lines": 1203,
+       "modules": 7
+      },
+      "production_data": {
+       "code": 0,
+       "files": 1,
+       "lines": 0
+      },
+      "scripts": {
+       "classes": 0,
+       "code": 83,
+       "files": 1,
+       "functions": 1,
+       "lines": 97,
+       "modules": 1
+      },
+      "tests": {
+       "classes": 2,
+       "code": 420,
+       "files": 4,
+       "functions": 30,
+       "lines": 512,
+       "modules": 4
+      }
+     },
+     "cross_repository_imports": {
+      "production:ssrobot": 6,
+      "tests:ssrobot": 5
+     },
+     "cross_repository_names": [
+      "ssrobot.Attachment",
+      "ssrobot.CBiRRT",
+      "ssrobot.ClockMode",
+      "ssrobot.ClockMode",
+      "ssrobot.CommandKind",
+      "ssrobot.Execution",
+      "ssrobot.ExecutionState",
+      "ssrobot.GripperCommand",
+      "ssrobot.GuardCause",
+      "ssrobot.GuardedJointTrajectory",
+      "ssrobot.ManipulatorView",
+      "ssrobot.MujocoRuntime",
+      "ssrobot.ObservationRequest",
+      "ssrobot.PlanResult",
+      "ssrobot.PlanResult",
+      "ssrobot.Planner",
+      "ssrobot.Planner",
+      "ssrobot.Pose",
+      "ssrobot.Pose",
+      "ssrobot.RobotContext",
+      "ssrobot.RobotContext",
+      "ssrobot.SceneSnapshot",
+      "ssrobot.SsrobotError",
+      "ssrobot.Tsr",
+      "ssrobot.Tsr",
+      "ssrobot.ValidationError",
+      "ssrobot.WrenchGuard",
+      "ssrobot.WrenchGuard",
+      "ssrobot.WrenchPart",
+      "ssrobot.load_installed_package",
+      "ssrobot.prepare"
+     ],
+     "largest_functions": [
+      [
+       "src/ssgrasping/grasp.py:_grasp",
+       96
+      ],
+      [
+       "src/ssgrasping/place.py:_place",
+       92
+      ],
+      [
+       "src/ssgrasping/_skill.py:preflight",
+       48
+      ],
+      [
+       "src/ssgrasping/execution.py:run_skill",
+       38
+      ],
+      [
+       "src/ssgrasping/place.py:_descend",
+       36
+      ],
+      [
+       "src/ssgrasping/_skill.py:choose",
+       33
+      ],
+      [
+       "src/ssgrasping/_skill.py:replace_allowance",
+       31
+      ],
+      [
+       "src/ssgrasping/_poses.py:offset_interval",
+       21
+      ],
+      [
+       "src/ssgrasping/execution.py:advance",
+       21
+      ],
+      [
+       "src/ssgrasping/grasp.py:_approach",
+       19
+      ],
+      [
+       "src/ssgrasping/_skill.py:_append",
+       13
+      ],
+      [
+       "src/ssgrasping/_skill.py:move",
+       13
+      ],
+      [
+       "src/ssgrasping/grasp.py:grasp",
+       13
+      ],
+      [
+       "src/ssgrasping/place.py:_held_pose",
+       13
+      ],
+      [
+       "src/ssgrasping/place.py:_toward",
+       13
+      ]
+     ],
+     "largest_modules": [
+      [
+       "src/ssgrasping/place.py",
+       275
+      ],
+      [
+       "src/ssgrasping/_skill.py",
+       254
+      ],
+      [
+       "src/ssgrasping/grasp.py",
+       198
+      ],
+      [
+       "src/ssgrasping/execution.py",
+       118
+      ],
+      [
+       "src/ssgrasping/_poses.py",
+       96
+      ],
+      [
+       "src/ssgrasping/outcomes.py",
+       61
+      ],
+      [
+       "src/ssgrasping/__init__.py",
+       21
+      ]
+     ],
+     "public_exports": [
+      "Evidence",
+      "GraspSpec",
+      "PlaceSpec",
+      "SkillExecution",
+      "SkillResult",
+      "SkillState",
+      "Stage",
+      "grasp",
+      "place",
+      "run_skill"
+     ]
+    }
+   }
+  },
+  "commands": {
+   "baseline": {
+    "root": {}
+   },
+   "snapshot": {
+    "root": {}
+   }
+  },
+  "snapshot": {
+   "commit": "d29a4b4183d4c4d6165d4f2f37cfaccf50c1449d",
+   "excluded": {
+    "lockfile_or_audit": 1
+   },
+   "parts": {
+    "ssgrasping": {
+     "categories": {
+      "config": {
+       "code": 137,
+       "files": 6,
+       "lines": 154
+      },
+      "docs": {
+       "code": 710,
+       "files": 9,
+       "lines": 865
+      },
+      "evidence": {
+       "code": 10142,
+       "files": 2,
+       "lines": 10142
+      },
+      "production": {
+       "classes": 29,
+       "code": 2939,
+       "files": 10,
+       "functions": 128,
+       "lines": 3320,
+       "modules": 10
+      },
+      "production_data": {
+       "code": 0,
+       "files": 1,
+       "lines": 0
+      },
+      "scripts": {
+       "classes": 4,
+       "code": 733,
+       "files": 2,
+       "functions": 31,
+       "lines": 837,
+       "modules": 2
+      },
+      "tests": {
+       "classes": 5,
+       "code": 1688,
+       "files": 6,
+       "functions": 93,
+       "lines": 2010,
+       "modules": 6
+      }
+     },
+     "cross_repository_imports": {
+      "production:ssrobot": 9,
+      "scripts:ssrobot": 2,
+      "tests:ssrobot": 9
+     },
+     "cross_repository_names": [
+      "ssrobot.Attachment",
+      "ssrobot.AttachmentViolation",
+      "ssrobot.CBiRRT",
+      "ssrobot.Chain",
+      "ssrobot.ChainsRun",
+      "ssrobot.ClockMode",
+      "ssrobot.ClockMode",
+      "ssrobot.CommandKind",
+      "ssrobot.Continuation",
+      "ssrobot.Execution",
+      "ssrobot.ExecutionState",
+      "ssrobot.GripperCommand",
+      "ssrobot.GripperTermination",
+      "ssrobot.GuardCause",
+      "ssrobot.GuardCause",
+      "ssrobot.GuardedJointTrajectory",
+      "ssrobot.JointRest",
+      "ssrobot.ManipulatorView",
+      "ssrobot.MujocoRuntime",
+      "ssrobot.MujocoRuntime",
+      "ssrobot.ObjectPoses",
+      "ssrobot.ObservationRequest",
+      "ssrobot.ObservationRequest",
+      "ssrobot.ObservationRequest",
+      "ssrobot.OffsetGoal",
+      "ssrobot.OffsetGoal",
+      "ssrobot.OpeningGuard",
+      "ssrobot.PlanProjection",
+      "ssrobot.PlanResult",
+      "ssrobot.PlanResult",
+      "ssrobot.PlanStatus",
+      "ssrobot.Planner",
+      "ssrobot.Planner",
+      "ssrobot.PlanningRequest",
+      "ssrobot.Pose",
+      "ssrobot.Pose",
+      "ssrobot.Pose",
+      "ssrobot.PredictedSnapshot",
+      "ssrobot.Quantity",
+      "ssrobot.RestOutcome",
+      "ssrobot.RestOutcome",
+      "ssrobot.RestResult",
+      "ssrobot.RestWatch",
+      "ssrobot.RobotContext",
+      "ssrobot.RobotContext",
+      "ssrobot.RobotContext",
+      "ssrobot.RuntimeUpdate",
+      "ssrobot.SceneSnapshot",
+      "ssrobot.SsrobotError",
+      "ssrobot.Stage",
+      "ssrobot.StageRequest",
+      "ssrobot.StageResult",
+      "ssrobot.TraceKind",
+      "ssrobot.Tsr",
+      "ssrobot.Tsr",
+      "ssrobot.TsrGoal",
+      "ssrobot.TsrGoal",
+      "ssrobot.ValidationError",
+      "ssrobot.ValidationError",
+      "ssrobot.WrenchGuard",
+      "ssrobot.WrenchGuard",
+      "ssrobot.WrenchPart",
+      "ssrobot.dumps",
+      "ssrobot.load_installed_package",
+      "ssrobot.load_installed_package",
+      "ssrobot.prepare"
+     ],
+     "largest_functions": [
+      [
+       "src/ssgrasping/grasp.py:_grasp",
+       200
+      ],
+      [
+       "src/ssgrasping/place.py:_place",
+       120
+      ],
+      [
+       "src/ssgrasping/candidates.py:_chain",
+       102
+      ],
+      [
+       "src/ssgrasping/drop.py:_drop",
+       90
+      ],
+      [
+       "src/ssgrasping/_skill.py:preflight",
+       61
+      ],
+      [
+       "src/ssgrasping/_skill.py:move",
+       61
+      ],
+      [
+       "src/ssgrasping/place.py:_descend",
+       58
+      ],
+      [
+       "src/ssgrasping/_skill.py:_continue",
+       57
+      ],
+      [
+       "src/ssgrasping/_skill.py:choose",
+       53
+      ],
+      [
+       "src/ssgrasping/_skill.py:_retained",
+       48
+      ],
+      [
+       "src/ssgrasping/candidates.py:_summary",
+       47
+      ],
+      [
+       "src/ssgrasping/candidates.py:_select",
+       40
+      ],
+      [
+       "src/ssgrasping/drop.py:drop",
+       37
+      ],
+      [
+       "src/ssgrasping/_skill.py:kept",
+       36
+      ],
+      [
+       "src/ssgrasping/grasp.py:grasp",
+       36
+      ]
+     ],
+     "largest_modules": [
+      [
+       "src/ssgrasping/_skill.py",
+       870
+      ],
+      [
+       "src/ssgrasping/grasp.py",
+       452
+      ],
+      [
+       "src/ssgrasping/place.py",
+       394
+      ],
+      [
+       "src/ssgrasping/candidates.py",
+       375
+      ],
+      [
+       "src/ssgrasping/drop.py",
+       274
+      ],
+      [
+       "src/ssgrasping/execution.py",
+       171
+      ],
+      [
+       "src/ssgrasping/outcomes.py",
+       171
+      ],
+      [
+       "src/ssgrasping/_poses.py",
+       96
+      ],
+      [
+       "src/ssgrasping/landing.py",
+       79
+      ],
+      [
+       "src/ssgrasping/__init__.py",
+       57
+      ]
+     ],
+     "public_exports": [
+      "Candidate",
+      "Candidates",
+      "Criterion",
+      "DropSpec",
+      "EstimateReason",
+      "Evidence",
+      "Follow",
+      "GraspSpec",
+      "LandingSpec",
+      "Lookahead",
+      "Observed",
+      "PlaceSpec",
+      "Reason",
+      "Selection",
+      "SkillExecution",
+      "SkillResult",
+      "SkillState",
+      "Stage",
+      "Transition",
+      "TransitionEstimate",
+      "TransitionEvaluation",
+      "TransitionOutcome",
+      "drop",
+      "grasp",
+      "landing",
+      "place",
+      "run_skill",
+      "run_together"
+     ]
+    }
+   }
+  }
+ },
+ "ssrobot": {
+  "baseline": {
+   "commit": "116f3c8214a6b3cc297a640a0ddf622c6fe497db",
+   "excluded": {
+    "binary": 3,
+    "lockfile_or_audit": 1
+   },
+   "parts": {
+    "ssrobot": {
+     "categories": {
+      "config": {
+       "code": 200,
+       "files": 3,
+       "lines": 216
+      },
+      "docs": {
+       "code": 2828,
+       "files": 10,
+       "lines": 3370
+      },
+      "examples": {
+       "code": 1124,
+       "files": 16,
+       "lines": 1217
+      },
+      "generated": {
+       "code": 13795,
+       "files": 49,
+       "lines": 13812
+      },
+      "production": {
+       "classes": 212,
+       "code": 14561,
+       "files": 44,
+       "functions": 708,
+       "lines": 16661,
+       "modules": 44
+      },
+      "production_data": {
+       "code": 123,
+       "files": 4,
+       "lines": 140
+      },
+      "scripts": {
+       "classes": 0,
+       "code": 1631,
+       "files": 4,
+       "functions": 53,
+       "lines": 1841,
+       "modules": 4
+      },
+      "tests": {
+       "classes": 25,
+       "code": 10906,
+       "files": 113,
+       "functions": 444,
+       "lines": 12300,
+       "modules": 30
+      }
+     },
+     "cross_repository_imports": {},
+     "cross_repository_names": [],
+     "largest_functions": [
+      [
+       "src/ssrobot/mujoco/_runtime.py:_open",
+       189
+      ],
+      [
+       "src/ssrobot/portfolio.py:plan_portfolio",
+       153
+      ],
+      [
+       "src/ssrobot/mujoco/_planning.py:materialize",
+       138
+      ],
+      [
+       "src/ssrobot/preparation.py:prepare",
+       125
+      ],
+      [
+       "src/ssrobot/conformance.py:run_conformance",
+       124
+      ],
+      [
+       "src/ssrobot/_world.py:read_scene",
+       120
+      ],
+      [
+       "src/ssrobot/inference.py:infer",
+       110
+      ],
+      [
+       "src/ssrobot/inference.py:resolve",
+       110
+      ],
+      [
+       "src/ssrobot/authoring.py:finalize",
+       109
+      ],
+      [
+       "src/ssrobot/mujoco/_runtime.py:_bind_grippers",
+       89
+      ],
+      [
+       "src/ssrobot/context.py:_submit",
+       86
+      ],
+      [
+       "src/ssrobot/planning_contracts.py:_validate",
+       83
+      ],
+      [
+       "src/ssrobot/bundle.py:write_bundle",
+       82
+      ],
+      [
+       "src/ssrobot/urdf.py:_groups",
+       78
+      ],
+      [
+       "src/ssrobot/planning_contracts.py:build_request",
+       77
+      ]
+     ],
+     "largest_modules": [
+      [
+       "src/ssrobot/planning_contracts.py",
+       1458
+      ],
+      [
+       "src/ssrobot/context.py",
+       1359
+      ],
+      [
+       "src/ssrobot/mujoco/_runtime.py",
+       1288
+      ],
+      [
+       "src/ssrobot/conformance.py",
+       867
+      ],
+      [
+       "src/ssrobot/description.py",
+       800
+      ],
+      [
+       "src/ssrobot/mujoco/_model.py",
+       539
+      ],
+      [
+       "src/ssrobot/_wire.py",
+       523
+      ],
+      [
+       "src/ssrobot/inference.py",
+       499
+      ],
+      [
+       "src/ssrobot/authoring.py",
+       472
+      ],
+      [
+       "src/ssrobot/urdf.py",
+       472
+      ],
+      [
+       "src/ssrobot/validation.py",
+       416
+      ],
+      [
+       "src/ssrobot/mjcf.py",
+       408
+      ],
+      [
+       "src/ssrobot/planning/_cbirrt.py",
+       400
+      ],
+      [
+       "src/ssrobot/portfolio.py",
+       390
+      ],
+      [
+       "src/ssrobot/package.py",
+       317
+      ]
+     ],
+     "public_exports": [
+      "ActionChunk",
+      "AppliedCommand",
+      "ArrayValue",
+      "AssetStore",
+      "Attachment",
+      "AttachmentViolation",
+      "AttemptOutcome",
+      "AttemptRecord",
+      "BasePoseGoal",
+      "BaseTwistCommand",
+      "BaseView",
+      "Bundle",
+      "BundleFile",
+      "Candidate",
+      "CandidateChoice",
+      "CandidateKind",
+      "CandidateOutcome",
+      "CapabilityError",
+      "ChannelSpec",
+      "ClockMode",
+      "CollisionAllowance",
+      "Command",
+      "CommandCapability",
+      "CommandKind",
+      "ConfigurationGoal",
+      "ConstraintClass",
+      "Contact",
+      "ContactKind",
+      "ContextState",
+      "DType",
+      "Diagnostic",
+      "EffectiveLimits",
+      "EndEffector",
+      "Execution",
+      "ExecutionState",
+      "ExecutionStatus",
+      "FileEntry",
+      "Frame",
+      "GeometricPath",
+      "Goal",
+      "GoalKind",
+      "Gripper",
+      "GripperCommand",
+      "GuardCapability",
+      "GuardCause",
+      "GuardOutcome",
+      "GuardedJointTrajectory",
+      "HealthState",
+      "InferenceMode",
+      "InferenceReport",
+      "InferenceSettings",
+      "Joint",
+      "JointCommand",
+      "JointGroup",
+      "JointKind",
+      "JointLimitDeclaration",
+      "JointLimits",
+      "JointMode",
+      "JointTrajectory",
+      "JsonlTrace",
+      "KinematicModel",
+      "LifecycleError",
+      "Manipulator",
+      "ManipulatorView",
+      "MobileBase",
+      "ModelEntry",
+      "ModelFormat",
+      "Modification",
+      "ModificationKind",
+      "MotionValidation",
+      "MotionValidator",
+      "NamedConfiguration",
+      "ObjectState",
+      "Observation",
+      "ObservationRequest",
+      "OffsetGoal",
+      "Ownership",
+      "OwnershipError",
+      "PackageManifest",
+      "PackageReport",
+      "PlanAttempt",
+      "PlanResult",
+      "PlanStatus",
+      "Planner",
+      "PlannerCapabilities",
+      "PlanningRequest",
+      "PlanningScene",
+      "Portfolio",
+      "PortfolioReport",
+      "Pose",
+      "PoseGoal",
+      "PreparedTrajectory",
+      "ProfileEntry",
+      "Quantity",
+      "Reading",
+      "Record",
+      "ReplayRuntime",
+      "ReplayScript",
+      "ReplayTick",
+      "ResolvedFile",
+      "ResultForm",
+      "RobotContext",
+      "RobotDescription",
+      "RobotPackage",
+      "RunBundle",
+      "Runtime",
+      "RuntimeHealth",
+      "RuntimeInfo",
+      "RuntimeUpdate",
+      "SceneRuntime",
+      "SceneSnapshot",
+      "SceneState",
+      "Semantics",
+      "Sensor",
+      "SensorKind",
+      "SnapshotRuntime",
+      "SourceItem",
+      "SsrobotError",
+      "StaleRevisionError",
+      "StopReason",
+      "Submission",
+      "TimedTrajectory",
+      "Timestamp",
+      "TraceKind",
+      "TraceRecord",
+      "TrackedAttachment",
+      "TrajectoryContract",
+      "TrajectoryInterpolation",
+      "TrajectoryProcessor",
+      "Tsr",
+      "TsrGoal",
+      "ValidationError",
+      "Value",
+      "WrenchGuard",
+      "WrenchPart",
+      "dumps",
+      "load_installed_package",
+      "load_package",
+      "loads",
+      "open_bundle",
+      "plan_portfolio",
+      "prepare",
+      "read_trace",
+      "write_bundle"
+     ]
+    }
+   }
+  },
+  "commands": {
+   "baseline": {
+    "root": {
+     "ssrobot": "ssrobot.cli:main"
+    }
+   },
+   "snapshot": {
+    "root": {
+     "ssrobot": "ssrobot.cli:main"
+    }
+   }
+  },
+  "schemas": {
+   "baseline": [
+    "ssrobot.ActionChunk.v1",
+    "ssrobot.AppliedCommand.v2",
+    "ssrobot.AttachmentViolation.v1",
+    "ssrobot.AuthoringAnswers.v1",
+    "ssrobot.AuthoringDraft.v1",
+    "ssrobot.BasePoseGoal.v1",
+    "ssrobot.BaseTwistCommand.v1",
+    "ssrobot.ConfigurationGoal.v1",
+    "ssrobot.ConformanceReport.v2",
+    "ssrobot.DoctorReport.v1",
+    "ssrobot.ExecutionStatus.v2",
+    "ssrobot.GripperCommand.v1",
+    "ssrobot.GuardedJointTrajectory.v1",
+    "ssrobot.JointCommand.v1",
+    "ssrobot.JointTrajectory.v1",
+    "ssrobot.KinematicModel.v1",
+    "ssrobot.MotionValidation.v2",
+    "ssrobot.MujocoProfile.v1",
+    "ssrobot.Observation.v1",
+    "ssrobot.ObservationRequest.v2",
+    "ssrobot.OffsetGoal.v1",
+    "ssrobot.PackageReport.v1",
+    "ssrobot.PlanResult.v2",
+    "ssrobot.PlanningRequest.v1",
+    "ssrobot.PortfolioReport.v1",
+    "ssrobot.PoseGoal.v1",
+    "ssrobot.PreparedTrajectory.v3",
+    "ssrobot.ReplayScript.v1",
+    "ssrobot.RobotDescription.v1",
+    "ssrobot.RunBundle.v1",
+    "ssrobot.RuntimeHealth.v1",
+    "ssrobot.RuntimeInfo.v4",
+    "ssrobot.SceneSnapshot.v1",
+    "ssrobot.SceneState.v1",
+    "ssrobot.Submission.v2",
+    "ssrobot.TimedTrajectory.v2",
+    "ssrobot.TraceRecord.v1",
+    "ssrobot.TsrGoal.v1",
+    "ssrobot.package.v1"
+   ],
+   "snapshot": [
+    "ssrobot.ActionChunk.v1",
+    "ssrobot.AlternativesReport.v1",
+    "ssrobot.AppliedCommand.v2",
+    "ssrobot.AttachmentReference.v1",
+    "ssrobot.AttachmentViolation.v1",
+    "ssrobot.AuthoringAnswers.v1",
+    "ssrobot.AuthoringDraft.v1",
+    "ssrobot.BasePoseGoal.v1",
+    "ssrobot.BaseTwistCommand.v1",
+    "ssrobot.ChainsReport.v1",
+    "ssrobot.ConfigurationGoal.v1",
+    "ssrobot.ConformanceReport.v2",
+    "ssrobot.ContinuationReport.v5",
+    "ssrobot.DoctorReport.v1",
+    "ssrobot.ExecutionStatus.v4",
+    "ssrobot.GripperCommand.v1",
+    "ssrobot.GuardedJointTrajectory.v2",
+    "ssrobot.JointCommand.v1",
+    "ssrobot.JointRest.v2",
+    "ssrobot.JointTrajectory.v1",
+    "ssrobot.KinematicModel.v1",
+    "ssrobot.MotionValidation.v2",
+    "ssrobot.MujocoProfile.v2",
+    "ssrobot.ObjectRest.v2",
+    "ssrobot.Observation.v1",
+    "ssrobot.ObservationRequest.v2",
+    "ssrobot.OffsetGoal.v2",
+    "ssrobot.OpeningGuard.v1",
+    "ssrobot.PackageReport.v1",
+    "ssrobot.PlanResult.v4",
+    "ssrobot.PlanningRequest.v3",
+    "ssrobot.PortfolioReport.v1",
+    "ssrobot.PoseGoal.v1",
+    "ssrobot.PredictedSnapshot.v3",
+    "ssrobot.PreparedTrajectory.v6",
+    "ssrobot.ReplayScript.v1",
+    "ssrobot.RestResult.v2",
+    "ssrobot.RobotDescription.v1",
+    "ssrobot.RunBundle.v1",
+    "ssrobot.RuntimeHealth.v1",
+    "ssrobot.RuntimeInfo.v8",
+    "ssrobot.SceneSnapshot.v2",
+    "ssrobot.SceneState.v2",
+    "ssrobot.Submission.v3",
+    "ssrobot.TimedTrajectory.v2",
+    "ssrobot.TraceRecord.v9",
+    "ssrobot.TsrGoal.v1",
+    "ssrobot.WrenchGuard.v1",
+    "ssrobot.package.v1"
+   ]
+  },
+  "snapshot": {
+   "commit": "0ecbd8d14265fab0e60e36483a76315ba6ac5625",
+   "excluded": {
+    "binary": 3,
+    "lockfile_or_audit": 1
+   },
+   "parts": {
+    "ssrobot": {
+     "categories": {
+      "config": {
+       "code": 199,
+       "files": 3,
+       "lines": 215
+      },
+      "docs": {
+       "code": 4177,
+       "files": 19,
+       "lines": 4931
+      },
+      "examples": {
+       "code": 1153,
+       "files": 16,
+       "lines": 1249
+      },
+      "generated": {
+       "code": 17539,
+       "files": 59,
+       "lines": 17556
+      },
+      "production": {
+       "classes": 268,
+       "code": 19706,
+       "files": 48,
+       "functions": 880,
+       "lines": 22382,
+       "modules": 48
+      },
+      "production_data": {
+       "code": 123,
+       "files": 4,
+       "lines": 140
+      },
+      "scripts": {
+       "classes": 4,
+       "code": 2604,
+       "files": 5,
+       "functions": 103,
+       "lines": 2955,
+       "modules": 5
+      },
+      "tests": {
+       "classes": 41,
+       "code": 15610,
+       "files": 122,
+       "functions": 672,
+       "lines": 17668,
+       "modules": 39
+      }
+     },
+     "cross_repository_imports": {},
+     "cross_repository_names": [],
+     "largest_functions": [
+      [
+       "src/ssrobot/context.py:execute_continuation",
+       249
+      ],
+      [
+       "src/ssrobot/mujoco/_runtime.py:_open",
+       199
+      ],
+      [
+       "src/ssrobot/context.py:predict",
+       160
+      ],
+      [
+       "src/ssrobot/mujoco/_planning.py:materialize",
+       138
+      ],
+      [
+       "src/ssrobot/conformance.py:run_conformance",
+       124
+      ],
+      [
+       "src/ssrobot/preparation.py:compile_plan",
+       123
+      ],
+      [
+       "src/ssrobot/_world.py:read_scene",
+       120
+      ],
+      [
+       "src/ssrobot/planning/_cbirrt.py:plan",
+       118
+      ],
+      [
+       "src/ssrobot/inference.py:infer",
+       110
+      ],
+      [
+       "src/ssrobot/inference.py:resolve",
+       110
+      ],
+      [
+       "src/ssrobot/authoring.py:finalize",
+       109
+      ],
+      [
+       "src/ssrobot/_wire.py:_checker",
+       102
+      ],
+      [
+       "src/ssrobot/context.py:attach",
+       99
+      ],
+      [
+       "src/ssrobot/planning/_cbirrt.py:rebase",
+       99
+      ],
+      [
+       "src/ssrobot/context.py:watch_rest",
+       97
+      ]
+     ],
+     "largest_modules": [
+      [
+       "src/ssrobot/context.py",
+       2706
+      ],
+      [
+       "src/ssrobot/planning_contracts.py",
+       1526
+      ],
+      [
+       "src/ssrobot/mujoco/_runtime.py",
+       1425
+      ],
+      [
+       "src/ssrobot/chains.py",
+       1039
+      ],
+      [
+       "src/ssrobot/conformance.py",
+       871
+      ],
+      [
+       "src/ssrobot/description.py",
+       800
+      ],
+      [
+       "src/ssrobot/portfolio.py",
+       791
+      ],
+      [
+       "src/ssrobot/_wire.py",
+       623
+      ],
+      [
+       "src/ssrobot/mujoco/_model.py",
+       584
+      ],
+      [
+       "src/ssrobot/planning/_cbirrt.py",
+       571
+      ],
+      [
+       "src/ssrobot/inference.py",
+       499
+      ],
+      [
+       "src/ssrobot/authoring.py",
+       472
+      ],
+      [
+       "src/ssrobot/urdf.py",
+       472
+      ],
+      [
+       "src/ssrobot/validation.py",
+       471
+      ],
+      [
+       "src/ssrobot/alternatives.py",
+       463
+      ]
+     ],
+     "public_exports": [
+      "ActionChunk",
+      "Alternative",
+      "AlternativeAttempt",
+      "AlternativeOutcome",
+      "AlternativeRecord",
+      "Alternatives",
+      "AlternativesReport",
+      "AlternativesRun",
+      "AppliedCommand",
+      "ArrayValue",
+      "AssetStore",
+      "Attachment",
+      "AttachmentReference",
+      "AttachmentViolation",
+      "AttemptOutcome",
+      "AttemptRecord",
+      "BasePoseGoal",
+      "BaseTwistCommand",
+      "BaseView",
+      "Bundle",
+      "BundleFile",
+      "Candidate",
+      "CandidateChoice",
+      "CandidateKind",
+      "CandidateOutcome",
+      "CapabilityError",
+      "Chain",
+      "ChainAttempt",
+      "ChainRecord",
+      "Chains",
+      "ChainsReport",
+      "ChainsRun",
+      "ChannelRest",
+      "ChannelSpec",
+      "ClockMode",
+      "CollisionAllowance",
+      "Command",
+      "CommandCapability",
+      "CommandKind",
+      "ConfigurationGoal",
+      "ConstraintClass",
+      "Contact",
+      "ContactKind",
+      "ContextState",
+      "Continuation",
+      "ContinuationReport",
+      "ContinuationResult",
+      "DType",
+      "Diagnostic",
+      "Discrepancy",
+      "EffectiveLimits",
+      "EndEffector",
+      "Execution",
+      "ExecutionState",
+      "ExecutionStatus",
+      "FileEntry",
+      "Frame",
+      "GeometricPath",
+      "Goal",
+      "GoalKind",
+      "Gripper",
+      "GripperCommand",
+      "GripperDirection",
+      "GripperEvidence",
+      "GripperResult",
+      "GripperTermination",
+      "GuardCapability",
+      "GuardCause",
+      "GuardOutcome",
+      "GuardedJointTrajectory",
+      "HealthState",
+      "InferenceMode",
+      "InferenceReport",
+      "InferenceSettings",
+      "Joint",
+      "JointCommand",
+      "JointGroup",
+      "JointKind",
+      "JointLimitDeclaration",
+      "JointLimits",
+      "JointMode",
+      "JointRest",
+      "JointTrajectory",
+      "JsonlTrace",
+      "KinematicModel",
+      "LifecycleError",
+      "Manipulator",
+      "ManipulatorView",
+      "MobileBase",
+      "ModelEntry",
+      "ModelFormat",
+      "Modification",
+      "ModificationKind",
+      "MotionValidation",
+      "MotionValidator",
+      "NamedConfiguration",
+      "ObjectPoses",
+      "ObjectRest",
+      "ObjectState",
+      "ObjectStatus",
+      "Observation",
+      "ObservationRequest",
+      "OffsetGoal",
+      "OpeningGuard",
+      "Ownership",
+      "OwnershipError",
+      "PackageManifest",
+      "PackageReport",
+      "PlanAttempt",
+      "PlanProjection",
+      "PlanResult",
+      "PlanStatus",
+      "Planner",
+      "PlannerCapabilities",
+      "PlanningRequest",
+      "PlanningScene",
+      "Portfolio",
+      "PortfolioReport",
+      "Pose",
+      "PoseGoal",
+      "PredictedSnapshot",
+      "PreparedTrajectory",
+      "ProfileEntry",
+      "Quantity",
+      "Reading",
+      "Record",
+      "Registration",
+      "ReplayRuntime",
+      "ReplayScript",
+      "ReplayTick",
+      "ResolvedFile",
+      "RestChannel",
+      "RestCriteria",
+      "RestOutcome",
+      "RestResult",
+      "RestSample",
+      "RestWatch",
+      "ResultForm",
+      "RobotContext",
+      "RobotDescription",
+      "RobotPackage",
+      "RunBundle",
+      "Runtime",
+      "RuntimeHealth",
+      "RuntimeInfo",
+      "RuntimeUpdate",
+      "SceneRuntime",
+      "SceneSnapshot",
+      "SceneState",
+      "Semantics",
+      "Sensor",
+      "SensorKind",
+      "SnapshotRuntime",
+      "SourceItem",
+      "SsrobotError",
+      "Stage",
+      "StageAttempt",
+      "StageOutcome",
+      "StageRequest",
+      "StageResult",
+      "StaleRevisionError",
+      "StopReason",
+      "Submission",
+      "TimedTrajectory",
+      "Timestamp",
+      "TraceKind",
+      "TraceRecord",
+      "TrackedAttachment",
+      "TrajectoryContract",
+      "TrajectoryInterpolation",
+      "TrajectoryProcessor",
+      "Tsr",
+      "TsrGoal",
+      "ValidationError",
+      "Value",
+      "WrenchGuard",
+      "WrenchPart",
+      "dumps",
+      "load_installed_package",
+      "load_package",
+      "loads",
+      "open_bundle",
+      "plan_alternatives",
+      "plan_chains",
+      "plan_portfolio",
+      "prepare",
+      "read_trace",
+      "start_alternatives",
+      "start_chains",
+      "write_bundle"
+     ]
+    }
+   }
+  }
+ }
+}

@@ -12,9 +12,9 @@ version, a duplicate key, or a non-finite number, and never coerces. Each record
 - ``inconsistent_destination``: an attempt's result is not that of its destination;
 - ``inconsistent_success``: ``succeeded`` disagrees with the checks;
 - ``inconsistent_failure``: a failure without an arm, or beside a success;
-- ``missing_failure``: a selected arm's attempt that did not succeed, unexplained: with
-  no failure, and no evaluated check failed (an object that bounced out of its bin
-  after every skill succeeded is explained by ``in_bin``);
+- ``missing_failure``: a selected arm's attempt with a failed skill check and no failure
+  (an object that bounced out of its bin after every skill succeeded is explained by
+  ``in_bin`` alone, and needs none);
 - ``inconsistent_recovery``: a recovery without a failure, or a release without an action;
 - ``incomplete_landing``: a released, evaluated drop without its landing;
 - ``unknown_reason``: a failure's reason is neither ssgrasping's nor ``no_drop_zone``;
@@ -526,13 +526,14 @@ class Attempt(Value):
             )
         result = self.bin or self.worktop
         if result is not None and self.failure is None:
-            # An attempt that did not succeed is explained by its failure, or by an
-            # evaluated check that failed; without evaluation, by its failure alone.
+            # A failed skill check is explained only by a failure; an evaluated check
+            # alone (the object bounced out of its bin) needs none.
             failed = {k for k, ok in self.checks.items() if ok is False}
-            if failed and not failed & set(result.checks.EVALUATED):
+            unexplained = failed - set(result.checks.EVALUATED)
+            if unexplained:
                 raise ValidationError(
                     "missing_failure",
-                    f"a selected arm's attempt that failed {sorted(failed)} names its failure",
+                    f"a selected arm's attempt that failed {sorted(unexplained)} names its failure",
                     path="failure",
                 )
         if self.recovery is not None and self.failure is None:

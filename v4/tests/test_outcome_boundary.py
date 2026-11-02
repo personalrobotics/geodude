@@ -2,8 +2,8 @@
 ``RecyclingRun`` (personalrobotics/geodude#246).
 
 The four-can round's ``recycling.json`` (the session's ``four_cans`` recording) decodes.
-Copies of it, each tampered with in one way, must each be refused with its own
-diagnostic code:
+Copies of it, each tampered with in one way, must each be refused with the diagnostic
+code of the rule it breaks:
 - ``missing``: an attempt without ``succeeded``;
 - ``extra``: an attempt with a field the format does not have;
 - ``wrong_type``: an attempt numbered by a string;
@@ -13,6 +13,9 @@ diagnostic code:
 - ``other_version``: the outcome claimed in another version of the format;
 - ``failure_missing``: an attempt by a selected arm whose drop failed, with no failure
   and every evaluated check passed;
+- ``failure_missing_evaluated``: an attempt by a selected arm whose grasp failed and
+  whose object is not in the bin, with no failure: the evaluation does not explain the
+  skill's failed check;
 - ``unstaged``: dispositions that leave out an object the scene staged;
 - ``other_seed``: a run whose seed is not its scene's;
 - ``unselected``: a race whose candidate succeeded, with none selected;
@@ -74,6 +77,13 @@ def _failure_missing(run: dict[str, Any]) -> None:
     attempt["succeeded"] = False
 
 
+def _failure_missing_evaluated(run: dict[str, Any]) -> None:
+    attempt = run["attempts"][0]
+    attempt["bin"]["checks"]["grasped"] = False
+    attempt["bin"]["checks"]["in_bin"] = False
+    attempt["succeeded"] = False
+
+
 def _bounced_out(run: dict[str, Any]) -> None:
     attempt = run["attempts"][0]
     attempt["bin"]["checks"]["in_bin"] = False
@@ -111,6 +121,7 @@ TAMPERED: dict[str, tuple[Callable[[dict[str, Any]], None], str | None]] = {
     "partial_landing": (_partial_landing, "incomplete_landing"),
     "other_version": (_other_version, "version_mismatch"),
     "failure_missing": (_failure_missing, "missing_failure"),
+    "failure_missing_evaluated": (_failure_missing_evaluated, "missing_failure"),
     "unstaged": (_unstaged, "staged_mismatch"),
     "other_seed": (_other_seed, "seed_mismatch"),
     "unselected": (_unselected, "unselected_success"),
@@ -152,5 +163,3 @@ def test_tampered_outcomes_are_refused_each_with_its_own_code(
 
     codes = {name: (d or {}).get("code") for name, d in diagnostics.items()}
     assert codes == {name: code for name, (_, code) in TAMPERED.items()}, diagnostics
-    distinct = [code for code in codes.values() if code is not None]
-    assert len(set(distinct)) == len(distinct) == len(codes) - 1

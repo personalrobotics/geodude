@@ -236,7 +236,8 @@ def main(argv: list[str] | None = None) -> int:
             report[repo]["schemas"] = {when: schemas(path, c) for when, c in commits.items()}
         prefixes = ("", "v4/") if repo == "geodude" else ("",)
         report[repo]["commands"] = {
-            when: {p or "root": scripts(path, c, p) for p in prefixes} for when, c in commits.items()
+            when: {p or "root": scripts(path, c, p) for p in prefixes}
+            for when, c in commits.items()
         }
     json.dump(report, sys.stdout, indent=1, sort_keys=True)
     sys.stdout.write("\n")

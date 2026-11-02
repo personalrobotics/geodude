@@ -875,13 +875,14 @@ def recover(
     spec: GraspSpec,
     planner: Planner,
     tick: Callable[[], None],
+    read: Read = pose_stub,
 ) -> dict[str, Any]:
     """After an attempt that failed with ``obj`` still attached, release it where that is
     safe (``safe_release``), a narrow slice of personalrobotics/geodude#210's recovery:
     - **A lift that did not plan** (``grasp.lift``, ``not_planned``): the arm never moved
       after closing, so the object still rests where it was grasped, on its support.
-      Open, detach once the fingers have opened, and back the hand out along its approach
-      by ``spec.approach_m``.
+      Open, detach once the fingers have opened, register it where it rests (``read``),
+      and back the hand out along its approach by ``spec.approach_m``.
     - **A carry the object left** (``transition_refuted``, cause ``retained``): the
       gripper's opening showed the fingers close past it, and the carry stopped there.
       Nothing is in the hand, so opening it releases nothing: open, and detach once the
@@ -896,6 +897,7 @@ def recover(
         refused = _release(ctx, obj, arm, spec, tick)
         if refused is not None:
             return {"action": RELEASE_IN_PLACE, "released": False, "detail": refused}
+        register(ctx, [obj], read)  # detached, it is unknown until registered where it rests
         hand = next(e.frame for e in ctx.description.end_effectors if e.name == arm.hand)
         snapshot = ctx.snapshot()
         view = ctx.manipulator(arm.manipulator)
@@ -1133,7 +1135,7 @@ def recycle(
         if ctx.scene.attachment(obj) is None:
             continue
         failed = failed_stage(picked, dropped)
-        recovery = recover(ctx, obj, arm, failed, selection.candidate.grasp, planner, stepped)
+        recovery = recover(ctx, obj, arm, failed, selection.candidate.grasp, planner, stepped, read)
         entry["recovery"] = recovery
         if not recovery["released"]:
             break  # still held, and nothing safe to do: the round stops, declared so

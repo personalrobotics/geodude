@@ -42,8 +42,8 @@ observed when they happen, not planned.
 The arm on the can's side is preferred, and the other arm takes the can when the
 preferred arm's prefix does not plan. The race for the next can is planned while the
 current can is carried, on the prediction of that transfer. The prediction expects the
-can to be released over the bin and to come to rest on its floor, and the selected
-pregrasp continues once the release has happened. The demo can also place a single can
+can to be released over the bin and then removed from the scene as landed, and the
+selected pregrasp continues once the release has happened. The demo can also place a single can
 upright at a target on the worktop under a force-guarded descent, instead of dropping
 it.
 
@@ -137,10 +137,23 @@ moves keep a small clearance from the worktop, the bins, and the other cans. Str
 approaches allow a line width chosen from how far the arm actually arrives from its
 planned line.
 
-The demo has no perception. Each object's pose is read from its privileged pose
-channel, the simulator's ground truth, as the 3.x demo has always done. ssrobot marks
-those channels as privileged, so the record distinguishes them from the observations a
-physical robot would provide.
+Control runs on what a physical robot has: joint, gripper and wrist channels, and the
+registration of the objects on the table (#248). Contexts keep registered object poses
+(ssrobot's `ObjectPoses.REGISTERED`), so planning and every decision use the poses last
+registered, never the simulator's. Objects on the table are registered when a round
+begins, before a race planned from a fresh snapshot once the scene has changed, and
+after a recovery, before a retry. A grasp that closes on nothing (`missed`) may mean the
+object moved: what was planned ahead is discarded, the table is registered again, and
+the object is retried once. A dropped object, once its release is confirmed, is assumed to have landed and is
+removed from the scene; a placed one is registered again where it rests.
+
+The demo has no perception yet, so registration reads each object's privileged pose
+channel, the simulator's ground truth, as the 3.x demo has always done, and the trace
+records that source (`pose_stub`). Privileged state is otherwise read only to evaluate:
+where each object came to rest, and how often an assumed landing was wrong.
+`tests/test_registered_control.py` runs a round with every privileged channel withheld
+and shows the same decisions, and moves a can behind registration's back: the grasp
+misses, the table is registered again, and the retry succeeds.
 
 ## Scenes and evidence
 
@@ -166,7 +179,8 @@ bundle](https://github.com/personalrobotics/mj_viser#replay-a-run-bundle).
 | Recycle several cans, racing both arms and planning each can during the previous transfer | Implemented; four cans tested, and the same round with planning delayed by up to 3 s gives the same trace (`test_planning_latency`) |
 | Pick and drop each of the legacy demo's nine object types | Implemented; each type tested alone (`test_object_types`) |
 | Sort a five-object round of the mix into the bins, recovering where it is safe | Implemented; seed 0 tested twice, its bundles verified (`test_sort_all`) |
-| Perception | Not implemented; object poses come from privileged simulator channels |
+| Control on registered object poses | Implemented; a round with privileged channels withheld decides exactly as one with them (`test_registered_control`) |
+| Perception | Not implemented; registration reads privileged simulator channels |
 | The physical robot | Not yet supported; it depends on ssrobot's hardware runtime |
 | The 3.x application's other tasks | Still served by the application at the repository root |
 

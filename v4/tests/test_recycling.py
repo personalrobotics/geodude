@@ -11,8 +11,8 @@ that report and keeps it as its evidence:
 - the sources it ran from and the seed, and the scene manifest naming the prl_assets
   source and every staged file's hash, with the scene staging to the same bytes twice;
 - every grasp and drop stage, with the release confirmed, and nothing attached;
-- the can's ``landing``, observed after the drop ends, and where the can came to rest,
-  from its pose channel: inside the bin's prl_assets interior;
+- the can's ``landing``, scoring the drop's ``landed`` after it ends, and where the can
+  came to rest, from its pose channel: inside the bin's prl_assets interior;
 - the same outcome and trace from two runs;
 - a bundle that verifies, with a world that materializes without a runtime;
 - the left arm, for seed 3, chosen by the can's side and dropping into the left bin;
@@ -57,7 +57,12 @@ def _run(work: Path, to: str = "bin", seed: int = SEED) -> dict[str, Any]:
     trace = work / "trace.jsonl"
     with (
         JsonlTrace(trace) as sink,
-        RobotContext(package.description, recycling.runtime(package, scene), sinks=[sink]) as ctx,
+        RobotContext(
+            package.description,
+            recycling.runtime(package, scene),
+            sinks=[sink],
+            object_poses=recycling.OBJECT_POSES,
+        ) as ctx,
     ):
         result = recycling.demo(ctx, package, to)
     return {
@@ -102,7 +107,7 @@ def test_geodude_recycles_one_can_on_ssrobot(artifacts: Path, tmp_path: Path) ->
     assert report["checks"] == dict.fromkeys(report["checks"], True), report["checks"]
     assert report["succeeded"] and report["attached"] == []
     assert [n for n, _ in report["drop"]] == ["preflight", "transfer", "release"]
-    assert report["landing"] == [["landed", True]]
+    assert report["landing"] == [["observed", True]]
     assert left["arm"] == "left"
     assert left["bin"]["name"] == "recycle_bin_1"
     assert left["checks"] == dict.fromkeys(left["checks"], True), left["checks"]

@@ -33,7 +33,11 @@ def _recycle_alone(kind: str) -> dict[str, Any]:
         scene = stage_scene(
             Path(work) / "scene", package, objects={kind: 1}, fixtures=recycling.BINS, seed=SEED
         )
-        with RobotContext(package.description, recycling.runtime(package, scene)) as ctx:
+        with RobotContext(
+            package.description,
+            recycling.runtime(package, scene),
+            object_poses=recycling.OBJECT_POSES,
+        ) as ctx:
             result = recycling.sort_all(ctx, package)
     first = result["attempts"][0]
     return {

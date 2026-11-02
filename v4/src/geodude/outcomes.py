@@ -12,13 +12,19 @@ version, a duplicate key, or a non-finite number, and never coerces. Each record
 - ``inconsistent_destination``: an attempt's result is not that of its destination;
 - ``inconsistent_success``: ``succeeded`` disagrees with the checks;
 - ``inconsistent_failure``: a failure without an arm, or beside a success;
+- ``missing_failure``: a selected arm's attempt that did not succeed, without a failure;
 - ``inconsistent_recovery``: a recovery without a failure, or a release without an action;
 - ``incomplete_landing``: a released, evaluated drop without its landing;
 - ``unknown_reason``: a failure's reason is neither ssgrasping's nor ``no_drop_zone``;
 - ``noncontiguous_attempts``: an object's attempts are not numbered 1, 2, ...;
 - ``inconsistent_disposition``: an object's disposition disagrees with its attempts;
 - ``inconsistent_evaluation``: evaluation fields present other than exactly when
-  ``evaluated`` is set, or ``cleared`` not their verdict.
+  ``evaluated`` is set, or ``cleared`` not their verdict;
+- ``staged_mismatch``: the dispositions are not exactly the scene's staged objects;
+- ``seed_mismatch``: the run's seed is not its scene's;
+- ``unselected_success``: a race with a successful candidate selected none;
+- ``selected_not_succeeded``: a race selected a candidate that did not succeed;
+- ``outranked_with_plans``: an outranked candidate carries plans or a cost.
 
 An attempt still in progress, such as a drop whose landing is still observed, is never
 one of these records: ``recycling.recycle`` keeps it internal until it is complete.
@@ -237,8 +243,10 @@ class Candidate(Value):
     plans: tuple[RacePlan, ...]
 
     def _validate(self) -> None:
-        if self.outcome is CandidateOutcome.OUTRANKED and (self.plans or self.cost_s):
-            raise ValidationError("wrong_value", "an outranked candidate has no plans")
+        if self.outcome is CandidateOutcome.OUTRANKED and (self.plans or self.cost_s is not None):
+            raise ValidationError(
+                "outranked_with_plans", "an outranked candidate has no plans or cost", path="plans"
+            )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -267,7 +275,11 @@ class Race(Value):
         winners = [c.label for c in self.candidates if c.outcome is CandidateOutcome.SUCCEEDED]
         if self.selected is not None and self.selected not in winners:
             raise ValidationError(
-                "wrong_value", "the selected candidate succeeded", path="selected"
+                "selected_not_succeeded", "the selected candidate succeeded", path="selected"
+            )
+        if self.selected is None and winners:
+            raise ValidationError(
+                "unselected_success", "a race with a success selects one", path="selected"
             )
 
 
@@ -503,6 +515,12 @@ class Attempt(Value):
                 "a failure only of a selected arm's attempt that did not succeed",
                 path="failure",
             )
+        if self.arm is not None and self.succeeded is False and self.failure is None:
+            raise ValidationError(
+                "missing_failure",
+                "a selected arm's attempt that did not succeed names its failure",
+                path="failure",
+            )
         if self.recovery is not None and self.failure is None:
             raise ValidationError(
                 "inconsistent_recovery", "a recovery only after a failure", path="recovery"
@@ -546,7 +564,13 @@ class RecyclingRun(Record):
     cleared: bool | None
 
     def _validate(self) -> None:
+        if self.seed != self.scene.seed:
+            raise ValidationError("seed_mismatch", "the run's seed is its scene's", path="seed")
         names = [d.object for d in self.objects]
+        if set(names) != {o.name for o in self.scene.objects}:
+            raise ValidationError(
+                "staged_mismatch", "a disposition for each staged object only", path="objects"
+            )
         if names != sorted(set(names)):
             raise ValidationError(
                 "inconsistent_disposition", "one disposition per object, by name", path="objects"

@@ -10,7 +10,13 @@ diagnostic code:
 - ``inconsistent``: an attempt whose checks all passed, recorded as failed;
 - ``partial_landing``: a dropped can, released and evaluated, without its landing: the
   entry an attempt was while its landing was still observed;
-- ``other_version``: the outcome claimed in another version of the format.
+- ``other_version``: the outcome claimed in another version of the format;
+- ``failure_missing``: an attempt by a selected arm that did not succeed, with no failure;
+- ``unstaged``: dispositions that leave out an object the scene staged;
+- ``other_seed``: a run whose seed is not its scene's;
+- ``unselected``: a race whose candidate succeeded, with none selected;
+- ``selected_failed``: a race that selected a candidate that did not succeed;
+- ``outranked_cost``: an outranked candidate with a cost, even a zero one.
 
 The evidence is ``tampered/``, kept by this test: every tampered copy, and
 ``diagnostics.json``, each copy's refusal (code, path, message).
@@ -56,6 +62,35 @@ def _other_version(run: dict[str, Any]) -> None:
     run["version"] = RecyclingRun.VERSION + 1
 
 
+def _failure_missing(run: dict[str, Any]) -> None:
+    attempt = run["attempts"][0]
+    attempt["bin"]["checks"]["in_bin"] = False
+    attempt["succeeded"] = False
+
+
+def _unstaged(run: dict[str, Any]) -> None:
+    del run["objects"][-1]
+
+
+def _other_seed(run: dict[str, Any]) -> None:
+    run["seed"] += 1
+
+
+def _unselected(run: dict[str, Any]) -> None:
+    run["attempts"][0]["race"]["selected"] = None
+
+
+def _selected_failed(run: dict[str, Any]) -> None:
+    run["attempts"][0]["race"]["selected"] = "nobody"
+
+
+def _outranked_cost(run: dict[str, Any]) -> None:
+    outranked = next(
+        c for a in run["attempts"] for c in a["race"]["candidates"] if c["outcome"] == "outranked"
+    )
+    outranked["cost_s"] = 0.0
+
+
 TAMPERED: dict[str, tuple[Callable[[dict[str, Any]], None], str]] = {
     "missing": (_missing, "missing_field"),
     "extra": (_extra, "unknown_field"),
@@ -63,6 +98,12 @@ TAMPERED: dict[str, tuple[Callable[[dict[str, Any]], None], str]] = {
     "inconsistent": (_inconsistent, "inconsistent_success"),
     "partial_landing": (_partial_landing, "incomplete_landing"),
     "other_version": (_other_version, "version_mismatch"),
+    "failure_missing": (_failure_missing, "missing_failure"),
+    "unstaged": (_unstaged, "staged_mismatch"),
+    "other_seed": (_other_seed, "seed_mismatch"),
+    "unselected": (_unselected, "unselected_success"),
+    "selected_failed": (_selected_failed, "selected_not_succeeded"),
+    "outranked_cost": (_outranked_cost, "outranked_with_plans"),
 }
 """Each tampering, and the code it must be refused with."""
 

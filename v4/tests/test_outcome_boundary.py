@@ -11,15 +11,21 @@ diagnostic code:
 - ``partial_landing``: a dropped can, released and evaluated, without its landing: the
   entry an attempt was while its landing was still observed;
 - ``other_version``: the outcome claimed in another version of the format;
-- ``failure_missing``: an attempt by a selected arm that did not succeed, with no failure;
+- ``failure_missing``: an attempt by a selected arm whose drop failed, with no failure
+  and every evaluated check passed;
 - ``unstaged``: dispositions that leave out an object the scene staged;
 - ``other_seed``: a run whose seed is not its scene's;
 - ``unselected``: a race whose candidate succeeded, with none selected;
 - ``selected_failed``: a race that selected a candidate that did not succeed;
 - ``outranked_cost``: an outranked candidate with a cost, even a zero one.
 
+One copy has the shape of a real outcome and must decode: ``bounced_out``, an attempt
+whose every skill succeeded but whose object came to rest outside the bin (``in_bin``
+false), not succeeded and with no failure: the evaluation explains it.
+
 The evidence is ``tampered/``, kept by this test: every tampered copy, and
-``diagnostics.json``, each copy's refusal (code, path, message).
+``diagnostics.json``, each copy's refusal (code, path, message), or null where it
+decodes.
 
 Reproduce with ``uv run pytest tests/test_outcome_boundary.py``.
 """
@@ -64,6 +70,12 @@ def _other_version(run: dict[str, Any]) -> None:
 
 def _failure_missing(run: dict[str, Any]) -> None:
     attempt = run["attempts"][0]
+    attempt["bin"]["checks"]["dropped"] = False
+    attempt["succeeded"] = False
+
+
+def _bounced_out(run: dict[str, Any]) -> None:
+    attempt = run["attempts"][0]
     attempt["bin"]["checks"]["in_bin"] = False
     attempt["succeeded"] = False
 
@@ -91,7 +103,7 @@ def _outranked_cost(run: dict[str, Any]) -> None:
     outranked["cost_s"] = 0.0
 
 
-TAMPERED: dict[str, tuple[Callable[[dict[str, Any]], None], str]] = {
+TAMPERED: dict[str, tuple[Callable[[dict[str, Any]], None], str | None]] = {
     "missing": (_missing, "missing_field"),
     "extra": (_extra, "unknown_field"),
     "wrong_type": (_wrong_type, "wrong_type"),
@@ -104,8 +116,9 @@ TAMPERED: dict[str, tuple[Callable[[dict[str, Any]], None], str]] = {
     "unselected": (_unselected, "unselected_success"),
     "selected_failed": (_selected_failed, "selected_not_succeeded"),
     "outranked_cost": (_outranked_cost, "outranked_with_plans"),
+    "bounced_out": (_bounced_out, None),
 }
-"""Each tampering, and the code it must be refused with."""
+"""Each tampering, and the code it must be refused with: None where it must decode."""
 
 
 def test_tampered_outcomes_are_refused_each_with_its_own_code(
@@ -139,4 +152,5 @@ def test_tampered_outcomes_are_refused_each_with_its_own_code(
 
     codes = {name: (d or {}).get("code") for name, d in diagnostics.items()}
     assert codes == {name: code for name, (_, code) in TAMPERED.items()}, diagnostics
-    assert len(set(codes.values())) == len(codes)
+    distinct = [code for code in codes.values() if code is not None]
+    assert len(set(distinct)) == len(distinct) == len(codes) - 1

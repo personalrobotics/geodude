@@ -12,7 +12,9 @@ version, a duplicate key, or a non-finite number, and never coerces. Each record
 - ``inconsistent_destination``: an attempt's result is not that of its destination;
 - ``inconsistent_success``: ``succeeded`` disagrees with the checks;
 - ``inconsistent_failure``: a failure without an arm, or beside a success;
-- ``missing_failure``: a selected arm's attempt that did not succeed, without a failure;
+- ``missing_failure``: a selected arm's attempt that did not succeed, unexplained: with
+  no failure, and no evaluated check failed (an object that bounced out of its bin
+  after every skill succeeded is explained by ``in_bin``);
 - ``inconsistent_recovery``: a recovery without a failure, or a release without an action;
 - ``incomplete_landing``: a released, evaluated drop without its landing;
 - ``unknown_reason``: a failure's reason is neither ssgrasping's nor ``no_drop_zone``;
@@ -40,6 +42,7 @@ from __future__ import annotations
 import enum
 from collections import Counter
 from dataclasses import dataclass, fields
+from typing import ClassVar
 
 from ssgrasping import EstimateReason, Evidence, Reason, Transition, TransitionOutcome
 from ssrobot import (
@@ -363,6 +366,9 @@ class TransitionRecord(Value):
 class BinChecks(Value):
     """A drop's checks. ``landed`` and ``in_bin`` need evaluation: None without it."""
 
+    EVALUATED: ClassVar[tuple[str, ...]] = ("landed", "in_bin")
+    """The checks an evaluation makes, from privileged state; the others are the skills'."""
+
     grasped: bool
     dropped: bool
     released: bool
@@ -385,6 +391,9 @@ class InBin(Value):
 @dataclass(frozen=True, slots=True, kw_only=True)
 class WorktopChecks(Value):
     """A placement's checks."""
+
+    EVALUATED: ClassVar[tuple[str, ...]] = ("upright", "on_worktop", "at_target")
+    """The checks an evaluation makes, from privileged state; the others are the skills'."""
 
     grasped: bool
     placed: bool
@@ -515,12 +524,17 @@ class Attempt(Value):
                 "a failure only of a selected arm's attempt that did not succeed",
                 path="failure",
             )
-        if self.arm is not None and self.succeeded is False and self.failure is None:
-            raise ValidationError(
-                "missing_failure",
-                "a selected arm's attempt that did not succeed names its failure",
-                path="failure",
-            )
+        result = self.bin or self.worktop
+        if result is not None and self.failure is None:
+            # An attempt that did not succeed is explained by its failure, or by an
+            # evaluated check that failed; without evaluation, by its failure alone.
+            failed = {k for k, ok in self.checks.items() if ok is False}
+            if failed and not failed & set(result.checks.EVALUATED):
+                raise ValidationError(
+                    "missing_failure",
+                    f"a selected arm's attempt that failed {sorted(failed)} names its failure",
+                    path="failure",
+                )
         if self.recovery is not None and self.failure is None:
             raise ValidationError(
                 "inconsistent_recovery", "a recovery only after a failure", path="recovery"

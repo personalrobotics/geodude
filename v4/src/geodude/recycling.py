@@ -79,6 +79,7 @@ from ssrobot import (
     ObservationRequest,
     Planner,
     Pose,
+    Registration,
     RobotContext,
     RobotPackage,
     SceneSnapshot,
@@ -260,11 +261,12 @@ def warm_planning(ctx: RobotContext, snapshot: SceneSnapshot, arms: Sequence[Arm
 OBJECT_POSES = ObjectPoses.REGISTERED
 """How recycling's contexts keep object poses: registered, never read live."""
 REGISTRATION = "pose_stub"
-"""The registration source the trace records: the privileged pose channel, standing in
-for perception (ssrobot#101)."""
+"""``pose_stub``'s source, as the trace records it: the privileged pose channel, standing
+in for perception (ssrobot#101)."""
 
-Read = Callable[[RobotContext, str], tuple[Pose, Timestamp]]
-"""A registration source: an object's pose, and when it was observed."""
+Read = Callable[[RobotContext, str], Registration]
+"""A registration source: an object's registration, with its pose, when it was observed,
+and the source that observed it, which the trace records."""
 
 
 def true_pose(ctx: RobotContext, name: str) -> Pose:
@@ -282,12 +284,21 @@ def pose_channel(ctx: RobotContext, name: str) -> tuple[Pose, Timestamp]:
     return Pose(position=(x, y, z), quat_wxyz=(w, i, j, k)), observation.stamp
 
 
-def register(ctx: RobotContext, objects: Sequence[str], read: Read = pose_channel) -> None:
-    """Register each of ``objects`` where ``read`` reports it: the only way an object's
-    pose enters control."""
+def pose_stub(ctx: RobotContext, name: str) -> Registration:
+    """The demo's registration source until a perception source exists: the object's
+    privileged pose channel (``REGISTRATION``)."""
+    pose, stamp = pose_channel(ctx, name)
+    return Registration(object=name, pose=pose, stamp=stamp, source=REGISTRATION)
+
+
+def register(ctx: RobotContext, objects: Sequence[str], read: Read = pose_stub) -> None:
+    """Register each of ``objects`` as ``read`` reports it, under the source it names: the
+    only way an object's pose enters control."""
     for name in objects:
-        pose, stamp = read(ctx, name)
-        ctx.register(name, pose, stamp=stamp, source=REGISTRATION)
+        registration = read(ctx, name)
+        if registration.object != name:
+            raise ValueError(f"asked to register {name!r}, read {registration.object!r}")
+        ctx.register(name, registration.pose, stamp=registration.stamp, source=registration.source)
 
 
 def on_table(ctx: RobotContext) -> list[str]:
@@ -703,8 +714,8 @@ def bin_outcome(
     ``obj`` rests, from its privileged pose, relative to the bin's base: ``succeeded``
     requires every stage to succeed, ``obj`` no longer attached, its landing scored
     ``confirmed`` (``landed``), and its centre within the bin's prl_assets interior:
-    inside its inner walls, over its floor, below its rim. Without it, nothing
-    privileged is read, and what needs it is None."""
+    inside its inner walls, over its floor, below its rim. Without it, no privileged
+    pose is read for the outcome, and what needs one is None."""
     name, base = arm.bin
     final = true_pose(ctx, obj) if evaluate else None
     local = None if final is None else [final.position[i] - base[i] for i in range(3)]
@@ -936,7 +947,7 @@ def recycle(
     race: bool = True,
     lookahead: bool = True,
     retries: int = 0,
-    read: Read = pose_channel,
+    read: Read = pose_stub,
     evaluate: bool = True,
 ) -> list[dict[str, Any]]:
     """Pick each of ``objects`` in turn and drop it in a bin, racing both arms for each
@@ -954,7 +965,10 @@ def recycle(
     object's pose for control. With ``evaluate``, where each released object comes to
     rest is scored alongside the objects after it (ssgrasping's ``landing``), and its
     outcome is recorded when that ends; the round ends once every landing has. Without
-    it, nothing privileged is read at all.
+    it, Geodude runs no landing and reads no privileged pose for its outcomes. The skills
+    may still record privileged references for their transitions
+    (``SkillResult.evaluations``) where the runtime declares those channels; none of it
+    steers control.
     Within the grasp, the approach is planned during the pregrasp. Returns each attempt's
     ``bin_outcome``, with the object's attempt number, the arm and the race.
 
@@ -1141,7 +1155,7 @@ def sort_all(
     package: RobotPackage,
     tick: Callable[[], None] = lambda: None,
     *,
-    read: Read = pose_channel,
+    read: Read = pose_stub,
     evaluate: bool = True,
 ) -> dict[str, Any]:
     """The legacy demo's ``sort_all``: recycle every object, racing the arms with

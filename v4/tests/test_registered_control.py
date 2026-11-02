@@ -7,7 +7,8 @@ registered object poses (``recycling.OBJECT_POSES``):
   privileged pose channel, and landings are scored against privileged poses.
 - ``B``, twice: without evaluation, through a runtime that declares no privileged
   channel, so the context refuses any read of one. Registration reads MuJoCo directly,
-  outside the context, standing in for a perception source.
+  outside the context, standing in for a perception source, and the trace records it so
+  (``perception_stand_in``), as ``A``'s records ``pose_stub``.
 
 The claims:
 - ``B`` runs to the end, and its control record is exactly ``A``'s: per attempt, the
@@ -49,11 +50,11 @@ from ssrobot import (
     Observation,
     ObservationRequest,
     Pose,
+    Registration,
     RobotContext,
     RuntimeInfo,
     SceneSnapshot,
     SceneState,
-    Timestamp,
     TraceRecord,
     ValidationError,
     load_installed_package,
@@ -103,19 +104,24 @@ class Unprivileged:
         return getattr(self._inner, name)
 
 
+PERCEIVED = "perception_stand_in"
+"""The source ``B`` registers under: MuJoCo, read outside the context."""
+
+
 def _perceived(inner: Any) -> recycling.Read:
     """A registration source outside the context: the object's pose, read from MuJoCo."""
 
-    def read(ctx: RobotContext, name: str) -> tuple[Pose, Timestamp]:
+    def read(ctx: RobotContext, name: str) -> Registration:
         observation = inner.observe(ObservationRequest(channels=(f"{name}.pose",)))
         x, y, z, w, i, j, k = observation.readings[0].value
-        return Pose(position=(x, y, z), quat_wxyz=(w, i, j, k)), observation.stamp
+        pose = Pose(position=(x, y, z), quat_wxyz=(w, i, j, k))
+        return Registration(object=name, pose=pose, stamp=observation.stamp, source=PERCEIVED)
 
     return read
 
 
 def _counted(read: recycling.Read, counts: Counter[str]) -> recycling.Read:
-    def counting(ctx: RobotContext, name: str) -> tuple[Pose, Timestamp]:
+    def counting(ctx: RobotContext, name: str) -> Registration:
         counts[name] += 1
         return read(ctx, name)
 
@@ -190,7 +196,7 @@ def _round(work: Path, unprivileged: bool) -> dict[str, Any]:
     runtime: Any = Unprivileged(inner) if unprivileged else inner
     records: list[TraceRecord] = []
     counts: Counter[str] = Counter()
-    read = _perceived(inner) if unprivileged else recycling.pose_channel
+    read = _perceived(inner) if unprivileged else recycling.pose_stub
     with RobotContext(
         package.description,
         runtime,
@@ -204,7 +210,7 @@ def _round(work: Path, unprivileged: bool) -> dict[str, Any]:
         final = {}
         if unprivileged:  # read only now, for the report
             for obj in sorted(ctx.info.objects):
-                pose, _ = _perceived(inner)(ctx, obj)
+                pose = _perceived(inner)(ctx, obj).pose
                 bins = [
                     Arm(side).bin[0]
                     for side in recycling.BIN_OF
@@ -237,6 +243,11 @@ def test_control_runs_on_registered_poses_alone(artifacts: Path, tmp_path: Path)
     assert b["control"] == a["control"]
     assert b["registrations"] == a["registrations"] and b["registrations"]
     assert b["provenance"]["privileged_readings"] == 0
+    # Each run records the registration source it used: the stub, or the stand-in.
+    assert recycling.REGISTRATION in a["provenance"]["scene_changes_by_source"]
+    assert PERCEIVED not in a["provenance"]["scene_changes_by_source"]
+    assert PERCEIVED in b["provenance"]["scene_changes_by_source"]
+    assert recycling.REGISTRATION not in b["provenance"]["scene_changes_by_source"]
     assert b["provenance"]["registered_poses_not_their_registration"] == 0
     assert a["provenance"]["registered_poses_not_their_registration"] == 0
     assert "measured" not in b["provenance"]["object_states"]
@@ -270,7 +281,7 @@ def _moved_and_retried(work: Path) -> dict[str, Any]:
         at = int(model.jnt_qposadr[int(model.body_jntadr[model.body("can_0").id])])
         data.qpos[at + 1] += MOVE_M
         data.qvel[int(model.jnt_dofadr[int(model.body_jntadr[model.body("can_0").id])]) :][:6] = 0
-        moved.append(_perceived(inner)(ctx, "can_0")[0])
+        moved.append(_perceived(inner)(ctx, "can_0").pose)
 
     with RobotContext(
         package.description,
@@ -287,14 +298,14 @@ def _moved_and_retried(work: Path) -> dict[str, Any]:
             read=_counted(_perceived(inner), counts),
             evaluate=False,
         )
-        pose, _ = _perceived(inner)(ctx, "can_0")
+        pose = _perceived(inner)(ctx, "can_0").pose
         final = [
             Arm(side).bin[0] for side in recycling.BIN_OF if recycling._in_bin(pose, Arm(side))
         ]
     registered = [
         r.payload.registration("can_0")
         for r in records
-        if isinstance(r.payload, SceneState) and r.source == recycling.REGISTRATION
+        if isinstance(r.payload, SceneState) and r.source == PERCEIVED
     ]
     return {
         "attempts": [

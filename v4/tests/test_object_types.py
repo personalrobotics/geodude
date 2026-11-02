@@ -19,7 +19,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from ssrobot import RobotContext, load_installed_package
+from ssrobot import RobotContext, dumps, load_installed_package
 
 from geodude import recycling
 from geodude.scene import stage_scene
@@ -38,17 +38,17 @@ def _recycle_alone(kind: str) -> dict[str, Any]:
             recycling.runtime(package, scene),
             object_poses=recycling.OBJECT_POSES,
         ) as ctx:
-            result = recycling.sort_all(ctx, package)
-    first = result["attempts"][0]
+            attempts, objects = recycling.sort_all(ctx, package)
+    first = json.loads(dumps(attempts[0]))
     return {
         "arm": first["arm"],
-        "grasp": first.get("grasp"),
-        "drop": first.get("drop"),
-        "landing": first.get("landing"),
-        "failure": first.get("failure"),
-        "position_in_bin_m": first.get("position_in_bin_m"),
+        "grasp": first["grasp"],
+        "drop": first["drop"],
+        "landing": first["landing"],
+        "failure": first["failure"],
+        "position_in_bin_m": (first["bin"] or {}).get("position_in_bin_m"),
         "succeeded": first["succeeded"],
-        "bin": result["objects"][f"{kind}_0"]["bin"],
+        "bin": objects[0].bin,
     }
 
 

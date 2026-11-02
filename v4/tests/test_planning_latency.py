@@ -11,8 +11,10 @@ longest delay outlasts any unpaced skill stage of the round, so a skill waiting 
 delayed plan would see the clock step if its driver stepped it.
 
 The evidence is ``latency.json``, kept by this test: for each run, the cans' outcomes,
-the runtime time the trace ends, and every trace record kind's count and digest of its
-records (runtime time and payload, in order). Both runs must agree on all of it.
+the SHA-256 of its outcome file (``recycling.json``, a ``RecyclingRun``, which cites its
+bundle by digest), the runtime time the trace ends, and every trace record kind's
+count and digest of its records (runtime time and payload, in order). Both runs must
+agree on all of it: their outcome files are byte-identical, no field excluded.
 
 It is the suite's determinism gate: the delayed run repeats the round under a different
 planning order, so a nondeterministic round fails it, and no other test repeats a round
@@ -31,11 +33,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from ssrobot import open_bundle
+from ssrobot import loads, open_bundle
 from ssrobot._wire import fingerprint
 from ssrobot.planning import _cbirrt
 
 from geodude import recycling
+from geodude.outcomes import RecyclingRun
 from tests.conftest import FOUR_CANS
 
 DELAYS_S = (0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0)
@@ -43,7 +46,8 @@ DELAYS_S = (0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0)
 
 
 def _round(code: int, out: Path) -> dict[str, Any]:
-    report = json.loads((out / "recycling.json").read_text())
+    outcome = (out / "recycling.json").read_bytes()
+    run = loads(outcome, RecyclingRun)
     records = open_bundle(out / "bundle").records
     digests: dict[str, Any] = defaultdict(hashlib.sha256)
     counts: dict[str, int] = defaultdict(int)
@@ -53,7 +57,8 @@ def _round(code: int, out: Path) -> dict[str, Any]:
         counts[r.kind.value] += 1
     return {
         "code": code,
-        "outcomes": [[c["object"], c["arm"], c["succeeded"]] for c in report["cans"]],
+        "outcomes": [[a.object, a.arm, a.succeeded] for a in run.attempts],
+        "outcome_sha256": hashlib.sha256(outcome).hexdigest(),
         "end_ns": records[-1].time_ns,
         "records": {k: [counts[k], digests[k].hexdigest()] for k in sorted(digests)},
     }

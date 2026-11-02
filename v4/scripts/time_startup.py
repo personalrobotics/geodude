@@ -26,6 +26,7 @@ waits, to bring-up.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import subprocess
@@ -135,7 +136,7 @@ def sample(variant: str, seed: int, cans: int) -> dict[str, Any]:
         "staging_builds": staging[0],
         "builds_after_first_skill": sum(1 for b in builds if b["after_first_skill"]),
         "builds_outside_warm_up": sum(1 for b in builds if not b["in_warm_up"]),
-        "outcomes": {o["object"]: o["succeeded"] for o in outcomes},
+        "outcomes": {o.object: o.succeeded for o in outcomes},
     }
 
 
@@ -152,7 +153,7 @@ def _provenance() -> dict[str, Any]:
     return {
         "commit": git("rev-parse", "HEAD"),
         "dirty": bool(git("status", "--porcelain")),
-        "sources": recycling.sources(),
+        "sources": [dataclasses.asdict(s) for s in recycling.sources()],
         "load": list(os.getloadavg()),
         "cpus": os.cpu_count(),
     }

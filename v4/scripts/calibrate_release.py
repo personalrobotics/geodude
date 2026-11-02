@@ -32,6 +32,7 @@ cleanliness, the sources and the OpenBLAS kernel.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import math
 import subprocess
@@ -185,7 +186,7 @@ def _provenance() -> dict[str, Any]:
     return {
         "commit": git("rev-parse", "HEAD"),
         "dirty": bool(git("status", "--porcelain")),
-        "sources": recycling.sources(),
+        "sources": [dataclasses.asdict(s) for s in recycling.sources()],
         "blas_kernel": recycling.blas_kernel(),
     }
 

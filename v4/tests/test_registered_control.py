@@ -56,10 +56,13 @@ from ssrobot import (
     SceneState,
     TraceRecord,
     ValidationError,
+    dumps,
     load_installed_package,
+    loads,
 )
 
 from geodude import recycling
+from geodude.outcomes import Attempt
 from geodude.recycling import Arm
 from geodude.scene import stage_scene
 
@@ -127,27 +130,34 @@ def _counted(read: recycling.Read, counts: Counter[str]) -> recycling.Read:
     return counting
 
 
-def _control(result: dict[str, Any]) -> list[dict[str, Any]]:
+def _control(attempts: list[Attempt]) -> list[dict[str, Any]]:
     """What control decided, per attempt: nothing evaluation contributes."""
     return [
         {
-            "object": a["object"],
-            "attempt": a["attempt"],
-            "arm": a["arm"],
-            "selected": (a.get("race") or {}).get("selected"),
-            "grasp": a.get("grasp"),
-            "drop": a.get("drop"),
-            "failure": a.get("failure"),
-            "recovery": a.get("recovery"),
-            "grasp_ns": (a.get("times_ns") or {}).get("grasp"),
-            "released_ns": (a.get("times_ns") or {}).get("released"),
+            "object": a.object,
+            "attempt": a.number,
+            "arm": a.arm,
+            "selected": None if a.race is None else a.race.selected,
+            "grasp": _encoded(a.grasp),
+            "drop": _encoded(a.drop),
+            "failure": _encoded(a.failure),
+            "recovery": _encoded(a.recovery),
+            "grasp_ns": None if a.times is None else a.times.grasp,
+            "released_ns": None if a.times is None else a.times.released,
             "transitions": [
-                [t["skill"], t["stage"], t["transition"], t["outcome"], t["reason"], t["assumed"]]
-                for t in a.get("transitions", [])
+                [t.skill, t.stage, t.transition, t.outcome, t.reason, t.assumed]
+                for t in a.transitions
             ],
         }
-        for a in result["attempts"]
+        for a in attempts
     ]
+
+
+def _encoded(value: Any) -> Any:
+    """``value`` as its outcome encodes it: records, and tuples of them, as JSON."""
+    if isinstance(value, tuple):
+        return [_encoded(v) for v in value]
+    return None if value is None else json.loads(dumps(value))
 
 
 def _provenance(records: list[TraceRecord], privileged: set[str]) -> dict[str, Any]:
@@ -203,7 +213,7 @@ def _round(work: Path, unprivileged: bool) -> dict[str, Any]:
         object_poses=recycling.OBJECT_POSES,
     ) as ctx:
         privileged = set(runtime.withheld if unprivileged else ctx.info.privileged)
-        result = recycling.sort_all(
+        attempts, objects = recycling.sort_all(
             ctx, package, read=_counted(read, counts), evaluate=not unprivileged
         )
         final = {}
@@ -217,10 +227,10 @@ def _round(work: Path, unprivileged: bool) -> dict[str, Any]:
                 ]
                 final[obj] = bins[0] if bins else None
     return {
-        "control": _control(result),
+        "control": _control(attempts),
         "registrations": dict(sorted(counts.items())),
         "provenance": _provenance(records, privileged),
-        "final_bins": final or {o: f["bin"] for o, f in result["objects"].items()},
+        "final_bins": final or {d.object: d.bin for d in objects},
     }
 
 
@@ -301,14 +311,13 @@ def _moved_and_retried(work: Path) -> dict[str, Any]:
     return {
         "attempts": [
             {
-                "attempt": a["attempt"],
-                "registration": a["registration"],
-                "race": [
-                    [c["label"], c["outcome"]] for c in (a.get("race") or {}).get("candidates", [])
-                ],
-                "grasp": a.get("grasp"),
-                "failure": None if a.get("failure") is None else a["failure"]["reason"],
-                "released": (a.get("checks") or {}).get("released"),
+                "attempt": a.number,
+                "registration": a.registration,
+                "race": [] if a.race is None else [[c.label, c.outcome] for c in a.race.candidates],
+                "grasp": _encoded(a.grasp),
+                "failure": None if a.failure is None else a.failure.reason,
+                "released": a.checks.get("released"),
+                "decodes": loads(dumps(a), Attempt) == a,
             }
             for a in attempts
         ],
@@ -328,8 +337,10 @@ def test_a_missed_grasp_registers_the_table_again_and_retries(
     (artifacts / "moved_and_retried.json").write_text(json.dumps(first, indent=2) + "\n")
 
     missed, retried = first["attempts"]
-    assert missed["failure"] == "missed" and missed["grasp"][-1] == ["obstructed", False]
+    assert missed["failure"] == "missed"
+    assert missed["grasp"][-1] == {"name": "obstructed", "succeeded": False}
     assert retried["failure"] is None and retried["released"]
+    assert missed["decodes"] and retried["decodes"]
     # The retry planned on a later registration, which saw the can where it was moved.
     assert retried["registration"] > missed["registration"]
     assert first["registered_at_move_m"][-1] < 0.01 < first["registered_at_move_m"][0]

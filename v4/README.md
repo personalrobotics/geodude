@@ -178,7 +178,7 @@ bundle](https://github.com/personalrobotics/mj_viser#replay-a-run-bundle).
 | Pick one can and place it upright on the worktop | Implemented; tested |
 | Recycle several cans, racing both arms and planning each can during the previous transfer | Implemented; four cans tested, and the same round with planning delayed by up to 3 s gives the same trace (`test_planning_latency`) |
 | Pick and drop each of the legacy demo's nine object types | Implemented; each type tested alone (`test_object_types`) |
-| Sort a five-object round of the mix into the bins, recovering where it is safe | Implemented; seed 0 tested twice, its bundles verified (`test_sort_all`) |
+| Sort a five-object round of the mix into the bins, recovering where it is safe | Implemented; seed 0 tested, its bundle verified and judged by the corpus evaluator (`test_sort_all`) |
 | Control on registered object poses | Implemented; a round with privileged channels withheld decides exactly as one with them (`test_registered_control`) |
 | Perception | Not implemented; registration reads privileged simulator channels |
 | The physical robot | Not yet supported; it depends on ssrobot's hardware runtime |

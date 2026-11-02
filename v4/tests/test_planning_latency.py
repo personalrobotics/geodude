@@ -1,18 +1,22 @@
 """How long planning takes never changes what Geodude does.
 
 The recycling demo plans on workers while the robot moves: each can's race while the
-previous one is carried, and, with a lookahead, a skill's next motion. A driver that
-steps the clock while every skill it drives waits only on such a plan lets simulated
-time pass for as long as planning takes in wall-clock time, so the run would depend on
-the host. This test records the four-can round of ``test_four_cans`` twice: once as is,
-and once with every planner call delayed by 0 to 3 s, chosen per request from its
-fingerprint so that plans finish in another order. The longest delay outlasts any
-unpaced skill stage of the round, so a skill waiting on a delayed plan would see the
-clock step if its driver stepped it.
+previous one is carried, and a skill's next motion. A driver that steps the clock
+while every skill it drives waits only on such a plan lets simulated time pass for as
+long as planning takes in wall-clock time, so the run would depend on the host. This
+test compares the four-can round of ``test_four_cans`` (the session's ``four_cans``
+recording) with the same round run again with every planner call delayed by 0 to 3 s,
+chosen per request from its fingerprint so that plans finish in another order. The
+longest delay outlasts any unpaced skill stage of the round, so a skill waiting on a
+delayed plan would see the clock step if its driver stepped it.
 
 The evidence is ``latency.json``, kept by this test: for each run, the cans' outcomes,
 the runtime time the trace ends, and every trace record kind's count and digest of its
 records (runtime time and payload, in order). Both runs must agree on all of it.
+
+It is the suite's determinism gate: the delayed run repeats the round under a different
+planning order, so a nondeterministic round fails it, and no other test repeats a round
+only to compare it with itself.
 
 Reproduce with ``uv run pytest tests/test_planning_latency.py``.
 """
@@ -32,15 +36,13 @@ from ssrobot._wire import fingerprint
 from ssrobot.planning import _cbirrt
 
 from geodude import recycling
+from tests.conftest import FOUR_CANS
 
-SEED = 4
-CANS = 4
 DELAYS_S = (0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0)
 """The delays a planner call may get; 3 s outlasts every stage of the unpaced round."""
 
 
-def _round(out: Path) -> dict[str, Any]:
-    code = recycling.main(["--seed", str(SEED), "--cans", str(CANS), "--record", str(out)])
+def _round(code: int, out: Path) -> dict[str, Any]:
     report = json.loads((out / "recycling.json").read_text())
     records = open_bundle(out / "bundle").records
     digests: dict[str, Any] = defaultdict(hashlib.sha256)
@@ -58,9 +60,12 @@ def _round(out: Path) -> dict[str, Any]:
 
 
 def test_planning_latency_changes_nothing(
-    artifacts: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    artifacts: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    four_cans: tuple[int, Path],
 ) -> None:
-    prompt = _round(tmp_path / "prompt")
+    prompt = _round(*four_cans)
 
     plan = _cbirrt.CBiRRT.plan
     delayed: list[float] = []
@@ -72,7 +77,8 @@ def test_planning_latency_changes_nothing(
         return plan(self, request, scene, **kwargs)
 
     monkeypatch.setattr(_cbirrt.CBiRRT, "plan", slow)
-    late = _round(tmp_path / "delayed")
+    out = tmp_path / "delayed"
+    late = _round(recycling.main([*FOUR_CANS, "--record", str(out)]), out)
     (artifacts / "latency.json").write_text(
         json.dumps({"delays_s": DELAYS_S, "prompt": prompt, "delayed": late}, indent=2) + "\n"
     )

@@ -57,6 +57,7 @@ from ssgrasping import (
     Reason,
     SkillExecution,
     SkillResult,
+    Stage,
     Transition,
     TransitionEstimate,
     TransitionOutcome,
@@ -685,16 +686,14 @@ def worktop_outcome(
 
 
 def _in_bin(pose: Pose, arm: Arm) -> bool:
-    """Whether an object at ``pose`` has its centre within the prl_assets interior of
-    ``arm``'s bin: inside its inner walls, over its floor, below its rim."""
+    """Whether an object at ``pose`` has its centre within ``arm``'s bin's interior
+    (``regions.interior``, as its landing checks): inside its inner walls, over its floor,
+    below its rim."""
     name, base = arm.bin
-    geometry = meta(kind_of(name))["geometric_properties"]
-    outer, inner = geometry["outer_size"], geometry["inner_size"]
-    local = [pose.position[i] - base[i] for i in range(3)]
-    return bool(
-        abs(local[0]) <= inner[0] / 2
-        and abs(local[1]) <= inner[1] / 2
-        and outer[2] - inner[2] <= local[2] <= outer[2]
+    region = regions.interior(meta(kind_of(name)), base)
+    local = [pose.position[i] - region.origin.position[i] for i in range(3)]
+    return all(
+        low <= v <= high for v, (low, high) in zip(local, region.position_bounds, strict=True)
     )
 
 
@@ -784,15 +783,13 @@ def demo(
 
 
 def candidates(
-    ctx: RobotContext, obj: str, arms: dict[str, tuple[Planner, Planner]], *, race: bool = True
+    ctx: RobotContext, obj: str, arms: dict[str, tuple[Planner, Planner]]
 ) -> list[Candidate]:
     """Each arm, as a candidate for ``obj``: its grasp, and its drop into its own bin
     (``BIN_OF``), with that arm's planners. The arm on ``obj``'s side (``arm_for``) is
     preferred (``PREFERRED``); the other is the fallback, taken when the preferred arm's
-    prefix does not plan. Without ``race``, only the preferred arm."""
+    prefix does not plan."""
     preferred = arm_for(registered_pose(ctx, obj).position).side
-    if not race:
-        arms = {preferred: arms[preferred]}
     return [
         Candidate(
             label=side,
@@ -846,20 +843,26 @@ def _release(
     return None
 
 
-def safe_release(failure: dict[str, Any] | None) -> str | None:
-    """How an object still declared attached after ``failure`` (from ``bin_outcome``) may
-    be let go: ``RELEASE_IN_PLACE``, ``RELEASE_LOST``, or None, nowhere known
-    (``recover``). By the failed stage, its reason and cause, whether the skill then
-    believed the object held, and the object still declared attached; never by its
-    detail, which is prose. A lost object is detached only if the skill reported it not
-    held (``held`` exactly False)."""
-    if failure is None or not failure["attached"]:
+def failed_stage(*results: SkillResult | None) -> Stage | None:
+    """The stage that decided the first of ``results`` that did not succeed: None when
+    every result present succeeded."""
+    return next((r.stage for r in results if r is not None and not r.succeeded), None)
+
+
+def safe_release(failed: Stage | None) -> str | None:
+    """How an object still declared attached after its ``failed`` stage may be let go:
+    ``RELEASE_IN_PLACE``, ``RELEASE_LOST``, or None, nowhere known (``recover``). By the
+    stage's name, its reason and cause, whether the skill then believed the object held,
+    and the object still declared attached; never by its detail, which is prose. A lost
+    object is detached only if the skill reported it not held (``held`` exactly False).
+    None, with no failed stage: every skill succeeded and the object is still held, as
+    when no drop zone fits it."""
+    if failed is None or not failed.attached:
         return None
-    where = (failure["skill"], failure["stage"], failure["reason"])
-    if where == ("grasp", "lift", Reason.NOT_PLANNED):
+    if (failed.name, failed.reason) == ("lift", Reason.NOT_PLANNED):  # only a grasp lifts
         return RELEASE_IN_PLACE
-    lost = (failure["reason"], failure["cause"]) == (Reason.TRANSITION_REFUTED, Transition.RETAINED)
-    if lost and failure["held"] is False:
+    lost = (failed.reason, failed.cause) == (Reason.TRANSITION_REFUTED, Transition.RETAINED)
+    if lost and failed.held is False:
         return RELEASE_LOST
     return None
 
@@ -868,17 +871,18 @@ def recover(
     ctx: RobotContext,
     obj: str,
     arm: Arm,
-    failure: dict[str, Any] | None,
+    failed: Stage | None,
     spec: GraspSpec,
     planner: Planner,
     tick: Callable[[], None],
+    read: Read = pose_stub,
 ) -> dict[str, Any]:
     """After an attempt that failed with ``obj`` still attached, release it where that is
     safe (``safe_release``), a narrow slice of personalrobotics/geodude#210's recovery:
     - **A lift that did not plan** (``grasp.lift``, ``not_planned``): the arm never moved
       after closing, so the object still rests where it was grasped, on its support.
-      Open, detach once the fingers have opened, and back the hand out along its approach
-      by ``spec.approach_m``.
+      Open, detach once the fingers have opened, register it where it rests (``read``),
+      and back the hand out along its approach by ``spec.approach_m``.
     - **A carry the object left** (``transition_refuted``, cause ``retained``): the
       gripper's opening showed the fingers close past it, and the carry stopped there.
       Nothing is in the hand, so opening it releases nothing: open, and detach once the
@@ -888,12 +892,12 @@ def recover(
     The fingers are never opened onto nothing known, and ``obj`` is detached only after
     they reached open. Returns what was done: its ``action`` (None when nothing),
     whether ``obj`` was ``released``, and a ``detail``."""
-    skill, stage = ("", "") if failure is None else (failure["skill"], failure["stage"])
-    action = safe_release(failure)
+    action = safe_release(failed)
     if action == RELEASE_IN_PLACE:
         refused = _release(ctx, obj, arm, spec, tick)
         if refused is not None:
             return {"action": RELEASE_IN_PLACE, "released": False, "detail": refused}
+        register(ctx, [obj], read)  # detached, it is unknown until registered where it rests
         hand = next(e.frame for e in ctx.description.end_effectors if e.name == arm.hand)
         snapshot = ctx.snapshot()
         view = ctx.manipulator(arm.manipulator)
@@ -923,7 +927,9 @@ def recover(
     return {
         "action": None,
         "released": False,
-        "detail": f"no safe release after {skill}.{stage}: still declared held",
+        "detail": "no safe release "
+        + ("with no drop zone" if failed is None else f"after {failed.name}")
+        + ": still declared held",
     }
 
 
@@ -944,8 +950,6 @@ def recycle(
     objects: Sequence[str],
     tick: Callable[[], None] = lambda: None,
     *,
-    race: bool = True,
-    lookahead: bool = True,
     retries: int = 0,
     read: Read = pose_stub,
     evaluate: bool = True,
@@ -979,11 +983,9 @@ def recycle(
     fingers closed on nothing), which may have moved since it was registered: whatever
     was planned ahead is discarded, every free object on the table is registered again,
     and the object is raced again from a fresh snapshot. Each attempt records the scene
-    revision of the registration its race planned on (``registration``).
-
-    Without ``race``, the only candidate is ``arm_for``'s arm; without ``lookahead``,
-    nothing is planned during motion, and each race is planned on a snapshot when its
-    object's turn comes. Both are for comparison."""
+    revision of the registration its race planned on (``registration``). A landing still
+    observed when the round's ticks run out is cancelled, and its outcome recorded so: every
+    attempt returned is complete."""
     arms = {side: planners(package, Arm(side)) for side in BIN_OF}
     register(ctx, on_table(ctx), read)
     registration = ctx.scene.revision  # the table as last registered
@@ -1022,7 +1024,7 @@ def recycle(
             register(ctx, on_table(ctx), read)
             registration = ctx.scene.revision
         if pending is None:
-            pending = Candidates(ctx, candidates(ctx, obj, arms, race=race), unsettled=released)
+            pending = Candidates(ctx, candidates(ctx, obj, arms), unsettled=released)
         run_together(ctx, [pending], max_ticks=MAX_TICKS, tick=stepped)  # blocks; no steps
         selection, report = pending.selection, pending.report
         pending = None
@@ -1040,7 +1042,7 @@ def recycle(
             continue
         arm = Arm(selection.candidate.label)
         planner, checker = arms[arm.side]
-        looking = Lookahead(unsettled=tuple(released)) if lookahead else None
+        looking = Lookahead(unsettled=tuple(released))
         picked = drive(ctx, selection.grasp(ctx, lookahead=looking), stepped)
         dropped = None
         spec = None
@@ -1049,7 +1051,7 @@ def recycle(
             assert raced is not None  # every candidate drops
             spec = held_drop_spec(ctx, raced, arm)
         if spec is not None:
-            following = queue[i + 1] if lookahead and i + 1 < len(queue) else None
+            following = queue[i + 1] if i + 1 < len(queue) else None
             dropping = drop(
                 ctx,
                 planner,
@@ -1068,7 +1070,7 @@ def recycle(
                 assert following is not None
                 return Candidates(
                     ctx,
-                    candidates(ctx, following, arms, race=race),
+                    candidates(ctx, following, arms),
                     after=transfer,
                     unsettled=released,
                     removals=(obj,),
@@ -1132,9 +1134,8 @@ def recycle(
             continue
         if ctx.scene.attachment(obj) is None:
             continue
-        recovery = recover(
-            ctx, obj, arm, entry["failure"], selection.candidate.grasp, planner, stepped
-        )
+        failed = failed_stage(picked, dropped)
+        recovery = recover(ctx, obj, arm, failed, selection.candidate.grasp, planner, stepped, read)
         entry["recovery"] = recovery
         if not recovery["released"]:
             break  # still held, and nothing safe to do: the round stops, declared so
@@ -1147,6 +1148,10 @@ def recycle(
             break
         ctx.step()
         stepped()
+    for observed, recorded in landings:  # outlasted the round: ended, so recorded whole
+        observed.cancel(f"not done after {MAX_TICKS} ticks")
+        assert observed.result is not None
+        recorded(observed.result)
     return outcomes
 
 

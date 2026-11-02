@@ -16,9 +16,10 @@ Run it, watch it, and record it::
     python -m geodude.recycling --seed 0 --viser --record out/
 
 ``--viser`` serves a live view at http://localhost:8080; ``--record`` writes the run as
-a bundle (``out/bundle``) that mj_viser replays, and its outcome as ``out/recycling.json``:
-the sources it ran from, the OpenBLAS kernel, the seed, every skill stage, and where the
-can came to rest.
+a bundle (``out/bundle``) that mj_viser replays, and its outcome as ``out/recycling.json``,
+a ``geodude.outcomes.RecyclingRun``: the sources it ran from, the OpenBLAS kernel, the
+seed, the staged scene, the bundle's digest, every attempt and every skill stage, and
+where the can came to rest.
 The installed command ``geodude-recycling`` is the same.
 
 ``--cans 4`` stages four cans and recycles them all (``recycle``): both arms race for
@@ -31,9 +32,11 @@ from __future__ import annotations
 import argparse
 import ctypes
 import dataclasses
+import hashlib
 import importlib.metadata
 import json
 import math
+import os
 import random
 import shutil
 import sys
@@ -50,6 +53,7 @@ from ssgrasping import (
     Candidate,
     Candidates,
     DropSpec,
+    Evidence,
     GraspSpec,
     LandingSpec,
     Lookahead,
@@ -79,21 +83,26 @@ from ssrobot import (
     ObjectStatus,
     ObservationRequest,
     Planner,
+    PlanStatus,
     Pose,
     Registration,
+    RestOutcome,
     RobotContext,
     RobotPackage,
     SceneSnapshot,
+    StageOutcome,
     Timestamp,
     WrenchGuard,
     WrenchPart,
+    dumps,
     load_installed_package,
+    loads,
     write_bundle,
 )
 from ssrobot.mujoco import MujocoRuntime
 from ssrobot.planning import CBiRRT, SsikKinematics
 
-from geodude import regions
+from geodude import outcomes, regions
 from geodude.scene import meta, stage_scene, worktop
 
 TARGET = (0.20, -0.50)
@@ -472,16 +481,19 @@ def drop_spec(obj: str, arm: Arm) -> DropSpec:
     )
 
 
-NO_ZONE = {
-    "skill": "drop",
-    "stage": "zone",
-    "reason": "no_drop_zone",
-    "cause": None,
-    "detail": "no drop zone fits the object as it is held",
-    "evidence": "planned",
-}
-"""The failure recorded when ``held_drop_spec`` finds no zone: nothing was dropped. Its
-held and attached state are the grasp's, as it ended."""
+def no_zone(ended: Stage) -> outcomes.Failure:
+    """The failure recorded when ``held_drop_spec`` finds no zone: nothing was dropped. Its
+    held and attached state are the grasp's, as it ``ended``."""
+    return outcomes.Failure(
+        skill="drop",
+        stage="zone",
+        reason=outcomes.NO_DROP_ZONE,
+        cause=None,
+        detail="no drop zone fits the object as it is held",
+        evidence=Evidence.PLANNED,
+        held=ended.held,
+        attached=ended.attached,
+    )
 
 
 def held_drop_spec(ctx: RobotContext, raced: DropSpec, arm: Arm) -> DropSpec | None:
@@ -508,18 +520,52 @@ def landing_spec(obj: str, arm: Arm) -> LandingSpec:
     return LandingSpec(object=obj, inside=[regions.interior(meta(kind_of(name)), base)])
 
 
-def sources() -> dict[str, Any]:
-    """Each of ``SOURCES``: its version and, when it was installed from a URL, a path or
-    a file, where from."""
-    out: dict[str, Any] = {}
-    for name in SOURCES:
+def sources() -> tuple[outcomes.Source, ...]:
+    """Each of ``SOURCES``: its version and, when it was installed from a VCS URL, its
+    commit. Never a path: an outcome names no workspace."""
+    return tuple(source(name) for name in SOURCES)
+
+
+def source(name: str, version: str | None = None, direct: Any = None) -> outcomes.Source:
+    """The installed distribution ``name``, or, given its ``version`` and ``direct_url``
+    record (``direct``, as a scene's manifest keeps them), that one."""
+    if version is None:
         dist = importlib.metadata.distribution(name)
-        direct = dist.read_text("direct_url.json")
-        out[name] = {
-            "version": dist.version,
-            "source": None if direct is None else json.loads(direct),
-        }
-    return out
+        version, direct = dist.version, json.loads(dist.read_text("direct_url.json") or "null")
+    commit = None if direct is None else direct.get("vcs_info", {}).get("commit_id")
+    return outcomes.Source(name=name, version=version, commit=commit)
+
+
+def staged(manifest: dict[str, Any]) -> outcomes.Scene:
+    """A scene's ``manifest.json`` (``geodude.scene``), typed, its prl_assets source as a
+    ``Source``."""
+    prl = manifest["prl_assets"]
+    return outcomes.Scene(
+        prl_assets=source("prl-assets", prl["version"], prl["source"]),
+        seed=manifest["seed"],
+        objects=tuple(
+            outcomes.Placed(
+                name=o["name"],
+                kind=o["kind"],
+                position=tuple(o["position"]),
+                quat_wxyz=tuple(o["quat_wxyz"]),
+            )
+            for o in manifest["objects"]
+        ),
+        fixtures=tuple(
+            outcomes.Fixture(name=f["name"], kind=f["kind"], base=tuple(f["base"]))
+            for f in manifest["fixtures"]
+        ),
+        files=tuple(
+            outcomes.SceneFile(path=path, sha256=digest)
+            for path, digest in sorted(manifest["files"].items())
+        ),
+        attempt=manifest["attempt"],
+        rejected=tuple(
+            outcomes.Rejected(attempt=r["attempt"], near_robot=tuple(r["near_robot"]))
+            for r in manifest["rejected"]
+        ),
+    )
 
 
 def blas_kernel() -> str | None:
@@ -540,13 +586,15 @@ def blas_kernel() -> str | None:
     return None
 
 
-def _stages(result: SkillResult | None) -> list[list[Any]] | None:
-    return None if result is None else [[s.name, s.succeeded] for s in result.stages]
+def _stages(result: SkillResult | None) -> tuple[outcomes.SkillStage, ...] | None:
+    if result is None:
+        return None
+    return tuple(outcomes.SkillStage(name=s.name, succeeded=s.succeeded) for s in result.stages)
 
 
 def _times(
     picked: SkillResult, dropped: SkillResult | None, landed: SkillResult | None
-) -> dict[str, int | None]:
+) -> outcomes.Times:
     """When, on the runtime clock, an attempt's grasp recorded its first stage, its drop
     released, and its landing was judged."""
     released = (
@@ -554,11 +602,11 @@ def _times(
         if dropped is None
         else next((s.time_ns for s in dropped.stages if s.name == "release"), None)
     )
-    return {
-        "grasp": picked.stages[0].time_ns if picked.stages else None,
-        "released": released,
-        "landed": landed.stages[-1].time_ns if landed is not None and landed.stages else None,
-    }
+    return outcomes.Times(
+        grasp=picked.stages[0].time_ns if picked.stages else None,
+        released=released,
+        landed=landed.stages[-1].time_ns if landed is not None and landed.stages else None,
+    )
 
 
 ASSUMED = (Transition.LANDED, Transition.PLACED)
@@ -571,7 +619,7 @@ def _landed(dropped: SkillResult) -> TransitionEstimate:
     return next(t for t in dropped.transitions if t.transition is Transition.LANDED)
 
 
-def _transitions(*results: SkillResult | None) -> list[dict[str, Any]]:
+def _transitions(*results: SkillResult | None) -> tuple[outcomes.TransitionRecord, ...]:
     """Every transition the skills estimated, in order: where, the estimate, whether the
     demo assumed it (``ASSUMED``, when unobserved), and, where the simulator had the
     object's privileged state, its reference (``reference``): privileged, not ground
@@ -589,38 +637,37 @@ def _transitions(*results: SkillResult | None) -> list[dict[str, Any]]:
         for t in result.transitions:
             judged = scored.get((t.stage, t.transition))
             out.append(
-                {
-                    "skill": result.skill,
-                    "stage": t.stage,
-                    "transition": t.transition.value,
-                    "outcome": t.outcome.value,
-                    "reason": t.reason.value,
-                    "assumed": t.outcome is TransitionOutcome.UNOBSERVED
-                    and t.transition in ASSUMED,
-                    "reference": None if judged is None else judged.reference.value,
-                    "reference_source": None if judged is None else judged.source,
-                }
+                outcomes.TransitionRecord(
+                    skill=result.skill,
+                    stage=t.stage,
+                    transition=t.transition,
+                    outcome=t.outcome,
+                    reason=t.reason,
+                    assumed=t.outcome is TransitionOutcome.UNOBSERVED and t.transition in ASSUMED,
+                    reference=None if judged is None else judged.reference,
+                    reference_source=None if judged is None else judged.source,
+                )
             )
-    return out
+    return tuple(out)
 
 
-def _failure(*results: SkillResult | None) -> dict[str, Any] | None:
+def _failure(*results: SkillResult | None) -> outcomes.Failure | None:
     """The stage that decided the first of ``results`` that did not succeed: its skill,
     name, reason and cause, detail, evidence kind, and whether the object was then held
     and declared attached. None when every result present succeeded."""
     for result in results:
         if result is not None and not result.succeeded:
             stage = result.stage
-            return {
-                "skill": result.skill,
-                "stage": stage.name,
-                "reason": None if stage.reason is None else stage.reason.value,
-                "cause": stage.cause,
-                "detail": stage.detail,
-                "evidence": stage.evidence.value,
-                "held": stage.held,
-                "attached": stage.attached,
-            }
+            return outcomes.Failure(
+                skill=result.skill,
+                stage=stage.name,
+                reason=None if stage.reason is None else stage.reason.value,
+                cause=stage.cause,
+                detail=stage.detail,
+                evidence=stage.evidence,
+                held=stage.held,
+                attached=stage.attached,
+            )
     return None
 
 
@@ -628,61 +675,71 @@ def _released(result: SkillResult | None) -> bool:
     return result is not None and any(s.name == "release" and s.succeeded for s in result.stages)
 
 
-def _pose(pose: Pose) -> dict[str, list[float]]:
-    return {"position": list(pose.position), "quat_wxyz": list(pose.quat_wxyz)}
-
-
 def worktop_outcome(
     ctx: RobotContext,
     package: RobotPackage,
     obj: str,
+    arm: Arm,
     target: tuple[float, float],
     picked: SkillResult,
     placed: SkillResult | None,
-) -> dict[str, Any]:
-    """What a pick and worktop placement achieved, observed after it ends: every stage,
-    whether the release was confirmed, where ``obj`` rests (from its pose channel), how
-    far its axis is from upright, its base's height above the worktop, and what is still
-    attached. ``succeeded`` requires every stage to succeed, nothing attached, and the
-    object upright within ``PLACE_TILT_RAD``, its base on the worktop, and its centre
-    within ``PLACE_SLACK_M`` plus ``PLACE_TOLERANCE_M`` of ``target`` in x and y. An
-    evaluation: it reads the object's privileged pose."""
+) -> outcomes.Attempt:
+    """What a pick by ``arm`` and worktop placement achieved, observed after it ends:
+    every stage, whether the release was confirmed, where ``obj`` rests (from its pose
+    channel), how far its axis is from upright, its base's height above the worktop, and
+    what is still attached. ``succeeded`` requires every stage to succeed, nothing
+    attached, and the object upright within ``PLACE_TILT_RAD``, its base on the worktop,
+    and its centre within ``PLACE_SLACK_M`` plus ``PLACE_TOLERANCE_M`` of ``target`` in x
+    and y. An evaluation: it reads the object's privileged pose."""
     final = true_pose(ctx, obj)
     _, x, y, _ = final.quat_wxyz
     tilt = math.acos(max(-1.0, min(1.0, 1 - 2 * (x * x + y * y))))  # body z from world z
-    offset = [final.position[i] - target[i] for i in range(2)]
+    offset = (final.position[0] - target[0], final.position[1] - target[1])
     height = regions.height(meta(kind_of(obj))["geometric_properties"])
     base = final.position[2] - math.cos(tilt) * height / 2 - worktop(package).centre[2]
-    attached = [a.object for a in ctx.scene.attachments]
-    checks = {
-        "grasped": picked.succeeded,
-        "placed": placed is not None and placed.succeeded,
-        "released": _released(placed),
-        "nothing_attached": not attached,
-        "upright": tilt <= PLACE_TILT_RAD,
-        "on_worktop": abs(base) <= PLACE_TOLERANCE_M,
-        "at_target": max(map(abs, offset)) <= PLACE_SLACK_M + PLACE_TOLERANCE_M,
-    }
-    return {
-        "to": "worktop",
-        "object": obj,
-        "target": list(target),
-        "grasp": _stages(picked),
-        "place": _stages(placed),
-        "transitions": _transitions(picked, placed),
-        "final_pose": _pose(final),
-        "tilt_rad": tilt,
-        "base_above_worktop_m": base,
-        "offset_from_target_xy_m": offset,
-        "attached": attached,
-        "tolerances": {
-            "tilt_rad": PLACE_TILT_RAD,
-            "base_m": PLACE_TOLERANCE_M,
-            "offset_xy_m": PLACE_SLACK_M + PLACE_TOLERANCE_M,
-        },
-        "checks": checks,
-        "succeeded": all(checks.values()),
-    }
+    attached = tuple(a.object for a in ctx.scene.attachments)
+    checks = outcomes.WorktopChecks(
+        grasped=picked.succeeded,
+        placed=placed is not None and placed.succeeded,
+        released=_released(placed),
+        nothing_attached=not attached,
+        upright=tilt <= PLACE_TILT_RAD,
+        on_worktop=abs(base) <= PLACE_TOLERANCE_M,
+        at_target=max(map(abs, offset)) <= PLACE_SLACK_M + PLACE_TOLERANCE_M,
+    )
+    return outcomes.Attempt(
+        object=obj,
+        number=1,
+        arm=arm.side,
+        race=None,
+        registration=None,
+        lookahead=None,
+        destination=outcomes.Destination.WORKTOP,
+        grasp=_stages(picked),
+        drop=None,
+        landing=None,
+        place=_stages(placed),
+        times=None,
+        failure=_failure(picked, placed),
+        recovery=None,
+        transitions=_transitions(picked, placed),
+        attached=attached,
+        final_pose=final,
+        bin=None,
+        worktop=outcomes.OnWorktop(
+            target=target,
+            tilt_rad=tilt,
+            base_above_worktop_m=base,
+            offset_from_target_xy_m=offset,
+            tolerances=outcomes.Tolerances(
+                tilt_rad=PLACE_TILT_RAD,
+                base_m=PLACE_TOLERANCE_M,
+                offset_xy_m=PLACE_SLACK_M + PLACE_TOLERANCE_M,
+            ),
+            checks=checks,
+        ),
+        succeeded=outcomes.passed(checks),
+    )
 
 
 def _in_bin(pose: Pose, arm: Arm) -> bool:
@@ -706,47 +763,72 @@ def bin_outcome(
     landed: SkillResult | None,
     *,
     evaluate: bool = True,
-) -> dict[str, Any]:
+    number: int = 1,
+    race: outcomes.Race | None = None,
+    registration: int | None = None,
+    lookahead: outcomes.Lookahead | None = None,
+) -> outcomes.Attempt:
     """What a pick, drop, and landing achieved, observed when the landing ends, or the
     drop when it released nothing: every stage, whether the release was confirmed, and
-    what is still attached, which may be the next object. With ``evaluate``, where
-    ``obj`` rests, from its privileged pose, relative to the bin's base: ``succeeded``
-    requires every stage to succeed, ``obj`` no longer attached, its landing scored
-    ``confirmed`` (``landed``), and its centre within the bin's prl_assets interior:
-    inside its inner walls, over its floor, below its rim. Without it, no privileged
-    pose is read for the outcome, and what needs one is None."""
+    what is still attached, which may be the next object. A grasp that succeeded with
+    nothing dropped found no drop zone (``no_zone``). With ``evaluate``, where ``obj``
+    rests, from its privileged pose, relative to the bin's base: ``succeeded`` requires
+    every stage to succeed, ``obj`` no longer attached, its landing scored ``confirmed``
+    (``landed``), and its centre within the bin's prl_assets interior: inside its inner
+    walls, over its floor, below its rim. Without it, no privileged pose is read for the
+    outcome, and what needs one is None. ``number``, ``race``, ``registration`` and
+    ``lookahead`` are the attempt's, as ``recycle`` made it."""
     name, base = arm.bin
     final = true_pose(ctx, obj) if evaluate else None
-    local = None if final is None else [final.position[i] - base[i] for i in range(3)]
-    attached = [a.object for a in ctx.scene.attachments]
+    attached = tuple(a.object for a in ctx.scene.attachments)
     scored = next(
         (e.reference for e in (landed.evaluations if landed is not None else ())),
         None,
     )
-    checks: dict[str, bool | None] = {
-        "grasped": picked.succeeded,
-        "dropped": dropped is not None and dropped.succeeded,
-        "released": _released(dropped),
-        "landed": None if not evaluate else scored is TransitionOutcome.CONFIRMED,
-        "detached": obj not in attached,
-        "in_bin": None if final is None else _in_bin(final, arm),
-    }
-    return {
-        "to": "bin",
-        "object": obj,
-        "bin": {"name": name, "base": list(base)},
-        "times_ns": _times(picked, dropped, landed),
-        "grasp": _stages(picked),
-        "drop": _stages(dropped),
-        "landing": _stages(landed),
-        "final_pose": None if final is None else _pose(final),
-        "position_in_bin_m": local,
-        "attached": attached,
-        "checks": checks,
-        "failure": _failure(picked, dropped, landed),
-        "transitions": _transitions(picked, dropped, landed),
-        "succeeded": all(checks.values()) if evaluate else None,
-    }
+    checks = outcomes.BinChecks(
+        grasped=picked.succeeded,
+        dropped=dropped is not None and dropped.succeeded,
+        released=_released(dropped),
+        landed=None if not evaluate else scored is TransitionOutcome.CONFIRMED,
+        detached=obj not in attached,
+        in_bin=None if final is None else _in_bin(final, arm),
+    )
+    failure = _failure(picked, dropped, landed)
+    if picked.succeeded and dropped is None:
+        failure = no_zone(picked.stage)
+    return outcomes.Attempt(
+        object=obj,
+        number=number,
+        arm=arm.side,
+        race=race,
+        registration=registration,
+        lookahead=lookahead,
+        destination=outcomes.Destination.BIN,
+        grasp=_stages(picked),
+        drop=_stages(dropped),
+        landing=_stages(landed),
+        place=None,
+        times=_times(picked, dropped, landed),
+        failure=failure,
+        recovery=None,
+        transitions=_transitions(picked, dropped, landed),
+        attached=attached,
+        final_pose=final,
+        bin=outcomes.InBin(
+            name=name,
+            base=base,
+            position_in_bin_m=None
+            if final is None
+            else (
+                final.position[0] - base[0],
+                final.position[1] - base[1],
+                final.position[2] - base[2],
+            ),
+            checks=checks,
+        ),
+        worktop=None,
+        succeeded=outcomes.passed(checks),
+    )
 
 
 def demo(
@@ -754,11 +836,10 @@ def demo(
     package: RobotPackage,
     to: str = "bin",
     tick: Callable[[], None] = lambda: None,
-) -> dict[str, Any]:
+) -> outcomes.Attempt:
     """Pick ``can_0`` in a staged scene with the arm on its side, and drop it in that
     arm's bin (``to="bin"``) or place it at ``TARGET`` on the worktop
-    (``to="worktop"``), with a snapshot before and after. Returns the destination's
-    outcome, with the arm used."""
+    (``to="worktop"``), with a snapshot before and after. Returns the attempt."""
     if to not in DESTINATIONS:
         raise ValueError(f"no destination {to!r}; one of {DESTINATIONS}")
     obj = "can_0"
@@ -776,10 +857,8 @@ def demo(
         after = place_on_worktop(ctx, package, obj, TARGET, arm=arm, planners=chosen, tick=tick)
     ctx.snapshot()
     if to == "bin":
-        result = bin_outcome(ctx, obj, arm, picked, after, landed)
-    else:
-        result = worktop_outcome(ctx, package, obj, TARGET, picked, after)
-    return {"arm": arm.side, **result}
+        return bin_outcome(ctx, obj, arm, picked, after, landed)
+    return worktop_outcome(ctx, package, obj, arm, TARGET, picked, after)
 
 
 def candidates(
@@ -807,8 +886,8 @@ RETRIES = 1
 """How many more times ``sort_all`` races an object whose attempt failed but left it
 released, upright, back on the worktop: once, so that an evaluation can count successes
 at the first attempt and after a retry apart (#201)."""
-RELEASE_IN_PLACE = "release in place"
-RELEASE_LOST = "detach the lost object"
+RELEASE_IN_PLACE = outcomes.RecoveryAction.RELEASE_IN_PLACE
+RELEASE_LOST = outcomes.RecoveryAction.RELEASE_LOST
 
 
 def _wait(ctx: RobotContext, execution: Execution, tick: Callable[[], None]) -> ExecutionStatus:
@@ -849,7 +928,7 @@ def failed_stage(*results: SkillResult | None) -> Stage | None:
     return next((r.stage for r in results if r is not None and not r.succeeded), None)
 
 
-def safe_release(failed: Stage | None) -> str | None:
+def safe_release(failed: Stage | None) -> outcomes.RecoveryAction | None:
     """How an object still declared attached after its ``failed`` stage may be let go:
     ``RELEASE_IN_PLACE``, ``RELEASE_LOST``, or None, nowhere known (``recover``). By the
     stage's name, its reason and cause, whether the skill then believed the object held,
@@ -876,7 +955,7 @@ def recover(
     planner: Planner,
     tick: Callable[[], None],
     read: Read = pose_stub,
-) -> dict[str, Any]:
+) -> outcomes.Recovery:
     """After an attempt that failed with ``obj`` still attached, release it where that is
     safe (``safe_release``), a narrow slice of personalrobotics/geodude#210's recovery:
     - **A lift that did not plan** (``grasp.lift``, ``not_planned``): the arm never moved
@@ -896,7 +975,7 @@ def recover(
     if action == RELEASE_IN_PLACE:
         refused = _release(ctx, obj, arm, spec, tick)
         if refused is not None:
-            return {"action": RELEASE_IN_PLACE, "released": False, "detail": refused}
+            return outcomes.Recovery(action=RELEASE_IN_PLACE, released=False, detail=refused)
         register(ctx, [obj], read)  # detached, it is unknown until registered where it rests
         hand = next(e.frame for e in ctx.description.end_effectors if e.name == arm.hand)
         snapshot = ctx.snapshot()
@@ -912,25 +991,25 @@ def recover(
             retreat = f"not planned: {back.status.value}"
         else:
             retreat = _wait(ctx, ctx.execute(back, planner=planner), tick).state.value
-        return {
-            "action": RELEASE_IN_PLACE,
-            "released": True,
-            "detail": f"released where grasped; backed out: {retreat}",
-        }
+        return outcomes.Recovery(
+            action=RELEASE_IN_PLACE,
+            released=True,
+            detail=f"released where grasped; backed out: {retreat}",
+        )
     if action == RELEASE_LOST:
         refused = _release(ctx, obj, arm, spec, tick)
-        return {
-            "action": RELEASE_LOST,
-            "released": refused is None,
-            "detail": refused or "detached: the object had left the hand",
-        }
-    return {
-        "action": None,
-        "released": False,
-        "detail": "no safe release "
+        return outcomes.Recovery(
+            action=RELEASE_LOST,
+            released=refused is None,
+            detail=refused or "detached: the object had left the hand",
+        )
+    return outcomes.Recovery(
+        action=None,
+        released=False,
+        detail="no safe release "
         + ("with no drop zone" if failed is None else f"after {failed.name}")
         + ": still declared held",
-    }
+    )
 
 
 def _upright_on_worktop(ctx: RobotContext, obj: str, start: Any) -> bool:
@@ -944,6 +1023,158 @@ def _upright_on_worktop(ctx: RobotContext, obj: str, start: Any) -> bool:
     return tilt <= PLACE_TILT_RAD and abs(now.position[2] - began.position[2]) <= PLACE_TOLERANCE_M
 
 
+def _prediction(log: dict[str, Any]) -> outcomes.Prediction:
+    fields: dict[str, Any] = {k: v if k == "base" else tuple(v) for k, v in log.items()}
+    return outcomes.Prediction(**fields)
+
+
+def _race(report: dict[str, Any]) -> outcomes.Race:
+    """``Candidates.report``, as far as its selection is deterministic: a candidate of a
+    strictly lower priority than a chosen one is ``outranked``, its plans left out, since
+    whether it was stopped, and where, or finished first depended on how fast the chosen
+    one planned. Its full report, ``chains`` included, is not kept."""
+    chains = report["chains"]
+    chosen = [c["priority"] for c in chains["chains"] if c["chosen"] is not None]
+    top = max(chosen, default=None)
+    candidates = []
+    for chain, c in zip(chains["chains"], report["candidates"], strict=True):
+        if chains["cancel_lower"] and top is not None and chain["priority"] < top:
+            candidate = outcomes.Candidate(
+                label=c["label"],
+                priority=c["priority"],
+                outcome=outcomes.CandidateOutcome.OUTRANKED,
+                detail="a higher priority was chosen",
+                cost_s=None,
+                plans=(),
+            )
+        else:
+            candidate = outcomes.Candidate(
+                label=c["label"],
+                priority=c["priority"],
+                outcome=outcomes.CandidateOutcome(c["outcome"]),
+                detail=c["detail"],
+                cost_s=c["cost_s"],
+                plans=tuple(
+                    outcomes.RacePlan(
+                        seed=p["seed"],
+                        stage=p["stage"],
+                        stage_seed=p["stage_seed"],
+                        status=StageOutcome(p["status"]),
+                        plan_status=(
+                            None if p["plan_status"] is None else PlanStatus(p["plan_status"])
+                        ),
+                        duration_s=p["duration_s"],
+                    )
+                    for p in c["plans"]
+                ),
+            )
+        candidates.append(candidate)
+    basis = {**report["basis"], "on": outcomes.RaceBasis(report["basis"]["on"])}
+    if "prediction" in basis:
+        basis["prediction"] = _prediction(basis["prediction"])
+    return outcomes.Race(
+        **{"snapshot": None, "stage": None, "during": None, "prediction": None, **basis},
+        rule=report["rule"],
+        candidates=tuple(candidates),
+        selected=report["selected"],
+    )
+
+
+def _lookahead(result: SkillResult) -> tuple[outcomes.LookaheadEntry, ...]:
+    """A skill's lookahead log (``values["lookahead"]``), typed: a key ssgrasping adds is
+    refused, not dropped."""
+    log = result.values.get("lookahead", [])
+    assert isinstance(log, list)
+    entries = []
+    for e in log:
+        entry = dict(e)
+        if "prediction" in entry:
+            entry["prediction"] = _prediction(entry["prediction"])
+        if "raced" in entry:
+            entry["raced"] = tuple(entry["raced"])
+        if entry.get("rest") is not None:
+            rest = dict(entry["rest"])
+            rest["outcome"] = RestOutcome(rest["outcome"])
+            for key in ("window", "terminal", "longest"):
+                rest[key] = None if rest[key] is None else tuple(rest[key])
+            entry["rest"] = outcomes.RestEvidence(**rest)
+        entries.append(outcomes.LookaheadEntry(**entry))
+    return tuple(entries)
+
+
+@dataclass
+class _Pending:
+    """An attempt in progress, as ``recycle`` knows it: its object, number, race and
+    registration, then its arm and lookahead. A drop whose landing is still observed
+    is not complete; only ``complete`` makes the ``Attempt`` (``bin_outcome``), and only a
+    complete attempt is returned, so a partial one is never recorded."""
+
+    obj: str
+    number: int
+    race: outcomes.Race
+    registration: int
+    lookahead: outcomes.Lookahead | None = None
+    attempt: outcomes.Attempt | None = None
+
+    def unselected(self) -> None:
+        """No arm's prefix planned: nothing ran."""
+        self.attempt = outcomes.Attempt(
+            object=self.obj,
+            number=self.number,
+            arm=None,
+            race=self.race,
+            registration=self.registration,
+            lookahead=None,
+            destination=outcomes.Destination.BIN,
+            grasp=None,
+            drop=None,
+            landing=None,
+            place=None,
+            times=None,
+            failure=None,
+            recovery=None,
+            transitions=(),
+            attached=None,
+            final_pose=None,
+            bin=None,
+            worktop=None,
+            succeeded=False,
+        )
+
+    def complete(
+        self,
+        ctx: RobotContext,
+        arm: Arm,
+        picked: SkillResult,
+        dropped: SkillResult | None,
+        landed: SkillResult | None,
+        evaluate: bool,
+    ) -> None:
+        """The attempt, observed now: once its landing ended, or at once without one."""
+        self.attempt = bin_outcome(
+            ctx,
+            self.obj,
+            arm,
+            picked,
+            dropped,
+            landed,
+            evaluate=evaluate,
+            number=self.number,
+            race=self.race,
+            registration=self.registration,
+            lookahead=self.lookahead,
+        )
+
+    def recovered(self, recovery: outcomes.Recovery) -> None:
+        assert self.attempt is not None  # recovered only once it ended
+        self.attempt = dataclasses.replace(self.attempt, recovery=recovery)
+
+    def done(self) -> outcomes.Attempt:
+        if self.attempt is None:
+            raise ValueError(f"{self.obj}'s attempt {self.number} is not complete")
+        return self.attempt
+
+
 def recycle(
     ctx: RobotContext,
     package: RobotPackage,
@@ -953,7 +1184,7 @@ def recycle(
     retries: int = 0,
     read: Read = pose_stub,
     evaluate: bool = True,
-) -> list[dict[str, Any]]:
+) -> list[outcomes.Attempt]:
     """Pick each of ``objects`` in turn and drop it in a bin, racing both arms for each
     (``Candidates``): the arm on its side takes it if its whole planned prefix, through
     the drop into its own bin, plans; otherwise the other arm, if its prefix plans. The
@@ -973,8 +1204,9 @@ def recycle(
     may still record privileged references for their transitions
     (``SkillResult.evaluations``) where the runtime declares those channels; none of it
     steers control.
-    Within the grasp, the approach is planned during the pregrasp. Returns each attempt's
-    ``bin_outcome``, with the object's attempt number, the arm and the race.
+    Within the grasp, the approach is planned during the pregrasp. Returns each attempt
+    (``bin_outcome``), with the object's attempt number, the arm and the race (``_race``),
+    once it is complete (``_Pending``).
 
     An attempt that fails with the object still attached is recovered by ``recover``. If
     nothing is safe, the round stops there, the object declared held. An object released
@@ -995,13 +1227,13 @@ def recycle(
         side: {j: start.position(j) for j in ctx.description.gripper(Arm(side).gripper).joints}
         for side in BIN_OF
     }
-    outcomes: list[dict[str, Any]] = []
+    pendings: list[_Pending] = []
     queue = list(objects)
     attempts: dict[str, int] = {}
     looking: Lookahead | None = None
     pending: Candidates | None = None
     released: list[str] = []  # dropped, and assumed landed
-    # Each released object's landing, still observed, and how to record its outcome.
+    # Each released object's landing, still observed, and how to complete its attempt.
     landings: list[tuple[SkillExecution, Callable[[SkillResult], None]]] = []
 
     def stepped() -> None:
@@ -1028,17 +1260,11 @@ def recycle(
         run_together(ctx, [pending], max_ticks=MAX_TICKS, tick=stepped)  # blocks; no steps
         selection, report = pending.selection, pending.report
         pending = None
+        assert report is not None  # the race ended
+        entry = _Pending(obj, attempts[obj], _race(report), registration)
+        pendings.append(entry)
         if selection is None:
-            outcomes.append(
-                {
-                    "object": obj,
-                    "attempt": attempts[obj],
-                    "arm": None,
-                    "race": report,
-                    "registration": registration,
-                    "succeeded": False,
-                }
-            )
+            entry.unselected()
             continue
         arm = Arm(selection.candidate.label)
         planner, checker = arms[arm.side]
@@ -1086,41 +1312,27 @@ def recycle(
                 # rather than let it finish, and race again.
                 pending.close()
                 pending = None
-        logs = {
-            skill: result.values.get("lookahead", [])
-            for skill, result in (("grasp", picked), ("drop", dropped))
-            if result is not None
-        }
-        entry: dict[str, Any] = {
-            "object": obj,
-            "attempt": attempts[obj],
-            "arm": arm.side,
-            "race": report,
-            "registration": registration,
-            "lookahead": logs,
-        }
-        outcomes.append(entry)
+        entry.lookahead = outcomes.Lookahead(
+            grasp=_lookahead(picked),
+            drop=None if dropped is None else _lookahead(dropped),
+        )
         if _released(dropped) and evaluate:
 
             def record(
                 landed: SkillResult,
-                entry: dict[str, Any] = entry,
-                obj: str = obj,
+                entry: _Pending = entry,
                 arm: Arm = arm,
                 picked: SkillResult = picked,
                 dropped: SkillResult | None = dropped,
             ) -> None:
-                entry.update(bin_outcome(ctx, obj, arm, picked, dropped, landed))
+                entry.complete(ctx, arm, picked, dropped, landed, evaluate=True)
 
             assert dropped is not None  # released
             observed = landing(ctx, landing_spec(obj, arm), _landed(dropped))
             observed.advance()
             landings.append((observed, record))
         else:
-            entry.update(bin_outcome(ctx, obj, arm, picked, dropped, None, evaluate=evaluate))
-            if picked.succeeded and spec is None:
-                ended = picked.stage
-                entry["failure"] = {**NO_ZONE, "held": ended.held, "attached": ended.attached}
+            entry.complete(ctx, arm, picked, dropped, None, evaluate=evaluate)
         if not picked.succeeded and picked.stage.reason is Reason.MISSED:
             # Portable evidence that the object was not where it was registered: what was
             # planned ahead is void, and the table is registered again before a retry.
@@ -1136,8 +1348,8 @@ def recycle(
             continue
         failed = failed_stage(picked, dropped)
         recovery = recover(ctx, obj, arm, failed, selection.candidate.grasp, planner, stepped, read)
-        entry["recovery"] = recovery
-        if not recovery["released"]:
+        entry.recovered(recovery)
+        if not recovery.released:
             break  # still held, and nothing safe to do: the round stops, declared so
         if attempts[obj] <= retries:
             register(ctx, [obj], read)  # where the recovery left it, for the retry
@@ -1152,7 +1364,7 @@ def recycle(
         observed.cancel(f"not done after {MAX_TICKS} ticks")
         assert observed.result is not None
         recorded(observed.result)
-    return outcomes
+    return [p.done() for p in pendings]
 
 
 def sort_all(
@@ -1162,33 +1374,82 @@ def sort_all(
     *,
     read: Read = pose_stub,
     evaluate: bool = True,
-) -> dict[str, Any]:
+) -> tuple[list[outcomes.Attempt], tuple[outcomes.Disposition, ...]]:
     """The legacy demo's ``sort_all``: recycle every object, racing the arms with
     lookahead (``recycle``), recovering a failed attempt where that is safe (``recover``),
     and racing an object released back onto the worktop once more (``RETRIES``), until
-    none is left to try. Returns every attempt, and per object its attempts, whether it is
-    still attached, and its state in the registered scene. With ``evaluate``, once every
-    landing has ended, also which bin it rests in, if any, from its privileged pose: the
-    table is ``cleared`` when every object does. Without it, ``bin`` and ``cleared`` are
-    None."""
+    none is left to try. Returns every attempt, and every object's ``dispositions``."""
     objects = sorted(ctx.info.objects)
     attempts = recycle(ctx, package, objects, tick, retries=RETRIES, read=read, evaluate=evaluate)
-    final: dict[str, dict[str, Any]] = {}
-    for obj in objects:
-        final[obj] = {
-            "attempts": sum(1 for a in attempts if a["object"] == obj),
-            "attached": ctx.scene.attachment(obj) is not None,
-            "status": ctx.scene.object_status(obj).value,
-        }
-        if evaluate:
-            pose = true_pose(ctx, obj)
-            bins = [Arm(side).bin[0] for side in BIN_OF if _in_bin(pose, Arm(side))]
-            final[obj].update(bin=bins[0] if bins else None, final_pose=_pose(pose))
-    return {
-        "attempts": attempts,
-        "objects": final,
-        "cleared": all(f["bin"] is not None for f in final.values()) if evaluate else None,
-    }
+    return attempts, dispositions(ctx, attempts, evaluate=evaluate)
+
+
+def dispositions(
+    ctx: RobotContext, attempts: Sequence[outcomes.Attempt], *, evaluate: bool = True
+) -> tuple[outcomes.Disposition, ...]:
+    """Per staged object, by name, once every landing has ended: its attempts, whether it
+    is still attached, and its state in the registered scene. With ``evaluate``, also
+    which bin it rests in, if any, and its final pose, from its privileged pose; without
+    it, both are None."""
+    out = []
+    for obj in sorted(ctx.info.objects):
+        pose = true_pose(ctx, obj) if evaluate else None
+        bins = [] if pose is None else [Arm(s).bin[0] for s in BIN_OF if _in_bin(pose, Arm(s))]
+        out.append(
+            outcomes.Disposition(
+                object=obj,
+                attempts=sum(1 for a in attempts if a.object == obj),
+                attached=ctx.scene.attachment(obj) is not None,
+                status=ctx.scene.object_status(obj),
+                bin=bins[0] if bins else None,
+                final_pose=pose,
+            )
+        )
+    return tuple(out)
+
+
+def outcome(
+    seed: int,
+    scene: Path,
+    bundle: str | None,
+    attempts: Sequence[outcomes.Attempt],
+    objects: tuple[outcomes.Disposition, ...],
+    *,
+    evaluated: bool = True,
+) -> outcomes.RecyclingRun:
+    """The run of ``seed`` in the staged ``scene``, its bundle's ``bundle.json`` of
+    SHA-256 ``bundle`` (None when no bundle was written): what it ran from, on which
+    OpenBLAS kernel, every attempt and every object's disposition. The table is
+    ``cleared``, with evaluation, when every object rests in a bin."""
+    return outcomes.RecyclingRun(
+        seed=seed,
+        blas_kernel=blas_kernel(),
+        sources=sources(),
+        scene=staged(json.loads((scene.parent / "manifest.json").read_text())),
+        bundle=bundle,
+        evaluated=evaluated,
+        attempts=tuple(attempts),
+        objects=objects,
+        cleared=all(d.bin is not None for d in objects) if evaluated else None,
+    )
+
+
+def write_outcome(path: Path, run: outcomes.RecyclingRun) -> None:
+    """Encode ``run``, decode the bytes back, and write those exact bytes to ``path``,
+    whole or not at all: to a unique temporary file beside it, then replaced into place,
+    so a failure never destroys the last valid outcome there. The temporary file is
+    removed on failure."""
+    data = (dumps(run) + "\n").encode()
+    if loads(data, outcomes.RecyclingRun) != run:
+        raise ValueError("the outcome does not decode to itself")
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
 
 
 def _drop_racing_next(
@@ -1316,16 +1577,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                     view.refresh()
 
             if args.mix is not None:
-                result = sort_all(ctx, package, tick)
-                result["succeeded"] = result["cleared"]
-                print(json.dumps({o: f["bin"] for o, f in result["objects"].items()}))
+                attempts, objects = sort_all(ctx, package, tick)
+                ok = all(d.bin is not None for d in objects)
+                print(json.dumps({d.object: d.bin for d in objects}))
             elif args.cans == 1:
-                result = demo(ctx, package, args.to, tick)
-                print(json.dumps(result["checks"]))
+                attempt = demo(ctx, package, args.to, tick)
+                attempts, objects = [attempt], dispositions(ctx, [attempt])
+                ok = bool(attempt.succeeded)
+                print(json.dumps(attempt.checks))
             else:
-                cans = recycle(ctx, package, sorted(ctx.info.objects), tick)
-                result = {"cans": cans, "succeeded": all(c["succeeded"] for c in cans)}
-                print(json.dumps({c["object"]: c["succeeded"] for c in cans}))
+                attempts = recycle(ctx, package, sorted(ctx.info.objects), tick)
+                objects = dispositions(ctx, attempts)
+                ok = all(a.succeeded for a in attempts)
+                print(json.dumps({a.object: a.succeeded for a in attempts}))
             if view is not None:
                 if sys.stdin.isatty():
                     input("Press Enter to close the viewer. ")
@@ -1335,19 +1599,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sink.close()
         if args.record:
             args.record.mkdir(parents=True, exist_ok=True)
-            write_bundle(
+            bundle = write_bundle(
                 args.record / "bundle", trace=trace, package=package, model="mjcf", scene=scene
             )
-            report = {
-                "seed": args.seed,
-                "sources": sources(),
-                "blas_kernel": blas_kernel(),
-                "scene": json.loads((scene.parent / "manifest.json").read_text()),
-                **result,
-            }
-            (args.record / "recycling.json").write_text(json.dumps(report, indent=2) + "\n")
+            digest = hashlib.sha256((bundle.root / "bundle.json").read_bytes()).hexdigest()
+            run = outcome(args.seed, scene, digest, attempts, objects)
+            write_outcome(args.record / "recycling.json", run)
             print(f"recorded {args.record / 'bundle'} and {args.record / 'recycling.json'}")
-        ok = bool(result["succeeded"])
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return 0 if ok else 1

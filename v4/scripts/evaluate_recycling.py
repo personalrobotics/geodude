@@ -8,10 +8,10 @@ artifact:
 - what it ran: the corpus, its seeds, the Geodude commit and whether the tree was
   dirty, every ``recycling.SOURCES`` distribution, and the host: its platform, Python,
   CPU model and count, OpenBLAS kernel (``recycling.blas_kernel``), and load;
-- per round: the staged objects and their poses, and per staged object every attempt's
-  outcome, with the deciding stage's reason, cause, and detail and any recovery, where it
-  finally rests,
-  and its verdict (``verdict``);
+- per round, its outcome: the ``geodude.outcomes.RecyclingRun`` the round recorded, with
+  the staged objects and their poses, every attempt, with the deciding stage's reason,
+  cause, and detail and any recovery, and where each object finally rests; and per
+  staged object its verdict (``verdict``), read from that record;
 - per round, on the runtime clock (``timing``): how long it ran, and how much of that
   no command was active; and the same per staged object, from its first grasp's first
   stage to its last attempt's landing judged, or else its release or grasp;
@@ -21,7 +21,9 @@ artifact:
 
 An evaluation in which any round errored is invalid (``"valid": false``): it has no
 ``summary``, only a ``partial_summary`` of the rounds that finished, and the script exits
-nonzero. ``FORMAT`` versions the artifact.
+nonzero. ``FORMAT`` versions the evaluation, and only it: each round's outcome is
+versioned by ``RecyclingRun.VERSION``, which the evaluation records
+(``outcome_version``). Every outcome is decoded strictly before it is judged.
 
 Planning has a wall-clock budget, so a round run beside others may time out where it
 would not alone. Rounds run in parallel, at most ``--jobs`` at once; every round that
@@ -54,6 +56,7 @@ derived artifact that records the original's SHA-256 and the classifying commit.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import os
@@ -67,7 +70,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-FORMAT = 6
+from ssrobot import PlanStatus, StageOutcome, dumps, loads
+
+from geodude.outcomes import Attempt, Disposition, RecyclingRun
+
+FORMAT = 7
 """The evaluation artifact's format: raised whenever a field's meaning changes. 2: per
 object, its attempts, where it finally rests, and its verdict, in place of one outcome
 and its mechanism. 3: each round's and object's ``timing``. 4: a failure's ``reason`` and
@@ -83,7 +90,12 @@ poses (geodude#248): each transition records whether the demo ``assumed`` it, ``
 and ``landed`` being ``unobserved``; a landing scores ``landed`` (its stage is
 ``observed``, and an attempt's ``landed`` check is its reference); and the summary's
 ``assumptions`` counts, per assumed transition, how often the privileged reference
-confirmed or refuted the assumption, and the rate at which it refuted it."""
+confirmed or refuted the assumption, and the rate at which it refuted it. 7: each round
+holds its outcome, a strictly decoded ``RecyclingRun`` (geodude#246), whose version the
+evaluation records (``outcome_version``), in place of the round's ``staged``,
+``outcomes`` and ``final``; each object no longer repeats its attempts. A race records a
+candidate outranked by the chosen one without its plans, so a planning timeout counts
+only where it could have decided the race."""
 CORPORA = {
     "development": range(0, 40),
     "acceptance": range(1000, 1040),
@@ -118,23 +130,26 @@ def run_round(seed: int) -> dict[str, Any]:
             fixtures=recycling.BINS,
             seed=seed,
         )
-        staged = json.loads((scene.parent / "manifest.json").read_text())["objects"]
         idle = Idle()
         runtime = recycling.runtime(package, scene)
         with RobotContext(
             package.description, runtime, sinks=[idle], object_poses=recycling.OBJECT_POSES
         ) as ctx:
-            result = recycling.sort_all(ctx, package)
+            attempts, objects = recycling.sort_all(ctx, package)
             ended = ctx.now.time_ns
+        run = recycling.outcome(seed, scene, None, attempts, objects)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return {
         "seed": seed,
-        "staged": staged,
-        "outcomes": result["attempts"],
-        "final": result["objects"],
-        "timing": _timing(result["attempts"], idle.intervals, ended),
+        "outcome": json.loads(dumps(run)),
+        "timing": _timing(run.attempts, idle.intervals, ended),
     }
+
+
+def outcome(round_: dict[str, Any]) -> RecyclingRun:
+    """A round's outcome, decoded strictly: refused, never coerced, if malformed."""
+    return loads(json.dumps(round_["outcome"]), RecyclingRun)
 
 
 class Idle:
@@ -165,16 +180,16 @@ def _idle_within(intervals: list[list[int]], start: int, end: int) -> int:
     return sum(max(0, min(b, end) - max(a, start)) for a, b in intervals)
 
 
-def _timing(attempts: list[dict[str, Any]], idle: list[list[int]], ended: int) -> dict[str, Any]:
+def _timing(attempts: tuple[Attempt, ...], idle: list[list[int]], ended: int) -> dict[str, Any]:
     """How long the round ran and how much of it no command was active, in total and per
     attempted object (see the module)."""
     objects: dict[str, Any] = {}
     for attempt in attempts:
-        times = attempt.get("times_ns") or {}
-        if times.get("grasp") is None:
+        times = attempt.times
+        if times is None or times.grasp is None:
             continue
-        end = times["landed"] or times["released"] or times["grasp"]
-        span = objects.setdefault(attempt["object"], {"start_ns": times["grasp"]})
+        end = times.landed or times.released or times.grasp
+        span = objects.setdefault(attempt.object, {"start_ns": times.grasp})
         span["end_ns"] = end
     for span in objects.values():
         span["sim_ns"] = span["end_ns"] - span["start_ns"]
@@ -184,37 +199,40 @@ def _timing(attempts: list[dict[str, Any]], idle: list[list[int]], ended: int) -
 
 def _timed_out(round_: dict[str, Any]) -> bool:
     """Whether any plan of the round ran out of its budget: a stage not planned for a
-    timeout, or any raced plan the planner timed out (``plan_status``)."""
-    for outcome in round_["outcomes"]:
-        failure = outcome.get("failure") or {}
-        if failure.get("reason") == "not_planned" and failure.get("cause") == "timeout":
+    timeout, or any raced plan the planner timed out (``plan_status``). A candidate
+    outranked by the chosen one records no plans: its timeouts decided nothing."""
+    for attempt in outcome(round_).attempts:
+        failure = attempt.failure
+        if failure is not None and (failure.reason, failure.cause) == ("not_planned", "timeout"):
             return True
-        for candidate in outcome["race"]["candidates"]:
-            if any(p["plan_status"] == "timeout" for p in candidate["plans"]):
+        assert attempt.race is not None  # every attempt of a round is raced
+        for candidate in attempt.race.candidates:
+            if any(p.plan_status is PlanStatus.TIMEOUT for p in candidate.plans):
                 return True
     return False
 
 
-def classify(outcome: dict[str, Any] | None) -> str:
-    """What failed for one staged object, by its outcome: ``recycled``, or a mechanism.
+def classify(attempt: Attempt | None) -> str:
+    """What failed for one staged object, by its attempt: ``recycled``, or a mechanism.
     ``None`` is an object never attempted, because its round stopped first."""
-    if outcome is None:
+    if attempt is None:
         return "not_attempted"
-    if outcome["succeeded"]:
+    if attempt.succeeded:
         return "recycled"
-    if outcome["arm"] is None:
+    if attempt.arm is None:
+        assert attempt.race is not None  # no arm: the race chose none
         refused = {
-            str(p["stage"])
-            for c in outcome["race"]["candidates"]
-            for p in c["plans"]
-            if p["status"] != "valid"
+            p.stage
+            for c in attempt.race.candidates
+            for p in c.plans
+            if p.status is not StageOutcome.VALID
         }
         return "no_arm_plans:" + "+".join(sorted(refused))
-    failure = outcome.get("failure")
+    failure = attempt.failure
     if failure is None:
-        failed = sorted(k for k, ok in outcome["checks"].items() if not ok)
+        failed = sorted(k for k, ok in attempt.checks.items() if not ok)
         return "checks:" + "+".join(failed)
-    skill, stage, reason, cause = (failure[k] for k in ("skill", "stage", "reason", "cause"))
+    skill, stage, reason, cause = failure.skill, failure.stage, failure.reason, failure.cause
     if reason in ("missed", "lost"):  # nothing in the fingers, or lost in the lift
         return f"{skill}.{stage}:{reason}"
     if reason == "not_planned" and cause is not None:  # the planner's status
@@ -222,18 +240,18 @@ def classify(outcome: dict[str, Any] | None) -> str:
     return f"{skill}.{stage}"
 
 
-def verdict(attempts: list[dict[str, Any]], final: dict[str, Any]) -> str:
+def verdict(attempts: list[Attempt], final: Disposition) -> str:
     """One staged object's verdict, by where it finally rests and its attempts:
     ``recycled`` at the first attempt, ``recycled_after_retry`` or
     ``recycled_after_recovery`` (in a bin after a failed attempt), or, resting outside
     every bin, the mechanism of its last attempt (``classify``)."""
-    if final["bin"] is not None:
-        if attempts and attempts[0]["succeeded"]:
+    if final.bin is not None:
+        if attempts and attempts[0].succeeded:
             return "recycled"
-        if any(a["succeeded"] for a in attempts):
+        if any(a.succeeded for a in attempts):
             return "recycled_after_retry"
         return "recycled_after_recovery"
-    if attempts and attempts[-1]["succeeded"]:
+    if attempts and attempts[-1].succeeded:
         return "left_its_bin"  # landed in it, and rests elsewhere by the end
     return classify(attempts[-1] if attempts else None)
 
@@ -280,10 +298,10 @@ def _transition_counts(rounds: list[dict[str, Any]]) -> dict[str, dict[str, int]
     (``estimate/reference``, ``none`` where the simulator had no reference)."""
     counts: dict[str, Counter[str]] = {}
     for round_ in rounds:
-        for outcome in round_["outcomes"]:
-            for t in outcome.get("transitions", []):
-                key = f"{t['outcome']}/{t['reference'] or 'none'}"
-                counts.setdefault(t["transition"], Counter())[key] += 1
+        for attempt in outcome(round_).attempts:
+            for t in attempt.transitions:
+                key = f"{t.outcome.value}/{'none' if t.reference is None else t.reference.value}"
+                counts.setdefault(t.transition.value, Counter())[key] += 1
     return {k: dict(sorted(c.items())) for k, c in sorted(counts.items())}
 
 
@@ -293,10 +311,11 @@ def _assumptions(rounds: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     among those it judged."""
     counts: dict[str, Counter[str]] = {}
     for round_ in rounds:
-        for outcome in round_["outcomes"]:
-            for t in outcome.get("transitions", []):
-                if t.get("assumed"):
-                    counts.setdefault(t["transition"], Counter())[t["reference"] or "none"] += 1
+        for attempt in outcome(round_).attempts:
+            for t in attempt.transitions:
+                if t.assumed:
+                    reference = "none" if t.reference is None else t.reference.value
+                    counts.setdefault(t.transition.value, Counter())[reference] += 1
     out: dict[str, dict[str, Any]] = {}
     for name, c in sorted(counts.items()):
         judged = c["confirmed"] + c["refuted"]
@@ -311,21 +330,20 @@ def _assumptions(rounds: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
 
 def _objects(round_: dict[str, Any]) -> list[dict[str, Any]]:
-    """Every staged object of a round, with its attempts, where it finally rests, and
-    its verdict."""
+    """Every staged object of a round, with where it was staged, where it finally rests,
+    and its verdict. Its attempts are the round outcome's."""
+    run = outcome(round_)
+    final = {d.object: d for d in run.objects}
     out = []
-    for placement in round_["staged"]:
-        name = placement["name"]
-        attempts = [o for o in round_["outcomes"] if o["object"] == name]
-        final = round_["final"][name]
+    for placement in run.scene.objects:
+        name = placement.name
         out.append(
             {
                 "object": name,
-                "kind": placement["kind"],
-                "staged": placement,
-                "verdict": verdict(attempts, final),
-                "attempts": attempts,
-                "final": final,
+                "kind": placement.kind,
+                "staged": dataclasses.asdict(placement),
+                "verdict": verdict([a for a in run.attempts if a.object == name], final[name]),
+                "final": json.loads(dumps(final[name])),
             }
         )
     return out
@@ -344,7 +362,7 @@ def _provenance() -> dict[str, Any]:
     return {
         "commit": git("rev-parse", "HEAD"),
         "dirty": bool(git("status", "--porcelain")),
-        "sources": recycling.sources(),
+        "sources": [dataclasses.asdict(s) for s in recycling.sources()],
         "load": list(os.getloadavg()),
         "cpus": os.cpu_count(),
         "host": {
@@ -419,6 +437,11 @@ def reclassify(source: Path) -> dict[str, Any]:
     evaluation = json.loads(raw)
     if evaluation.get("format") != FORMAT:
         raise SystemExit(f"{source} is format {evaluation.get('format')}, not {FORMAT}")
+    if evaluation.get("outcome_version") != RecyclingRun.VERSION:
+        raise SystemExit(
+            f"{source} holds outcomes of version {evaluation.get('outcome_version')}, "
+            f"not {RecyclingRun.VERSION}"
+        )
     for round_ in evaluation["rounds"]:
         if "error" not in round_:
             round_["objects"] = _objects(round_)
@@ -447,6 +470,7 @@ def evaluate(corpus: str, seeds: list[int], jobs: int) -> dict[str, Any]:
     return _valid(
         {
             "format": FORMAT,
+            "outcome_version": RecyclingRun.VERSION,
             "corpus": corpus,
             "seeds": seeds,
             "objects_per_round": OBJECTS,

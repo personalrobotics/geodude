@@ -11,7 +11,8 @@ It fails unless:
   editable or path install, and no path on ``sys.path`` is inside the repository;
 - no module that only the legacy app has (``<repository>/src/geodude``) is importable,
   and the wheel ships none;
-- the installed command's report succeeded and names this install as its source.
+- the installed command's outcome decodes strictly as a ``RecyclingRun``, succeeded,
+  and names this install, by its version and no VCS commit, as its geodude source.
 """
 
 from __future__ import annotations
@@ -67,15 +68,21 @@ def main(repository: Path, report_path: Path) -> list[str]:
     if shipped & legacy:
         failures.append(f"the wheel ships legacy modules: {sorted(shipped & legacy)}")
 
-    report = json.loads(report_path.read_text())
-    if not report["succeeded"]:
-        failures.append(f"the installed run failed: {report['checks']}")
-    if report["sources"]["geodude"] != {"version": dist.version, "source": direct or None}:
-        failures.append(f"the report names {report['sources']['geodude']}, not this install")
+    from ssrobot import loads
+
+    from geodude.outcomes import RecyclingRun, Source
+
+    run = loads(report_path.read_bytes(), RecyclingRun)
+    checks = [a.checks for a in run.attempts]
+    if not (run.cleared and all(a.succeeded for a in run.attempts)):
+        failures.append(f"the installed run failed: {checks}")
+    named = next(s for s in run.sources if s.name == "geodude")
+    if named != Source(name="geodude", version=dist.version, commit=None):
+        failures.append(f"the outcome names {named}, not this install")
 
     print(f"geodude {dist.version} from {installed}")
     print(f"legacy-only modules, none importable: {', '.join(sorted(legacy))}")
-    print(f"installed run: {json.dumps(report['checks'])}")
+    print(f"installed run: {json.dumps(checks)}")
     return failures
 
 

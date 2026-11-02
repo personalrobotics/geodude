@@ -12,12 +12,9 @@ The test requires:
   (``verdict``, ``classify``) is a ``recycled`` one, and its summary counts the round
   cleared.
 
-The evidence is ``sort_all.json``: the outcome the seed decides (per attempt: the
-object, arm, every stage, and the checks; per object: its bin and final pose), with the
-evaluator's verdicts and summary; and the run's ``recycling.json``. The race reports are
-left out of the outcome: which lower-priority candidate was stopped depends on how fast
-the preferred one planned, and the selection does not. Determinism is
-``test_planning_latency``'s gate.
+The evidence is ``sort_all.json``: the evaluator's verdicts and summary of the round;
+and the run's ``recycling.json``, its ``RecyclingRun``, which the evaluator decodes as it
+decodes a corpus round's. Determinism is ``test_planning_latency``'s gate.
 
 Reproduce with ``uv run pytest tests/test_sort_all.py``.
 """
@@ -31,30 +28,14 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from ssrobot import open_bundle
+from ssrobot import loads, open_bundle
 
 from geodude import recycling
+from geodude.outcomes import RecyclingRun
 from tests.conftest import ROOT
 
 SEED = 0
 OBJECTS = 5
-
-
-def _outcome(report: dict[str, Any]) -> dict[str, Any]:
-    """The part of a ``sort_all`` report that the seed alone decides."""
-    return {
-        "attempts": [
-            {
-                key: attempt.get(key)
-                for key in ("object", "attempt", "arm", "grasp", "drop", "landing", "checks")
-            }
-            for attempt in report["attempts"]
-        ],
-        "objects": {
-            name: {"bin": o["bin"], "attached": o["attached"], "final_pose": o["final_pose"]}
-            for name, o in report["objects"].items()
-        },
-    }
 
 
 def _evaluator() -> ModuleType:
@@ -75,13 +56,9 @@ def _evaluated(report: dict[str, Any], records: Any) -> dict[str, Any]:
     idle = evaluator.Idle()
     for record in records:
         idle(record)
-    round_ = {
-        "seed": SEED,
-        "staged": report["scene"]["objects"],
-        "outcomes": report["attempts"],
-        "final": report["objects"],
-        "timing": evaluator._timing(report["attempts"], idle.intervals, records[-1].time_ns),
-    }
+    round_: dict[str, Any] = {"seed": SEED, "outcome": report}
+    attempts = evaluator.outcome(round_).attempts
+    round_["timing"] = evaluator._timing(attempts, idle.intervals, records[-1].time_ns)
     round_["objects"] = evaluator._objects(round_)
     evaluation = evaluator._valid({"rounds": [round_]})
     return {
@@ -95,16 +72,14 @@ def test_geodude_sorts_five_seeded_objects_into_the_bins(artifacts: Path, tmp_pa
     out = tmp_path / "run"
     code = recycling.main(["--seed", str(SEED), "--mix", str(OBJECTS), "--record", str(out)])
     report = json.loads((out / "recycling.json").read_text())
+    run = loads((out / "recycling.json").read_bytes(), RecyclingRun)
     evaluated = _evaluated(report, open_bundle(out / "bundle").records)
-    outcome = _outcome(report)
-    (artifacts / "sort_all.json").write_text(
-        json.dumps({**outcome, "evaluated": evaluated}, indent=2) + "\n"
-    )
+    (artifacts / "sort_all.json").write_text(json.dumps(evaluated, indent=2) + "\n")
     (artifacts / "recycling.json").write_text(json.dumps(report, indent=2) + "\n")
 
-    assert code == 0 and report["cleared"], {o: f["bin"] for o, f in report["objects"].items()}
-    assert len(report["objects"]) == OBJECTS
-    assert not any(o["attached"] for o in report["objects"].values())
+    assert code == 0 and run.cleared, {d.object: d.bin for d in run.objects}
+    assert len(run.objects) == OBJECTS
+    assert not any(d.attached for d in run.objects)
     assert evaluated["valid"], evaluated
     assert all(v.startswith("recycled") for v in evaluated["verdicts"].values()), evaluated
     summary = evaluated["summary"]

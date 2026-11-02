@@ -113,7 +113,7 @@ OpenBLAS picks its kernel for the CPU, and the kernels round differently, so one
 grasp region's orientation can change a round's outcome. CI checks the tests' outcomes
 on the Haswell kernel, which every x86-64 host with AVX2 runs; select it with
 `OPENBLAS_CORETYPE=Haswell`. `recycling.json` names the
-kernel a run used, and `null` when numpy does not use its bundled OpenBLAS, as on macOS
+kernel a run used (`blas_kernel`), and `null` when numpy does not use its bundled OpenBLAS, as on macOS
 on Apple silicon.
 
 ## Geodude's choices
@@ -164,9 +164,29 @@ SHA-256 of every staged file. The same inputs produce the same bytes.
 
 `--record DIR` writes the run as an ssrobot run bundle in `DIR/bundle`, with the exact
 robot, scene, and trace needed to inspect it elsewhere, and its outcome in
-`DIR/recycling.json`. The outcome records the version and origin of each distribution in
-the application's listed stack (`SOURCES` in `recycling.py`), every skill stage, and
-where each can came to rest. A bundle can be turned into a recording that anyone can
+`DIR/recycling.json`. The outcome is a typed, versioned record,
+`geodude.outcomes.RecyclingRun`. It holds:
+
+- the seed and the OpenBLAS kernel;
+- the name, version, and VCS commit of each distribution in the application's listed
+  stack (`SOURCES` in `recycling.py`);
+- the staged scene's manifest;
+- the SHA-256 of the bundle's `bundle.json`;
+- every attempt, with its race, its skill stages, and any failure and recovery;
+- where each object came to rest.
+
+It names no path, so a run directory can be moved and still verified: the bundle opens
+on its own, and its `bundle.json` has the digest the outcome cites. Nothing in the
+outcome depends on wall-clock time. A race records each candidate the chosen one
+outranked without its plans, because how far those got depended on planning speed. The
+same seed on the same kernel writes the same bytes.
+
+The outcome is decoded strictly before it is written, and by every reader, with
+ssrobot's codec. A missing, extra, or wrongly typed field is refused, as is an
+inconsistent one, such as a drop released and evaluated without its landing. Each
+refusal has its own code (`src/geodude/outcomes.py`), and nothing is coerced. The file
+is replaced atomically, so a failed write never leaves a partial outcome.
+`RecyclingRun.VERSION` versions the format. A bundle can be turned into a recording that anyone can
 scrub with mj_viser, as described in its guide to [replaying a run
 bundle](https://github.com/personalrobotics/mj_viser#replay-a-run-bundle).
 
@@ -180,6 +200,7 @@ bundle](https://github.com/personalrobotics/mj_viser#replay-a-run-bundle).
 | Pick and drop each of the legacy demo's nine object types | Implemented; each type tested alone (`test_object_types`) |
 | Sort a five-object round of the mix into the bins, recovering where it is safe | Implemented; seed 0 tested, its bundle verified and judged by the corpus evaluator (`test_sort_all`) |
 | Control on registered object poses | Implemented; a round with privileged channels withheld decides exactly as one with them (`test_registered_control`) |
+| A typed, versioned, strictly decoded outcome | Implemented; tampered copies are each refused with their own code (`test_outcome_boundary`), and the outcome file is byte-identical with planning delayed (`test_planning_latency`) |
 | Perception | Not implemented; registration reads privileged simulator channels |
 | The physical robot | Not yet supported; it depends on ssrobot's hardware runtime |
 | The 3.x application's other tasks | Still served by the application at the repository root |

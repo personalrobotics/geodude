@@ -16,16 +16,18 @@ dependencies = [
     "pyyaml>=6.0",
     "ssmjviser==1.0.0",
     # Imported directly (regions.py): the Robotiq hands' closed reach and a box's scaled
-    # default margin (sstsr#193, #195).
-    "sstsr==4.1.0",
+    # default margin (sstsr#193, #195); 4.2 is what ssgrasping's sstsr adapter requires.
+    "sstsr==4.2.0",
     # Pinned by commit: the contracts and skills this app is proven against.
-    "ssrobot[mujoco,planning] @ git+https://github.com/personalrobotics/ssrobot@2d8285e6822fe72fd3cbe82902df229678b4ef75",
-    "ssgrasping @ git+https://github.com/personalrobotics/ssgrasping@fe3f95b36c5f04b71f2234dc91cc78f45bb0a3a6",
-    "prl-assets @ git+https://github.com/personalrobotics/prl_assets@6b6b4439ba71365409c4b7ff4b6a1f31fbca1411",
+    "ssrobot[mujoco,planning] @ git+https://github.com/personalrobotics/ssrobot@1d3cb77bdd7211304a8e2d898228ba5215e3ce6d",
+    # With its sstsr adapter (ssgrasping.sstsr), whose requirements the resolver enforces.
+    "ssgrasping[sstsr] @ git+https://github.com/personalrobotics/ssgrasping@fff4ba6a49524d6e4287403818cb5097e79b85e4",
+    "prl-assets @ git+https://github.com/personalrobotics/prl_assets@dfd7b2886e761908ec49b21f75748173dca97ea2",
     # The 2F-140 driven like the real gripper (geodude_assets#38), with its declared
     # completion detector (#40), and each pad's torsional friction its contact face's
-    # (#41), and its MuJoCo rest criteria (#46): ssrobot's reference pin for Geodude.
-    "geodude-assets @ git+https://github.com/personalrobotics/geodude_assets@e7be8b437cd954285a9fb515a6de39fb94b3fc42",
+    # (#41), and its MuJoCo rest criteria (#46): ssrobot's reference pin for Geodude,
+    # at the ssrobot pinned above.
+    "geodude-assets @ git+https://github.com/personalrobotics/geodude_assets@f130a8f435ef7780fbc28014805c25cce6acd67b",
 ]
 
 [project.scripts]

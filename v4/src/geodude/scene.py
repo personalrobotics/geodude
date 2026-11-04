@@ -21,6 +21,7 @@ each staged file's SHA-256. The same inputs give the same bytes.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import importlib.metadata
 import json
@@ -95,9 +96,20 @@ def worktop(package: RobotPackage) -> Worktop:
     return Worktop(centre=(x, y, max(tops)), half_extents=(hx, hy))
 
 
+@functools.cache
+def object_dir(kind: str) -> Path:
+    """The directory of prl_assets object ``kind``, in whichever of its collections it is
+    (the YCB-V objects are under ``ycbv/``). Canonical names are unique across the
+    catalog; two directories of one name are refused rather than one chosen."""
+    found = [m.parent for m in Path(OBJECTS_DIR).rglob("meta.yaml") if m.parent.name == kind]
+    if len(found) != 1:
+        raise LookupError(f"prl_assets object {kind!r}: {len(found)} directories, {found}")
+    return found[0]
+
+
 def meta(kind: str) -> dict[str, Any]:
     """A prl_assets object's ``meta.yaml``."""
-    data = yaml.safe_load((Path(OBJECTS_DIR) / kind / "meta.yaml").read_text())
+    data = yaml.safe_load((object_dir(kind) / "meta.yaml").read_text())
     assert isinstance(data, dict)
     return data
 
@@ -179,7 +191,7 @@ def _attach(
     """Attach prl_assets ``kind`` to ``scene`` as body ``name``, at ``pose`` (an object)
     or standing at ``at`` without its free joint (a fixture). Its asset files are copied
     under ``out/assets/<kind>/``. Returns each staged file's path and SHA-256."""
-    source = Path(OBJECTS_DIR) / kind
+    source = object_dir(kind)
     xml = source / meta(kind)["mujoco"]["xml_path"]
     child = mujoco.MjSpec.from_file(str(xml))
     if child.compiler.degree:

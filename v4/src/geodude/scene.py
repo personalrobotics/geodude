@@ -163,7 +163,7 @@ def _physical(kind: str, placer: StablePlacer) -> tuple[Any, float, np.ndarray]:
     (#260), read from its compiled model: the pose its model file rests it at on z = 0,
     which prl_assets guarantees, at ``qpos0`` (so a body orientation written as a
     quaternion, Euler angles, or axes is read alike); the radius about its frame's origin
-    that bounds every geom's bounding box; and sstsr's upright region for a cylinder of
+    that bounds every geom exactly (``_reach``); and sstsr's upright region for a cylinder of
     that radius, which keeps the circle on the inset worktop. The object frame need not be
     its box's centre (a YCB-V object keeps the BOP frame), so both are taken about the
     frame, not ``dimensions``' box, and the rest pose, not half a height, sets how it
@@ -178,16 +178,43 @@ def _physical(kind: str, placer: StablePlacer) -> tuple[Any, float, np.ndarray]:
     rest = np.eye(4)
     rest[:3, :3] = data.xmat[body].reshape(3, 3)
     rest[:3, 3] = data.xpos[body]
-    corners = np.array([[sx, sy, sz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
-    radius = 0.0
-    for g in (g for g in range(model.ngeom) if model.geom_bodyid[g] == body):
-        centre, half = model.geom_aabb[g][:3], model.geom_aabb[g][3:]
-        local = centre + corners * half  # the geom's bounding box, in its own frame
-        world = local @ data.geom_xmat[g].reshape(3, 3).T + data.geom_xpos[g]
-        radius = max(radius, float(np.hypot(*(world[:, :2] - data.xpos[body][:2]).T).max()))
+    origin = data.xpos[body][:2]
+    radius = max(
+        _reach(model, data, g, origin) for g in range(model.ngeom) if model.geom_bodyid[g] == body
+    )
     height = float(asset["dimensions"][2])
     region = next(t for t in placer.place_cylinder(radius, height) if t.variant == "-z")
     return region, radius, rest
+
+
+_CORNERS = np.array([[x, y, z] for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)])
+
+
+def _reach(model: Any, data: Any, g: int, origin: np.ndarray) -> float:
+    """How far geom ``g`` reaches horizontally from ``origin``, exactly: a mesh by its
+    vertices, a box by its corners, a sphere, or a cylinder or capsule standing upright,
+    by its centre and radius. Anything else by the corners of its bounding box."""
+    rotation = data.geom_xmat[g].reshape(3, 3)
+    centre = data.geom_xpos[g]
+    kind = int(model.geom_type[g])
+    geom = mujoco.mjtGeom
+    radius = float(model.geom_size[g][0])
+    offset = float(np.hypot(*(centre[:2] - origin)))
+    upright = abs(rotation[2, 2]) > 1 - 1e-9  # the geom's z axis is vertical
+    if kind == int(geom.mjGEOM_SPHERE) or (
+        upright and kind in (int(geom.mjGEOM_CYLINDER), int(geom.mjGEOM_CAPSULE))
+    ):
+        return offset + radius
+    if kind == int(geom.mjGEOM_MESH):
+        mesh = model.geom_dataid[g]
+        start, count = model.mesh_vertadr[mesh], model.mesh_vertnum[mesh]
+        local = model.mesh_vert[start : start + count]
+    elif kind == int(geom.mjGEOM_BOX):
+        local = _CORNERS * model.geom_size[g]
+    else:
+        local = model.geom_aabb[g][:3] + _CORNERS * model.geom_aabb[g][3:]
+    world = local @ rotation.T + centre
+    return float(np.hypot(*(world[:, :2] - origin).T).max())
 
 
 def _quaternion(matrix: np.ndarray) -> tuple[float, float, float, float]:

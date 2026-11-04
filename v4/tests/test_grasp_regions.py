@@ -22,13 +22,14 @@ Reproduce with ``uv run pytest tests/test_grasp_regions.py``.
 from __future__ import annotations
 
 import json
+import math
 import tempfile
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from ssgrasping import GraspObject, grasp_regions
-from ssrobot import RobotContext, load_installed_package
+from ssrobot import Pose, RobotContext, load_installed_package
 from tsr.placement.stable_placer import StablePlacer
 
 from geodude import grasping, recycling, regions
@@ -120,3 +121,39 @@ def test_geodude_grasps_mugs_by_their_declared_regions(artifacts: Path) -> None:
             },
         }
     (artifacts / "grasp_regions.json").write_text(json.dumps(report, indent=2) + "\n")
+
+
+def test_the_regions_path_makes_the_legacy_paths_candidates(artifacts: Path) -> None:
+    """For every recycling kind, the regions prl_assets declares (its legacy primitive at
+    the object frame, with the legacy families: prl_assets#40) give exactly the
+    candidates the legacy path gives, one for one: origin, offset, and bounds, at a pose
+    whose axes are not the world's. Switching a kind to the regions path changes nothing
+    its grasp sees."""
+    axis = np.array([0.3, -0.5, 0.8]) / np.linalg.norm([0.3, -0.5, 0.8])
+    w, (x, y, z) = math.cos(0.45), math.sin(0.45) * axis
+    at = Pose(position=(0.42, -0.31, 0.87), quat_wxyz=(w, float(x), float(y), float(z)))
+    arm = recycling.Arm("right")
+    report = {}
+    for kind in recycling.MIX_KINDS:
+        declared = grasping.regions_for(kind)
+        assert declared is not None, kind
+        legacy = regions.pregrasps(meta(kind)["geometric_properties"], at, recycling.CLEARANCE_M)
+        ours = grasp_regions(
+            GraspObject(kind, at, declared.regions),
+            grasping.profile_for(arm.manipulator, arm.hand, arm.gripper, arm.opening),
+            grasping.templates(recycling.CLEARANCE_M),
+            approach_m=regions.STANDOFF_M,
+        ).tsrs
+        assert len(ours) == len(legacy) > 0, (kind, len(ours), len(legacy))
+        worst = 0.0
+        for a, b in zip(legacy, ours, strict=True):
+            worst = max(
+                worst,
+                float(np.abs(regions.matrix(a.origin) - regions.matrix(b.origin)).max()),
+                float(np.abs(regions.matrix(a.offset) - regions.matrix(b.offset)).max()),
+                float(np.abs(np.subtract(a.position_bounds, b.position_bounds)).max()),
+                float(np.abs(np.subtract(a.rotation_bounds, b.rotation_bounds)).max()),
+            )
+        assert worst < 1e-9, (kind, worst)
+        report[kind] = {"candidates": len(ours), "max_difference": worst}
+    (artifacts / "parity.json").write_text(json.dumps(report, indent=2) + "\n")

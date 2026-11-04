@@ -22,7 +22,7 @@ dependencies = [
     "ssrobot[mujoco,planning] @ git+https://github.com/personalrobotics/ssrobot@1d3cb77bdd7211304a8e2d898228ba5215e3ce6d",
     # With its sstsr adapter (ssgrasping.sstsr), whose requirements the resolver enforces.
     "ssgrasping[sstsr] @ git+https://github.com/personalrobotics/ssgrasping@fff4ba6a49524d6e4287403818cb5097e79b85e4",
-    "prl-assets @ git+https://github.com/personalrobotics/prl_assets@dfd7b2886e761908ec49b21f75748173dca97ea2",
+    "prl-assets @ git+https://github.com/personalrobotics/prl_assets@ab68ec3d90497d4c46ff9cf8454684f0b65d2c7e",
     # The 2F-140 driven like the real gripper (geodude_assets#38), with its declared
     # completion detector (#40), and each pad's torsional friction its contact face's
     # (#41), and its MuJoCo rest criteria (#46): ssrobot's reference pin for Geodude,

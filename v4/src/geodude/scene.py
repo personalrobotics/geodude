@@ -160,20 +160,34 @@ def _upright(placer: StablePlacer, geometry: Mapping[str, Any]) -> Any:
 
 def _physical(kind: str, placer: StablePlacer) -> tuple[Any, float, np.ndarray]:
     """For an asset that declares grasp regions, staging from its physical data alone
-    (#260): sstsr's upright region for the box of its ``dimensions``, the footprint circle
-    covering that box, and the body pose its model file rests it at on z = 0, which
-    prl_assets guarantees. The object frame need not be its box's centre (a YCB-V object
-    keeps the BOP frame), so the rest pose, not half the height, sets how it stands."""
+    (#260), read from its compiled model: the pose its model file rests it at on z = 0,
+    which prl_assets guarantees, at ``qpos0`` (so a body orientation written as a
+    quaternion, Euler angles, or axes is read alike); the radius about its frame's origin
+    that bounds every geom's bounding box; and sstsr's upright region for a cylinder of
+    that radius, which keeps the circle on the inset worktop. The object frame need not be
+    its box's centre (a YCB-V object keeps the BOP frame), so both are taken about the
+    frame, not ``dimensions``' box, and the rest pose, not half a height, sets how it
+    stands."""
     asset = meta(kind)
-    x, y, z = (float(v) for v in asset["dimensions"])
-    region = next(t for t in placer.place_box(x, y, z) if t.variant == "-z")
-    spec = mujoco.MjSpec.from_file(str(_inside(object_dir(kind), asset["mujoco"]["xml_path"])))
-    (body,) = spec.worldbody.bodies
+    model = mujoco.MjModel.from_xml_path(
+        str(_inside(object_dir(kind), asset["mujoco"]["xml_path"]))
+    )
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    body = next(b for b in range(1, model.nbody) if model.body_parentid[b] == 0)
     rest = np.eye(4)
-    quat = np.array(body.quat, dtype=float)
-    mujoco.mju_quat2Mat(rest[:3, :3].reshape(-1), quat / np.linalg.norm(quat))
-    rest[:3, 3] = body.pos
-    return region, math.hypot(x, y) / 2, rest
+    rest[:3, :3] = data.xmat[body].reshape(3, 3)
+    rest[:3, 3] = data.xpos[body]
+    corners = np.array([[sx, sy, sz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
+    radius = 0.0
+    for g in (g for g in range(model.ngeom) if model.geom_bodyid[g] == body):
+        centre, half = model.geom_aabb[g][:3], model.geom_aabb[g][3:]
+        local = centre + corners * half  # the geom's bounding box, in its own frame
+        world = local @ data.geom_xmat[g].reshape(3, 3).T + data.geom_xpos[g]
+        radius = max(radius, float(np.hypot(*(world[:, :2] - data.xpos[body][:2]).T).max()))
+    height = float(asset["dimensions"][2])
+    region = next(t for t in placer.place_cylinder(radius, height) if t.variant == "-z")
+    return region, radius, rest
 
 
 def _quaternion(matrix: np.ndarray) -> tuple[float, float, float, float]:

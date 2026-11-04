@@ -385,13 +385,13 @@ def grasp_spec(ctx: RobotContext, obj: str, arm: Arm) -> GraspSpec:
     that declares none, by the legacy path from its ``geometric_properties``. The two
     are told apart by the spec's ``pregrasp_labels``: ``region/strategy`` from regions,
     none from the legacy path."""
-    asset = meta(kind_of(obj))
-    declared = grasping.regions_of(asset)
+    kind = kind_of(obj)
+    declared = grasping.regions_for(kind)
     if declared is not None:
         candidates = grasp_regions(
-            GraspObject(obj, registered_pose(ctx, obj), declared),
+            GraspObject(obj, registered_pose(ctx, obj), declared.regions),
             grasping.profile_for(arm.manipulator, arm.hand, arm.gripper, arm.opening),
-            grasping.TEMPLATES,
+            grasping.templates(CLEARANCE_M),
             approach_m=regions.STANDOFF_M,
         )
         return candidates.spec(
@@ -401,7 +401,7 @@ def grasp_spec(ctx: RobotContext, obj: str, arm: Arm) -> GraspSpec:
             line_tolerance_m=LINE_TOLERANCE_M,
             clearance_m=CLEARANCE_M,
         )
-    geometry = asset["geometric_properties"]
+    geometry = meta(kind)["geometric_properties"]
     return GraspSpec(
         manipulator=arm.manipulator,
         end_effector=arm.hand,

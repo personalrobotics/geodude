@@ -6,9 +6,10 @@ while every skill it drives waits only on such a plan lets simulated time pass f
 long as planning takes in wall-clock time, so the run would depend on the host. This
 test compares the four-can round of ``test_four_cans`` (the session's ``four_cans``
 recording) with the same round run again with every planner call delayed by 0 to 3 s,
-chosen per request from its fingerprint so that plans finish in another order. The
-longest delay outlasts any unpaced skill stage of the round, so a skill waiting on a
-delayed plan would see the clock step if its driver stepped it.
+chosen per request from its fingerprint so that plans finish in another order, and the
+first call always 3 s, so the longest delay is exercised. The longest delay outlasts
+any unpaced skill stage of the round, so a skill waiting on a delayed plan would see the
+clock step if its driver stepped it.
 
 The evidence is ``latency.json``, kept by this test: for each run, the cans' outcomes,
 the SHA-256 of its outcome file (``recycling.json``, a ``RecyclingRun``, which cites its
@@ -27,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -74,10 +76,20 @@ def test_planning_latency_changes_nothing(
 
     plan = _cbirrt.CBiRRT.plan
     delayed: list[float] = []
+    lock = threading.Lock()
 
     def slow(self: Any, request: Any, scene: Any, **kwargs: Any) -> Any:
-        delay = DELAYS_S[int(fingerprint(request)[:8], 16) % len(DELAYS_S)]
-        delayed.append(delay)
+        # Spread by the request's fingerprint, so plans finish in another order; the
+        # first call always gets the longest, so it is exercised whatever the
+        # fingerprints are (a numerically equal request can hash differently).
+        with lock:
+            first = not delayed
+            delay = (
+                DELAYS_S[-1]
+                if first
+                else DELAYS_S[int(fingerprint(request)[:8], 16) % len(DELAYS_S)]
+            )
+            delayed.append(delay)
         time.sleep(delay)
         return plan(self, request, scene, **kwargs)
 

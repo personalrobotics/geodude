@@ -6,9 +6,10 @@ becomes an ssgrasping ``GraspRegion`` placed in the asset frame by its
 ``T_asset_region``. prl_assets' asset frame is the object's MuJoCo body frame, which is
 the pose the runtime registers for the object, so the regions compose with it directly.
 An asset that does not declare them is grasped by the legacy path, from its
-``geometric_properties``, until prl_assets#40 gives it regions; one asset is never
-grasped by both. A ``grasp_regions`` section that is malformed, or declares no region, is
-an error, never a reason to fall back.
+``geometric_properties``; one asset is never grasped by both. Since prl_assets#40 the
+recycling kinds declare regions equal to their legacy primitive, so they take this path
+and make the legacy path's candidates. A ``grasp_regions`` section that is malformed,
+or declares no region, is an error, never a reason to fall back.
 
 The hand is Geodude's Robotiq 2F-140, through ssgrasping's sstsr adapter, with the grasp
 policy the legacy path applies (``templates``); each arm's profile names that arm's

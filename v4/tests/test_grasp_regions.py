@@ -16,6 +16,14 @@ per mug:
 The mug's legacy ``geometric_properties`` (a box, ``open: true``) decides nothing here:
 it is not grasped as a box, not staged from it, and not a bin (the bins are ``BINS``).
 
+Two more tests hold the recycling kinds, which declare their legacy primitive as one
+region (prl_assets#40), to the legacy path:
+- ``parity.json``: at a pose about a skew axis, each kind's region candidates equal the
+  legacy path's one for one (origin, offset, bounds; 1e-9), with the pose, the declared
+  regions, and every candidate recorded;
+- ``staging.json``: each kind's footprint and rest height from its compiled model, beside
+  its legacy circle (within 2 mm) and half height (within 0.1 mm).
+
 Reproduce with ``uv run pytest tests/test_grasp_regions.py``.
 """
 
@@ -33,7 +41,8 @@ from ssrobot import Pose, RobotContext, load_installed_package
 from tsr.placement.stable_placer import StablePlacer
 
 from geodude import grasping, recycling, regions
-from geodude.scene import _physical, meta, stage_scene
+from geodude.scene import _footprint as _legacy_footprint
+from geodude.scene import _physical, footing, meta, stage_scene
 
 SEED = 0
 LIFT_M = 0.06
@@ -136,7 +145,7 @@ def test_the_regions_path_makes_the_legacy_paths_candidates(artifacts: Path) -> 
     report = {}
     for kind in recycling.MIX_KINDS:
         declared = grasping.regions_for(kind)
-        assert declared is not None, kind
+        assert declared is not None and declared.refused == (), kind
         legacy = regions.pregrasps(meta(kind)["geometric_properties"], at, recycling.CLEARANCE_M)
         ours = grasp_regions(
             GraspObject(kind, at, declared.regions),
@@ -155,5 +164,50 @@ def test_the_regions_path_makes_the_legacy_paths_candidates(artifacts: Path) -> 
                 float(np.abs(np.subtract(a.rotation_bounds, b.rotation_bounds)).max()),
             )
         assert worst < 1e-9, (kind, worst)
-        report[kind] = {"candidates": len(ours), "max_difference": worst}
-    (artifacts / "parity.json").write_text(json.dumps(report, indent=2) + "\n")
+        report[kind] = {
+            "regions": [
+                {
+                    "name": r.name,
+                    "primitive": r.primitive.kind,
+                    "dimensions_m": list(r.primitive.dimensions),
+                    "origin": _frame(r.origin),
+                    "strategies": list(r.strategies or ()),
+                }
+                for r in declared.regions
+            ],
+            "candidates": [{"origin": _frame(c.origin), "offset": _frame(c.offset)} for c in ours],
+            "max_difference": worst,
+        }
+    (artifacts / "parity.json").write_text(
+        json.dumps({"pose": _frame(at), "kinds": report}, indent=2) + "\n"
+    )
+
+
+def test_physical_staging_stands_the_recycling_kinds_as_the_legacy_staging_did(
+    artifacts: Path,
+) -> None:
+    """Declaring regions also stages a kind from its compiled model (``scene.footing``)
+    instead of its legacy primitive. For the recycling kinds, whose frames are centred
+    and whose legacy primitive is their shape, the two agree: each footprint within 2 mm
+    of the legacy circle, and each rests at half its legacy height (0.1 mm), so a seeded
+    scene stands its objects where it did."""
+    report = {}
+    for kind in recycling.MIX_KINDS:
+        geometry = meta(kind)["geometric_properties"]
+        radius, rest, _ = footing(kind)
+        legacy_radius = _legacy_footprint(geometry)
+        legacy_rest = regions.height(geometry) / 2
+        # Within 2 mm: a footprint bounds the colliders, and the glass's, a ring of boxes
+        # around its rim, reach 49.0 mm against its 48 mm round legacy circle.
+        assert abs(radius - legacy_radius) <= 2e-3, (kind, radius, legacy_radius)
+        # Within 0.1 mm: model files write the resting height rounded (the gelatin box's,
+        # rebuilt to its scan, rests at 15.03 mm against half its 30.1 mm legacy height).
+        assert abs(float(rest[2, 3]) - legacy_rest) <= 1e-4, (kind, rest[2, 3], legacy_rest)
+        assert np.allclose(rest[:3, :3], np.eye(3), atol=1e-9), kind  # upright as modelled
+        report[kind] = {
+            "footprint_m": radius,
+            "legacy_footprint_m": legacy_radius,
+            "rest_height_m": float(rest[2, 3]),
+            "legacy_half_height_m": legacy_rest,
+        }
+    (artifacts / "staging.json").write_text(json.dumps(report, indent=2) + "\n")

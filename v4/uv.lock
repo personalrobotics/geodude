@@ -247,7 +247,7 @@ dependencies = [
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "prl-assets" },
     { name = "pyyaml" },
-    { name = "ssgrasping" },
+    { name = "ssgrasping", extra = ["sstsr"] },
     { name = "ssmjviser" },
     { name = "ssrobot", extra = ["mujoco", "planning"] },
     { name = "sstsr" },
@@ -267,7 +267,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "prl-assets", git = "https://github.com/personalrobotics/prl_assets?rev=dfd7b2886e761908ec49b21f75748173dca97ea2" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ssgrasping", git = "https://github.com/personalrobotics/ssgrasping?rev=fff4ba6a49524d6e4287403818cb5097e79b85e4" },
+    { name = "ssgrasping", extras = ["sstsr"], git = "https://github.com/personalrobotics/ssgrasping?rev=fff4ba6a49524d6e4287403818cb5097e79b85e4" },
     { name = "ssmjviser", specifier = "==1.0.0" },
     { name = "ssrobot", extras = ["mujoco", "planning"], git = "https://github.com/personalrobotics/ssrobot?rev=1d3cb77bdd7211304a8e2d898228ba5215e3ce6d" },
     { name = "sstsr", specifier = "==4.2.0" },
@@ -985,6 +985,15 @@ version = "0.0.1"
 source = { git = "https://github.com/personalrobotics/ssgrasping?rev=fff4ba6a49524d6e4287403818cb5097e79b85e4#fff4ba6a49524d6e4287403818cb5097e79b85e4" }
 dependencies = [
     { name = "ssrobot" },
+]
+
+[package.optional-dependencies]
+sstsr = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "sstsr" },
 ]
 
 [[package]]

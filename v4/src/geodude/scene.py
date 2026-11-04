@@ -97,14 +97,39 @@ def worktop(package: RobotPackage) -> Worktop:
 
 
 @functools.cache
+def _catalog() -> dict[str, Path]:
+    """Each prl_assets object's directory, by its canonical name (its ``meta.yaml``'s
+    ``name``), in whichever collection it is (the YCB-V objects are under ``ycbv/``).
+    Canonical names are unique across the catalog: a name found twice is refused, not
+    resolved to one of them."""
+    found: dict[str, Path] = {}
+    for path in sorted(Path(OBJECTS_DIR).rglob("meta.yaml")):
+        data = yaml.safe_load(path.read_text())
+        name = data.get("name") if isinstance(data, dict) else None
+        if not isinstance(name, str):
+            raise ValueError(f"{path} names no object")
+        if name in found:
+            raise ValueError(
+                f"prl_assets object {name!r} is in both {found[name]} and {path.parent}"
+            )
+        found[name] = path.parent
+    return found
+
+
 def object_dir(kind: str) -> Path:
-    """The directory of prl_assets object ``kind``, in whichever of its collections it is
-    (the YCB-V objects are under ``ycbv/``). Canonical names are unique across the
-    catalog; two directories of one name are refused rather than one chosen."""
-    found = [m.parent for m in Path(OBJECTS_DIR).rglob("meta.yaml") if m.parent.name == kind]
-    if len(found) != 1:
-        raise LookupError(f"prl_assets object {kind!r}: {len(found)} directories, {found}")
-    return found[0]
+    """The directory of prl_assets object ``kind``."""
+    try:
+        return _catalog()[kind]
+    except KeyError:
+        raise LookupError(f"no prl_assets object {kind!r}") from None
+
+
+def _inside(directory: Path, relative: str) -> Path:
+    """``directory / relative``, refused if it resolves outside ``directory``."""
+    path = (directory / relative).resolve()
+    if not path.is_relative_to(directory.resolve()):
+        raise ValueError(f"{relative!r} leaves {directory}")
+    return path
 
 
 def meta(kind: str) -> dict[str, Any]:
@@ -192,7 +217,7 @@ def _attach(
     or standing at ``at`` without its free joint (a fixture). Its asset files are copied
     under ``out/assets/<kind>/``. Returns each staged file's path and SHA-256."""
     source = object_dir(kind)
-    xml = source / meta(kind)["mujoco"]["xml_path"]
+    xml = _inside(source, meta(kind)["mujoco"]["xml_path"])
     child = mujoco.MjSpec.from_file(str(xml))
     if child.compiler.degree:
         raise ValueError(f"{xml} uses degrees; prl_assets objects are in radians")
@@ -202,7 +227,7 @@ def _attach(
             continue
         relative = f"assets/{kind}/{asset.file}"
         if relative not in staged:
-            data = (source / asset.file).read_bytes()
+            data = _inside(source, asset.file).read_bytes()
             (out / relative).parent.mkdir(parents=True, exist_ok=True)
             (out / relative).write_bytes(data)
             staged[relative] = hashlib.sha256(data).hexdigest()

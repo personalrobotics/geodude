@@ -158,6 +158,38 @@ def _upright(placer: StablePlacer, geometry: Mapping[str, Any]) -> Any:
     return next(t for t in templates if t.variant == "-z")
 
 
+def _physical(kind: str, placer: StablePlacer) -> tuple[Any, float, np.ndarray]:
+    """For an asset that declares grasp regions, staging from its physical data alone
+    (#260), read from its compiled model: the pose its model file rests it at on z = 0,
+    which prl_assets guarantees, at ``qpos0`` (so a body orientation written as a
+    quaternion, Euler angles, or axes is read alike); the radius about its frame's origin
+    that bounds every geom's bounding box; and sstsr's upright region for a cylinder of
+    that radius, which keeps the circle on the inset worktop. The object frame need not be
+    its box's centre (a YCB-V object keeps the BOP frame), so both are taken about the
+    frame, not ``dimensions``' box, and the rest pose, not half a height, sets how it
+    stands."""
+    asset = meta(kind)
+    model = mujoco.MjModel.from_xml_path(
+        str(_inside(object_dir(kind), asset["mujoco"]["xml_path"]))
+    )
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    body = next(b for b in range(1, model.nbody) if model.body_parentid[b] == 0)
+    rest = np.eye(4)
+    rest[:3, :3] = data.xmat[body].reshape(3, 3)
+    rest[:3, 3] = data.xpos[body]
+    corners = np.array([[sx, sy, sz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
+    radius = 0.0
+    for g in (g for g in range(model.ngeom) if model.geom_bodyid[g] == body):
+        centre, half = model.geom_aabb[g][:3], model.geom_aabb[g][3:]
+        local = centre + corners * half  # the geom's bounding box, in its own frame
+        world = local @ data.geom_xmat[g].reshape(3, 3).T + data.geom_xpos[g]
+        radius = max(radius, float(np.hypot(*(world[:, :2] - data.xpos[body][:2]).T).max()))
+    height = float(asset["dimensions"][2])
+    region = next(t for t in placer.place_cylinder(radius, height) if t.variant == "-z")
+    return region, radius, rest
+
+
 def _quaternion(matrix: np.ndarray) -> tuple[float, float, float, float]:
     quat = np.empty(4)
     mujoco.mju_mat2Quat(quat, np.ascontiguousarray(matrix).flatten())
@@ -181,12 +213,24 @@ def place(
     surface[:3, 3] = table.centre
     placed: list[tuple[Placement, float]] = []
     for kind in sorted(objects):
-        geometry = meta(kind)["geometric_properties"]
-        region = _upright(placer, geometry).instantiate(surface)
-        radius = _footprint(geometry)
+        rest: np.ndarray | None = None
+        if "grasp_regions" in meta(kind):
+            upright, radius, rest = _physical(kind, placer)
+            region = upright.instantiate(surface)
+        else:  # legacy staging from geometric_properties, until prl_assets#40 and #41
+            geometry = meta(kind)["geometric_properties"]
+            region = _upright(placer, geometry).instantiate(surface)
+            radius = _footprint(geometry)
         for index in range(objects[kind]):
             for _ in range(ATTEMPTS):
                 pose = region.sample(rng=rng)
+                if rest is not None:
+                    # The sample's xy and yaw, with the object standing as its model file
+                    # rests it, on the worktop's surface.
+                    at = np.eye(4)
+                    at[:3, :3] = pose[:3, :3]
+                    at[:3, 3] = (pose[0, 3], pose[1, 3], table.centre[2])
+                    pose = at @ rest
                 xy = pose[:2, 3]
                 if all(
                     np.hypot(*(xy - np.array(p.position[:2]))) >= radius + r + CLEARANCE_M

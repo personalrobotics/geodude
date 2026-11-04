@@ -54,6 +54,7 @@ from ssgrasping import (
     Candidates,
     DropSpec,
     Evidence,
+    GraspObject,
     GraspSpec,
     LandingSpec,
     Lookahead,
@@ -67,6 +68,7 @@ from ssgrasping import (
     TransitionOutcome,
     drop,
     grasp,
+    grasp_regions,
     landing,
     place,
     run_together,
@@ -102,7 +104,7 @@ from ssrobot import (
 from ssrobot.mujoco import MujocoRuntime
 from ssrobot.planning import CBiRRT, SsikKinematics
 
-from geodude import outcomes, regions
+from geodude import grasping, outcomes, regions
 from geodude.scene import meta, stage_scene, worktop
 
 TARGET = (0.20, -0.50)
@@ -378,8 +380,28 @@ def pick(
 
 
 def grasp_spec(ctx: RobotContext, obj: str, arm: Arm) -> GraspSpec:
-    """``pick``'s grasp of ``obj`` by ``arm``."""
-    geometry = meta(kind_of(obj))["geometric_properties"]
+    """``pick``'s grasp of ``obj`` by ``arm``: from the grasp regions its asset declares,
+    each placed at the object's registered pose (``geodude.grasping``), or, for an asset
+    that declares none, by the legacy path from its ``geometric_properties``. The two
+    are told apart by the spec's ``pregrasp_labels``: ``region/strategy`` from regions,
+    none from the legacy path."""
+    kind = kind_of(obj)
+    declared = grasping.regions_for(kind)
+    if declared is not None:
+        candidates = grasp_regions(
+            GraspObject(obj, registered_pose(ctx, obj), declared.regions),
+            grasping.profile_for(arm.manipulator, arm.hand, arm.gripper, arm.opening),
+            grasping.templates(CLEARANCE_M),
+            approach_m=regions.STANDOFF_M,
+        )
+        return candidates.spec(
+            support="vention_base",
+            normal=UP,
+            lift_m=0.06,
+            line_tolerance_m=LINE_TOLERANCE_M,
+            clearance_m=CLEARANCE_M,
+        )
+    geometry = meta(kind)["geometric_properties"]
     return GraspSpec(
         manipulator=arm.manipulator,
         end_effector=arm.hand,

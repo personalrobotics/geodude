@@ -13,9 +13,9 @@ releases ``max(0.25, height + 0.10)`` above the rim. Nothing is there to strike,
 object falls freely. From the start of
 the drop's ``release`` stage until the object's lowest corner falls below the rim's
 height, every physics step is read, and the trial records:
-- ``sweep_m``: the most any side of the footprint (the bounding box of the object's
-  corners in x and y, as ``regions.held_drop_zones`` computes it) moves out beyond where
-  it was when the release began;
+- ``sweep_m``: the most any side of the footprint (the bounding box in x and y of its
+  collision geometry's points, ``Shape.surface``, whose extremes ``regions.held_drop_zones``
+  bounds) moves out beyond where it was when the release began;
 - ``tilt_rad`` and ``drift_m``: the object's tilt from its orientation then, and its
   centre's sideways travel, when it passes the rim;
 - ``drop_m``: how far its lowest corner fell to the rim.
@@ -47,16 +47,6 @@ FAR = {"recycle_bin": [(3.0, 3.0, 0.01), (-3.0, 3.0, 0.01)]}
 ``drop`` still finds its container there, and its zones are over ``recycling.BINS``."""
 
 
-def _corners(geometry: dict[str, Any]) -> Any:
-    import numpy as np
-
-    if geometry["type"] == "cylinder":
-        half = np.array([geometry["radius"], geometry["radius"], geometry["height"] / 2])
-    else:
-        half = np.array(geometry["size"], dtype=float) / 2
-    return np.array(np.meshgrid([-1, 1], [-1, 1], [-1, 1])).T.reshape(-1, 3) * half
-
-
 def trial(kind: str, seed: int) -> dict[str, Any]:
     """One trial, in this process."""
     import mujoco
@@ -67,10 +57,10 @@ def trial(kind: str, seed: int) -> dict[str, Any]:
     from ssrobot.mujoco import _runtime
 
     from geodude import recycling, regions
-    from geodude.scene import meta, stage_scene
+    from geodude.scene import meta, physical, stage_scene
 
     package = load_installed_package("geodude_assets")
-    corners = _corners(meta(kind)["geometric_properties"])
+    points = physical(kind)[0].surface()  # its collision geometry's points, its frame
     rim = regions.opening(meta("recycle_bin"), recycling.BINS["recycle_bin"][0]).rim[2]
     watching: dict[str, Any] = {}
     begin, step = skill.Run.begin, _runtime.MujocoRuntime.step
@@ -88,7 +78,7 @@ def trial(kind: str, seed: int) -> dict[str, Any]:
         if "body" not in watching:
             watching["body"] = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, obj)
         b = watching["body"]
-        world = data.xmat[b].reshape(3, 3) @ corners.T + data.xpos[b][:, None]
+        world = data.xmat[b].reshape(3, 3) @ points.T + data.xpos[b][:, None]
         low, high = world[:2].min(axis=1), world[:2].max(axis=1)
         if "start" not in watching:
             watching["start"] = {

@@ -160,6 +160,7 @@ def physical(kind: str) -> tuple[Shape, np.ndarray]:
     rest = np.eye(4)
     rest[:3, :3] = data.xmat[body].reshape(3, 3)
     rest[:3, 3] = data.xpos[body]
+    rest.setflags(write=False)  # cached: every caller shares it
     return collision_shape(model, data, body), rest
 
 

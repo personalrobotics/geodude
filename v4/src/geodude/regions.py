@@ -274,17 +274,27 @@ def standing(placer: StablePlacer, shape: Shape, rest: np.ndarray) -> Any:
     """sstsr's template (``StablePlacer.place``) for the object ``shape`` describes
     resting as ``rest``, its model file's pose on a level surface, stands it: the rest
     whose up direction, in the object's frame, is nearest ``rest``'s, within
-    ``STANDING_TOLERANCE_RAD``. sstsr frames the object at its own origin."""
+    ``STANDING_TOLERANCE_RAD``, with roll and pitch held at zero (sstsr frees them for a
+    lone centred sphere, which rests the same whichever way it turns). sstsr frames the
+    object at its own origin."""
+    templates = placer.place(shape)
+    if not templates:
+        raise ValueError("sstsr finds no stable rest that fits on the surface")
     up = rest[:3, :3].T[:, 2]
     best, angle = None, math.inf
-    for template in placer.place(shape):
+    for template in templates:
         frame = template.T_ref_tsr[:3, :3] @ template.Tw_e[:3, :3]
         between = math.acos(float(np.clip(frame.T[:, 2] @ up, -1.0, 1.0)))
         if between < angle:
             best, angle = template, between
     if best is None or angle > STANDING_TOLERANCE_RAD:
-        raise ValueError("sstsr finds no rest that stands the object as its model file does")
-    return best
+        raise ValueError(
+            f"no rest that fits on the surface stands the object as its model file does:"
+            f" the nearest is {math.degrees(angle):.1f} deg from it"
+        )
+    bounds = best.Bw.copy()
+    bounds[3] = bounds[4] = (0.0, 0.0)
+    return dataclasses.replace(best, Bw=bounds)
 
 
 def upright(shape: Shape, rest: np.ndarray, spot: tuple[float, float, float], slack: float) -> Tsr:

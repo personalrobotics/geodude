@@ -66,15 +66,12 @@ def trial(kind: str, seed: int) -> dict[str, Any]:
     from ssrobot import RobotContext, load_installed_package
     from ssrobot.mujoco import _runtime
 
-    from geodude import recycling
+    from geodude import recycling, regions
     from geodude.scene import meta, stage_scene
 
     package = load_installed_package("geodude_assets")
     corners = _corners(meta(kind)["geometric_properties"])
-    rim = (
-        recycling.BINS["recycle_bin"][0][2]
-        + meta("recycle_bin")["geometric_properties"]["outer_size"][2]
-    )
+    rim = regions.opening(meta("recycle_bin"), recycling.BINS["recycle_bin"][0]).rim[2]
     watching: dict[str, Any] = {}
     begin, step = skill.Run.begin, _runtime.MujocoRuntime.step
 

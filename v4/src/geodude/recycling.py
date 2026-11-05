@@ -105,7 +105,7 @@ from ssrobot.mujoco import MujocoRuntime
 from ssrobot.planning import CBiRRT, SsikKinematics
 
 from geodude import grasping, outcomes, regions
-from geodude.scene import meta, stage_scene, worktop
+from geodude.scene import meta, physical, stage_scene, worktop
 
 TARGET = (0.20, -0.50)
 """Where step 1 places the can on the worktop."""
@@ -429,8 +429,9 @@ def place_on_worktop(
     tick: Callable[[], None] = lambda: None,
 ) -> SkillResult:
     """Place the held ``obj`` upright on the worktop within ``PLACE_SLACK_M`` of
-    ``target`` in x and y, under the measured contact guard."""
-    geometry = meta(kind_of(obj))["geometric_properties"]
+    ``target`` in x and y, under the measured contact guard. It stands as its model
+    file stands it, by its collision geometry (``regions.upright``)."""
+    shape, rest = physical(kind_of(obj))
     planner, checker = planners
     surface = worktop(package).centre[2]
     spec = PlaceSpec(
@@ -441,7 +442,7 @@ def place_on_worktop(
         object=obj,
         target="vention_base",
         normal=UP,
-        regions=[regions.upright(geometry, (*target, surface), PLACE_SLACK_M)],
+        regions=[regions.upright(shape, rest, (*target, surface), PLACE_SLACK_M)],
         preplace_m=0.04,
         overshoot_m=0.01,
         terminal_m=0.01,

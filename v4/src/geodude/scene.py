@@ -25,7 +25,6 @@ import functools
 import hashlib
 import importlib.metadata
 import json
-import math
 import os
 import shutil
 import tempfile
@@ -38,9 +37,13 @@ import mujoco
 import numpy as np
 import yaml
 from prl_assets import OBJECTS_DIR
+from prl_assets.shape import collision_shape
 from ssrobot import RobotContext, RobotPackage
 from ssrobot.mujoco import MujocoRuntime
+from tsr.placement import Shape
 from tsr.placement.stable_placer import StablePlacer
+
+from geodude import regions
 
 WORKTOP_INSET_M = 0.05
 """How far inside the worktop's edges objects are placed, as the legacy demo does."""
@@ -139,34 +142,14 @@ def meta(kind: str) -> dict[str, Any]:
     return data
 
 
-def _footprint(geometry: Mapping[str, Any]) -> float:
-    """The radius of a circle covering an upright object's footprint."""
-    if geometry["type"] == "cylinder":
-        return float(geometry["radius"])
-    x, y, _ = geometry["size"]
-    return math.hypot(x, y) / 2
-
-
-def _upright(placer: StablePlacer, geometry: Mapping[str, Any]) -> Any:
-    """sstsr's region for the object resting on its -z face, upright as modelled."""
-    if geometry["type"] == "cylinder":
-        templates = placer.place_cylinder(geometry["radius"], geometry["height"])
-    elif geometry["type"] == "box":
-        templates = placer.place_box(*geometry["size"])
-    else:
-        raise ValueError(f"cannot place a {geometry['type']}")
-    return next(t for t in templates if t.variant == "-z")
-
-
 @functools.cache
-def footing(kind: str) -> tuple[float, np.ndarray, float]:
-    """How prl_assets object ``kind`` stands, from its compiled model (#260): the radius
-    about its frame's origin that bounds every geom of its body and the bodies below it
-    exactly (``_reach``); the pose its model file rests it at on z = 0, which prl_assets
-    guarantees, at ``qpos0`` (so a body orientation written as a quaternion, Euler
-    angles, or axes is read alike); and its height. The object frame need not be its
-    box's centre (a YCB-V object keeps the BOP frame), so the radius is taken about the
-    frame and the rest pose, not half a height, sets how it stands."""
+def physical(kind: str) -> tuple[Shape, np.ndarray]:
+    """How prl_assets object ``kind`` collides and stands, from its compiled model (#260):
+    its collision geometry and centre of mass in its frame (prl_assets
+    ``collision_shape``), and the pose its model file rests it at on z = 0, which
+    prl_assets guarantees, at ``qpos0`` (so a body orientation written as a quaternion,
+    Euler angles, or axes is read alike). The object frame need not be its centre (a
+    YCB-V object keeps the BOP frame): sstsr places it by that frame."""
     asset = meta(kind)
     model = mujoco.MjModel.from_xml_path(
         str(_inside(object_dir(kind), asset["mujoco"]["xml_path"]))
@@ -177,54 +160,16 @@ def footing(kind: str) -> tuple[float, np.ndarray, float]:
     rest = np.eye(4)
     rest[:3, :3] = data.xmat[body].reshape(3, 3)
     rest[:3, 3] = data.xpos[body]
-    origin = data.xpos[body][:2]
-    geoms = [g for g in range(model.ngeom) if model.body_rootid[model.geom_bodyid[g]] == body]
-    if not geoms:
-        raise ValueError(f"prl_assets object {kind!r} has no geoms to stand on")
-    radius = max(_reach(model, data, g, origin) for g in geoms)
-    return radius, rest, float(asset["dimensions"][2])
+    rest.setflags(write=False)  # cached: every caller shares it
+    return collision_shape(model, data, body), rest
 
 
-def _physical(kind: str, placer: StablePlacer) -> tuple[Any, float, np.ndarray]:
-    """For an asset that declares grasp regions, staging from its physical data alone:
-    its ``footing``, and sstsr's upright region for a cylinder of its radius, which keeps
-    the circle on the inset worktop."""
-    radius, rest, height = footing(kind)
-    region = next(t for t in placer.place_cylinder(radius, height) if t.variant == "-z")
-    return region, radius, rest
-
-
-_CORNERS = np.array([[x, y, z] for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)])
-
-
-def _reach(model: Any, data: Any, g: int, origin: np.ndarray) -> float:
-    """How far geom ``g`` reaches horizontally from ``origin``: a mesh by its vertices and
-    a box by its corners, exactly; a sphere by its centre and radius, and a capsule or
-    cylinder by its two end centres and radius, at any orientation (exact for a capsule
-    and an upright cylinder, a tight bound for a tilted one). Anything else by the
-    corners of its bounding box."""
-    rotation = data.geom_xmat[g].reshape(3, 3)
-    centre = data.geom_xpos[g]
-    kind = int(model.geom_type[g])
-    geom = mujoco.mjtGeom
-    radius = float(model.geom_size[g][0])
-    if kind == int(geom.mjGEOM_SPHERE):
-        ends = centre[None, :]
-    elif kind in (int(geom.mjGEOM_CYLINDER), int(geom.mjGEOM_CAPSULE)):
-        half = float(model.geom_size[g][1]) * rotation[:, 2]
-        ends = np.stack([centre - half, centre + half])
-    else:
-        if kind == int(geom.mjGEOM_MESH):
-            mesh = model.geom_dataid[g]
-            start, count = model.mesh_vertadr[mesh], model.mesh_vertnum[mesh]
-            local = model.mesh_vert[start : start + count]
-        elif kind == int(geom.mjGEOM_BOX):
-            local = _CORNERS * model.geom_size[g]
-        else:
-            local = model.geom_aabb[g][:3] + _CORNERS * model.geom_aabb[g][3:]
-        world = local @ rotation.T + centre
-        return float(np.hypot(*(world[:, :2] - origin).T).max())
-    return float(np.hypot(*(ends[:, :2] - origin).T).max()) + radius
+def _standing(kind: str, placer: StablePlacer) -> tuple[Any, float, np.ndarray]:
+    """``kind``'s staging: sstsr's region for it standing as its model file stands it
+    (``regions.standing``), its footprint's radius about its frame's origin there, and
+    that rest pose."""
+    shape, rest = physical(kind)
+    return regions.standing(placer, shape, rest), shape.reach(rest[:3, :3]), rest
 
 
 def _quaternion(matrix: np.ndarray) -> tuple[float, float, float, float]:
@@ -250,24 +195,17 @@ def place(
     surface[:3, 3] = table.centre
     placed: list[tuple[Placement, float]] = []
     for kind in sorted(objects):
-        rest: np.ndarray | None = None
-        if "grasp_regions" in meta(kind):
-            upright, radius, rest = _physical(kind, placer)
-            region = upright.instantiate(surface)
-        else:  # an asset that declares no grasp regions: legacy staging (#260)
-            geometry = meta(kind)["geometric_properties"]
-            region = _upright(placer, geometry).instantiate(surface)
-            radius = _footprint(geometry)
+        template, radius, rest = _standing(kind, placer)
+        region = template.instantiate(surface)
         for index in range(objects[kind]):
             for _ in range(ATTEMPTS):
                 pose = region.sample(rng=rng)
-                if rest is not None:
-                    # The sample's xy and yaw, with the object standing as its model file
-                    # rests it, on the worktop's surface.
-                    at = np.eye(4)
-                    at[:3, :3] = pose[:3, :3]
-                    at[:3, 3] = (pose[0, 3], pose[1, 3], table.centre[2])
-                    pose = at @ rest
+                # The sample's xy and yaw, with the object standing as its model file
+                # rests it, on the worktop's surface.
+                at = np.eye(4)
+                at[:3, :3] = pose[:3, :3] @ template.Tw_e[:3, :3].T
+                at[:3, 3] = (pose[0, 3], pose[1, 3], table.centre[2])
+                pose = at @ rest
                 xy = pose[:2, 3]
                 if all(
                     np.hypot(*(xy - np.array(p.position[:2]))) >= radius + r + CLEARANCE_M

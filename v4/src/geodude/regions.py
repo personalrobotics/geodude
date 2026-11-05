@@ -3,8 +3,9 @@
 Grasp regions come from sstsr's templates for Geodude's Robotiq 2F-140, and placement
 regions from sstsr's ``StablePlacer``; both are instantiated at an object's or a
 surface's pose and converted to ssrobot's ``Tsr``. A container's drop zone and interior
-are the legacy demo's, from its prl_assets geometry; they are this application's, not
-sstsr's or ssgrasping's.
+are the legacy demo's, from the opening its prl_assets ``placement`` declares (measured
+from its collision geometry, prl_assets#49); they are this application's, not sstsr's or
+ssgrasping's.
 """
 
 from __future__ import annotations
@@ -16,10 +17,16 @@ from typing import Any
 
 import mujoco
 import numpy as np
+from prl_assets.placement import parse as parse_placement
 from ssrobot import Pose, Tsr
 from tsr.hands.parallel_jaw import Robotiq2F140
+from tsr.placement import Shape
 from tsr.placement.stable_placer import StablePlacer
 
+STANDING_TOLERANCE_RAD = math.radians(2.0)
+"""How far a rest ``place`` finds may tilt from the one an object's model file stands it
+in and still be that rest: a model file rests its object on z = 0 to prl_assets' 1 mm
+tolerance, not on an exactly level face."""
 STANDOFF_M = 0.08
 """How far back along the approach axis a pregrasp is from its grasp."""
 MIN_SIDE_DEPTH_M = 0.099
@@ -118,6 +125,35 @@ def pregrasps(geometry: Mapping[str, Any], centre: Pose, clearance: float) -> li
     return [tsr(dataclasses.replace(t, Tw_e=t.Tw_e @ back).instantiate(base)) for t in templates]
 
 
+@dataclasses.dataclass(frozen=True)
+class Opening:
+    """A container's rectangular top opening, standing upright at a base position: its
+    centre on the rim plane, in the world, and its interior's half extents and depth."""
+
+    rim: tuple[float, float, float]
+    half: tuple[float, float]
+    depth: float
+
+
+def opening(container: Mapping[str, Any], base: tuple[float, float, float]) -> Opening:
+    """The top opening ``container`` (prl_assets ``meta.yaml``) declares, with the
+    container standing unrotated with its frame at ``base``. Only a level rectangle,
+    axis-aligned in the container's frame, is a drop target: that is what the zones
+    below bound."""
+    declared = parse_placement(dict(container))
+    found = [o for o in (declared.openings if declared else ()) if o.name == "top"]
+    if not found:
+        raise ValueError(f"{container.get('name')!r} declares no top opening")
+    top = found[0]
+    frame = top.frame()
+    if top.shape != "rectangle" or not np.allclose(frame[:3, :3], np.eye(3), atol=1e-9):
+        name = container.get("name")
+        raise ValueError(f"cannot drop into {name!r}: its opening is not a level rectangle")
+    sx, sy = top.size
+    x, y, z = (float(b + t) for b, t in zip(base, frame[:3, 3], strict=True))
+    return Opening(rim=(x, y, z), half=(float(sx) / 2, float(sy) / 2), depth=float(top.depth))
+
+
 def drop_zone(
     container: Mapping[str, Any],
     base: tuple[float, float, float],
@@ -125,20 +161,16 @@ def drop_zone(
 ) -> Tsr:
     """The legacy demo's drop zone over an upright open box (prl_assets ``meta.yaml``)
     standing at ``base``, from mj_manipulator's ``_generate_container_drop_tsrs``: the end
-    effector pointing straight down, anywhere over the interior less the container's
+    effector pointing straight down, anywhere over the ``opening`` less the container's
     ``drop_zone_margin``, ``max(0.25, held_height + 0.10)`` above the rim (2 cm higher to
     5 cm lower), at any yaw."""
-    geometry = container["geometric_properties"]
-    if geometry["type"] != "open_box":
-        raise ValueError(f"cannot drop into a {geometry['type']}")
-    outer = geometry["outer_size"]
-    wall = float(geometry.get("wall_thickness", 0.003))
+    top = opening(container, base)
     margin = float(container.get("policy", {}).get("placement", {}).get("drop_zone_margin", 0.05))
-    hx, hy = (float(outer[i]) / 2 - wall - margin for i in range(2))
-    x, y, z = base
+    hx, hy = (h - margin for h in top.half)
+    x, y, z = top.rim
     return Tsr(
         origin=Pose(
-            position=(x, y, z + float(outer[2]) + max(0.25, held_height + 0.10)),
+            position=(x, y, z + max(0.25, held_height + 0.10)),
             quat_wxyz=(0.0, 1.0, 0.0, 0.0),  # x along the world's, z pointing down
         ),
         offset=Pose(position=(0.0, 0.0, 0.0), quat_wxyz=(1.0, 0.0, 0.0, 0.0)),
@@ -159,7 +191,7 @@ def held_drop_zones(
     part of it can come to rest on the rim: the end effector pointing straight down, low
     enough that the object's lowest point is ``clearance`` below the rim, at each yaw a
     multiple of a quarter turn, and only where the held object's footprint lies inside
-    the box's inner walls by ``clearance``. Where the open fingers then reach below the
+    the box's ``opening`` by ``clearance``. Where the open fingers then reach below the
     rim too, the open hand's footprint (``OPEN_HAND_HALF_M``) must also lie inside them.
     A cylinder's footprint is its bounding box's.
 
@@ -176,10 +208,7 @@ def held_drop_zones(
     from it that did not land, all tall boxes and bottles, came to rest on or above the
     rim (0.805 to 0.892 m above the bin's base, against an 0.80 m rim), 10 of them more
     than 5 cm off-centre in x or y. A yaw at which the footprint does not fit has no zone."""
-    geometry = container["geometric_properties"]
-    if geometry["type"] != "open_box":
-        raise ValueError(f"cannot drop into a {geometry['type']}")
-    outer, inner = geometry["outer_size"], geometry["inner_size"]
+    top = opening(container, base)
     if held["type"] == "cylinder":
         half = np.array([held["radius"], held["radius"], held["height"] / 2])
     else:
@@ -188,8 +217,7 @@ def held_drop_zones(
     in_hand = matrix(grasp)
     in_hand = in_hand[:3, :3] @ corners + in_hand[:3, 3:4]  # the object's corners, hand frame
     down = np.diag([1.0, -1.0, -1.0])  # the hand's z pointing down, its x along the world's
-    x, y, z = base
-    rim = z + float(outer[2])
+    x, y, rim = top.rim
     lowest = float((down @ in_hand)[2].min())  # the object's lowest point, from the hand
     hand_z = rim - clearance - lowest
     reaches = hand_z - Robotiq2F140().finger_length < rim + clearance
@@ -205,7 +233,7 @@ def held_drop_zones(
             footprint = np.hstack([footprint, turned @ hand])
         bounds = []
         for axis in range(2):
-            limit = float(inner[axis]) / 2 - clearance
+            limit = top.half[axis] - clearance
             low = -limit - float(footprint[axis].min())
             high = limit - float(footprint[axis].max())
             bounds.append((low, high))
@@ -230,37 +258,53 @@ def held_drop_zones(
 
 def interior(container: Mapping[str, Any], base: tuple[float, float, float]) -> Tsr:
     """Where an object's frame may rest inside an upright open box (prl_assets
-    ``meta.yaml``) standing at ``base``: over its floor, below its rim, any orientation."""
-    geometry = container["geometric_properties"]
-    outer, inner = geometry["outer_size"], geometry["inner_size"]
-    hx, hy = float(inner[0]) / 2, float(inner[1]) / 2
+    ``meta.yaml``) standing at ``base``: within its ``opening``, between its floor and
+    its rim, any orientation."""
+    top = opening(container, base)
+    (hx, hy), (x, y, rim) = top.half, top.rim
     return Tsr(
-        origin=Pose(position=base, quat_wxyz=(1.0, 0.0, 0.0, 0.0)),
+        origin=Pose(position=(x, y, rim), quat_wxyz=(1.0, 0.0, 0.0, 0.0)),
         offset=Pose(position=(0.0, 0.0, 0.0), quat_wxyz=(1.0, 0.0, 0.0, 0.0)),
-        position_bounds=(
-            (-hx, hx),
-            (-hy, hy),
-            (float(outer[2]) - float(inner[2]), float(outer[2])),
-        ),
+        position_bounds=((-hx, hx), (-hy, hy), (-top.depth, 0.0)),
         rotation_bounds=((-math.pi, math.pi),) * 3,
     )
 
 
-def upright(geometry: Mapping[str, Any], spot: tuple[float, float, float], slack: float) -> Tsr:
-    """sstsr's region for an object with ``geometry`` resting upright, its -z face down,
-    its centre within ``slack`` metres of ``spot`` in x and y on a level surface, any yaw.
-    sstsr's surface extent bounds the object's footprint, and it frames a placed object
-    at its centre."""
-    if geometry["type"] == "cylinder":
-        footprint = float(geometry["radius"])
-    else:
-        footprint = math.hypot(*geometry["size"][:2]) / 2
-    placer = StablePlacer(table_x=footprint + slack, table_y=footprint + slack)
-    if geometry["type"] == "cylinder":
-        templates = placer.place_cylinder(geometry["radius"], geometry["height"])
-    else:
-        templates = placer.place_box(*geometry["size"])
-    template = next(t for t in templates if t.variant == "-z")
+def standing(placer: StablePlacer, shape: Shape, rest: np.ndarray) -> Any:
+    """sstsr's template (``StablePlacer.place``) for the object ``shape`` describes
+    resting as ``rest``, its model file's pose on a level surface, stands it: the rest
+    whose up direction, in the object's frame, is nearest ``rest``'s, within
+    ``STANDING_TOLERANCE_RAD``, with roll and pitch held at zero (sstsr frees them for a
+    lone centred sphere, which rests the same whichever way it turns). sstsr frames the
+    object at its own origin."""
+    templates = placer.place(shape)
+    if not templates:
+        raise ValueError("sstsr finds no stable rest that fits on the surface")
+    up = rest[:3, :3].T[:, 2]
+    best, angle = None, math.inf
+    for template in templates:
+        frame = template.T_ref_tsr[:3, :3] @ template.Tw_e[:3, :3]
+        between = math.acos(float(np.clip(frame.T[:, 2] @ up, -1.0, 1.0)))
+        if between < angle:
+            best, angle = template, between
+    if best is None or angle > STANDING_TOLERANCE_RAD:
+        raise ValueError(
+            f"no rest that fits on the surface stands the object as its model file does:"
+            f" the nearest is {math.degrees(angle):.1f} deg from it"
+        )
+    bounds = best.Bw.copy()
+    bounds[3] = bounds[4] = (0.0, 0.0)
+    return dataclasses.replace(best, Bw=bounds)
+
+
+def upright(shape: Shape, rest: np.ndarray, spot: tuple[float, float, float], slack: float) -> Tsr:
+    """sstsr's region for the object ``shape`` describes standing as ``rest`` does
+    (``standing``) on a level surface, its origin within ``slack`` metres of ``spot`` in
+    x and y, any yaw."""
+    template = standing(StablePlacer(table_x=1.0, table_y=1.0), shape, rest)
+    bounds = template.Bw.copy()
+    bounds[0] = (-slack, slack)
+    bounds[1] = (-slack, slack)
     surface = np.eye(4)
     surface[:3, 3] = spot
-    return tsr(template.instantiate(surface))
+    return tsr(dataclasses.replace(template, Bw=bounds).instantiate(surface))

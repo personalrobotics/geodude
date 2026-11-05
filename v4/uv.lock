@@ -245,7 +245,7 @@ dependencies = [
     { name = "geodude-assets" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "prl-assets" },
+    { name = "prl-assets", extra = ["placement"] },
     { name = "pyyaml" },
     { name = "ssgrasping", extra = ["sstsr"] },
     { name = "ssmjviser" },
@@ -265,12 +265,12 @@ dev = [
 requires-dist = [
     { name = "geodude-assets", git = "https://github.com/personalrobotics/geodude_assets?rev=f130a8f435ef7780fbc28014805c25cce6acd67b" },
     { name = "numpy", specifier = ">=1.26" },
-    { name = "prl-assets", git = "https://github.com/personalrobotics/prl_assets?rev=ab68ec3d90497d4c46ff9cf8454684f0b65d2c7e" },
+    { name = "prl-assets", extras = ["placement"], git = "https://github.com/personalrobotics/prl_assets?rev=5bf4e631996e9034e9ea609a4fd1379dc123b0a9" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ssgrasping", extras = ["sstsr"], git = "https://github.com/personalrobotics/ssgrasping?rev=fff4ba6a49524d6e4287403818cb5097e79b85e4" },
     { name = "ssmjviser", specifier = "==1.0.0" },
     { name = "ssrobot", extras = ["mujoco", "planning"], git = "https://github.com/personalrobotics/ssrobot?rev=1d3cb77bdd7211304a8e2d898228ba5215e3ce6d" },
-    { name = "sstsr", specifier = "==4.2.0" },
+    { name = "sstsr", specifier = "==4.3.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -720,12 +720,18 @@ wheels = [
 [[package]]
 name = "prl-assets"
 version = "0.1.0"
-source = { git = "https://github.com/personalrobotics/prl_assets?rev=ab68ec3d90497d4c46ff9cf8454684f0b65d2c7e#ab68ec3d90497d4c46ff9cf8454684f0b65d2c7e" }
+source = { git = "https://github.com/personalrobotics/prl_assets?rev=5bf4e631996e9034e9ea609a4fd1379dc123b0a9#5bf4e631996e9034e9ea609a4fd1379dc123b0a9" }
 dependencies = [
     { name = "fast-simplification" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "trimesh" },
+]
+
+[package.optional-dependencies]
+placement = [
+    { name = "mujoco" },
+    { name = "sstsr" },
 ]
 
 [[package]]
@@ -1058,7 +1064,7 @@ planning = [
 
 [[package]]
 name = "sstsr"
-version = "4.2.0"
+version = "4.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1067,9 +1073,9 @@ dependencies = [
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d5/a3/b97a3f5493e9365367edee4c0337b9b1bfb3df42482d8db58bc65bf385a6/sstsr-4.2.0.tar.gz", hash = "sha256:db1037e17808cb19d5723a4114b997a6cbc3d55d84c48986a72dbfd50270a76a", size = 1873720, upload-time = "2026-11-02T14:43:59.441Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/62/d6/7ea5d956b464ae4ec36c3c7458809c546459c2c88dee0b6f62278f754cb5/sstsr-4.3.0.tar.gz", hash = "sha256:1ae64f30abbdf5e863a209ecf2c9f9040c21cc877b5609e08a3ddaa341fc7d8e", size = 1891241, upload-time = "2026-11-05T19:16:13.566Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f4/87/2cc738be4bec019470e4c16d3f6bd0eb50764a78f6b2e6645dec4e79b860/sstsr-4.2.0-py3-none-any.whl", hash = "sha256:13b290f35c218f664c133b5a4bf6b54e5f8c81e8cba9f0a222a10d91a7e57608", size = 140667, upload-time = "2026-11-02T14:43:58.027Z" },
+    { url = "https://files.pythonhosted.org/packages/49/fb/62f07e44c5b9f8d488bb0dbe02afffcbc95e805789035c0b13749b79e9ef/sstsr-4.3.0-py3-none-any.whl", hash = "sha256:0f863a577e10d758c14b851826b33d456faec0790b825b94adfdb786f5630177", size = 150039, upload-time = "2026-11-05T19:16:11.701Z" },
 ]
 
 [[package]]

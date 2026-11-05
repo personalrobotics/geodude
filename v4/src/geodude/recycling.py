@@ -35,7 +35,6 @@ import dataclasses
 import hashlib
 import importlib.metadata
 import json
-import math
 import os
 import random
 import shutil
@@ -488,7 +487,7 @@ def drop_spec(obj: str, arm: Arm) -> DropSpec:
     the race checks before anything is held. The drop that runs is ``held_drop_spec``'s."""
     name, base = arm.bin
     container = meta(kind_of(name))
-    height = regions.height(meta(kind_of(obj))["geometric_properties"])
+    height = regions.standing_height(*physical(kind_of(obj)))
     return DropSpec(
         manipulator=arm.manipulator,
         end_effector=arm.hand,
@@ -530,7 +529,7 @@ def held_drop_spec(ctx: RobotContext, raced: DropSpec, arm: Arm) -> DropSpec | N
     zones = regions.held_drop_zones(
         meta(kind_of(name)),
         base,
-        meta(kind_of(raced.object))["geometric_properties"],
+        physical(kind_of(raced.object))[0],
         attachment.transform,
         CLEARANCE_M,
     )
@@ -709,17 +708,19 @@ def worktop_outcome(
 ) -> outcomes.Attempt:
     """What a pick by ``arm`` and worktop placement achieved, observed after it ends:
     every stage, whether the release was confirmed, where ``obj`` rests (from its pose
-    channel), how far its axis is from upright, its base's height above the worktop, and
-    what is still attached. ``succeeded`` requires every stage to succeed, nothing
-    attached, and the object upright within ``PLACE_TILT_RAD``, its base on the worktop,
-    and its centre within ``PLACE_SLACK_M`` plus ``PLACE_TOLERANCE_M`` of ``target`` in x
-    and y. An evaluation: it reads the object's privileged pose."""
+    channel), how far it is tilted from standing as its model file stands it, the height
+    of its collision geometry's lowest point above the worktop, and what is still
+    attached. ``succeeded`` requires every stage to succeed, nothing
+    attached, and the object standing within ``PLACE_TILT_RAD``, its base on the
+    worktop, and its frame's origin within ``PLACE_SLACK_M`` plus ``PLACE_TOLERANCE_M`` of
+    ``target`` in x and y, where ``regions.upright`` places it. An evaluation: it reads
+    the object's privileged pose."""
     final = true_pose(ctx, obj)
-    _, x, y, _ = final.quat_wxyz
-    tilt = math.acos(max(-1.0, min(1.0, 1 - 2 * (x * x + y * y))))  # body z from world z
+    shape, rest = physical(kind_of(obj))
+    at = regions.matrix(final)
+    tilt = regions.tilt(at, rest)
     offset = (final.position[0] - target[0], final.position[1] - target[1])
-    height = regions.height(meta(kind_of(obj))["geometric_properties"])
-    base = final.position[2] - math.cos(tilt) * height / 2 - worktop(package).centre[2]
+    base = regions.lowest(shape, at) - worktop(package).centre[2]
     attached = tuple(a.object for a in ctx.scene.attachments)
     checks = outcomes.WorktopChecks(
         grasped=picked.succeeded,
@@ -1036,13 +1037,12 @@ def recover(
 
 
 def _upright_on_worktop(ctx: RobotContext, obj: str, start: Any) -> bool:
-    """Whether ``obj``, as last registered, rests upright, within ``PLACE_TILT_RAD``, at
-    the height it was registered at when the round began, within ``PLACE_TOLERANCE_M``:
-    back on the worktop, as it began."""
+    """Whether ``obj``, as last registered, stands as its model file stands it, within
+    ``PLACE_TILT_RAD``, at the height it was registered at when the round began, within
+    ``PLACE_TOLERANCE_M``: back on the worktop, as it began."""
     now = registered_pose(ctx, obj)
     began = next(o.known_pose() for o in start.objects if o.name == obj)
-    _, x, y, _ = now.quat_wxyz
-    tilt = math.acos(max(-1.0, min(1.0, 1 - 2 * (x * x + y * y))))
+    tilt = regions.tilt(regions.matrix(now), physical(kind_of(obj))[1])
     return tilt <= PLACE_TILT_RAD and abs(now.position[2] - began.position[2]) <= PLACE_TOLERANCE_M
 
 

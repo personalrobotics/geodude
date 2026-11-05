@@ -179,21 +179,29 @@ def drop_zone(
     )
 
 
+def _span(shape: Shape, rotation: np.ndarray, origin: np.ndarray, axis: int) -> tuple[float, float]:
+    """The least and greatest world coordinate along ``axis`` of the object ``shape``
+    describes, at ``rotation`` with its origin at ``origin``: exact, from its support."""
+    n = rotation[axis]  # the world axis, in the object's frame
+    return float(origin[axis]) - shape.support(-n), float(origin[axis]) + shape.support(n)
+
+
 def held_drop_zones(
     container: Mapping[str, Any],
     base: tuple[float, float, float],
-    held: Mapping[str, Any],
+    held: Shape,
     grasp: Pose,
     clearance: float,
 ) -> list[Tsr]:
-    """Where to release an object with ``held`` geometry, held at ``grasp`` (its pose in
-    the end effector's frame), into an upright open box standing at ``base``, so that no
-    part of it can come to rest on the rim: the end effector pointing straight down, low
-    enough that the object's lowest point is ``clearance`` below the rim, at each yaw a
-    multiple of a quarter turn, and only where the held object's footprint lies inside
-    the box's ``opening`` by ``clearance``. Where the open fingers then reach below the
+    """Where to release the object ``held`` describes (its collision geometry, in its own
+    frame), held at ``grasp`` (its pose in the end effector's frame), into an upright
+    open box standing at ``base``, so that no part of it can come to rest on the rim:
+    the end effector pointing straight down, low enough that the object's lowest point
+    is ``clearance`` below the rim, at each yaw a multiple of a quarter turn, and only
+    where the held object's footprint lies inside the box's ``opening`` by
+    ``clearance``. Where the open fingers then reach below the
     rim too, the open hand's footprint (``OPEN_HAND_HALF_M``) must also lie inside them.
-    A cylinder's footprint is its bounding box's.
+    The footprint and lowest point are the collision geometry's, wherever its frame is.
 
     Released above the rim, an object strays sideways as the pads let go of one side
     first, by up to 16 mm before it falls past the rim (``scripts/calibrate_release.py``,
@@ -209,17 +217,12 @@ def held_drop_zones(
     rim (0.805 to 0.892 m above the bin's base, against an 0.80 m rim), 10 of them more
     than 5 cm off-centre in x or y. A yaw at which the footprint does not fit has no zone."""
     top = opening(container, base)
-    if held["type"] == "cylinder":
-        half = np.array([held["radius"], held["radius"], held["height"] / 2])
-    else:
-        half = np.array(held["size"], dtype=float) / 2
-    corners = (np.array(np.meshgrid([-1, 1], [-1, 1], [-1, 1])).T.reshape(-1, 3) * half).T
-    in_hand = matrix(grasp)
-    in_hand = in_hand[:3, :3] @ corners + in_hand[:3, 3:4]  # the object's corners, hand frame
+    in_hand = matrix(grasp)  # the object's pose in the hand's frame
     down = np.diag([1.0, -1.0, -1.0])  # the hand's z pointing down, its x along the world's
     x, y, rim = top.rim
-    lowest = float((down @ in_hand)[2].min())  # the object's lowest point, from the hand
-    hand_z = rim - clearance - lowest
+    # The object's lowest point, from the hand.
+    bottom = _span(held, down @ in_hand[:3, :3], down @ in_hand[:3, 3], 2)[0]
+    hand_z = rim - clearance - bottom
     reaches = hand_z - Robotiq2F140().finger_length < rim + clearance
     hx, hy = OPEN_HAND_HALF_M
     hand = np.array([[sx * hx, sy * hy, 0.0] for sx in (-1, 1) for sy in (-1, 1)]).T
@@ -228,15 +231,16 @@ def held_drop_zones(
         yaw = quarter * math.pi / 2
         c, s = math.cos(yaw), math.sin(yaw)
         turned = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]) @ down
-        footprint = turned @ in_hand  # each corner's offset from the hand, in the world
-        if reaches:  # the open fingers must clear the walls as well
-            footprint = np.hstack([footprint, turned @ hand])
+        fingers = turned @ hand
         bounds = []
         for axis in range(2):
+            # The object's extent from the hand, in the world, and the open fingers'.
+            least, most = _span(held, turned @ in_hand[:3, :3], turned @ in_hand[:3, 3], axis)
+            if reaches:  # the open fingers must clear the walls as well
+                least = min(least, float(fingers[axis].min()))
+                most = max(most, float(fingers[axis].max()))
             limit = top.half[axis] - clearance
-            low = -limit - float(footprint[axis].min())
-            high = limit - float(footprint[axis].max())
-            bounds.append((low, high))
+            bounds.append((-limit - least, limit - most))
         if any(low > high for low, high in bounds):
             continue
         offset = np.eye(4)
@@ -254,6 +258,24 @@ def held_drop_zones(
             )
         )
     return zones
+
+
+def standing_height(shape: Shape, rest: np.ndarray) -> float:
+    """How tall the object ``shape`` describes stands as ``rest`` stands it."""
+    up = rest[:3, :3].T[:, 2]  # world up, in the object's frame
+    return float(shape.support(up) + shape.support(-up))
+
+
+def lowest(shape: Shape, at: np.ndarray) -> float:
+    """The world height of the lowest point of the object ``shape`` describes, at ``at``."""
+    return _span(shape, at[:3, :3], at[:3, 3], 2)[0]
+
+
+def tilt(at: np.ndarray, rest: np.ndarray) -> float:
+    """How far, in radians, an object at ``at`` is tilted from standing as ``rest`` does:
+    the angle between world up, in the object's frame, at each."""
+    now, standing = at[:3, :3].T[:, 2], rest[:3, :3].T[:, 2]
+    return math.acos(float(np.clip(now @ standing, -1.0, 1.0)))
 
 
 def interior(container: Mapping[str, Any], base: tuple[float, float, float]) -> Tsr:

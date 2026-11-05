@@ -221,8 +221,8 @@ def held_drop_zones(
     down = np.diag([1.0, -1.0, -1.0])  # the hand's z pointing down, its x along the world's
     x, y, rim = top.rim
     # The object's lowest point, from the hand.
-    lowest = _span(held, down @ in_hand[:3, :3], down @ in_hand[:3, 3], 2)[0]
-    hand_z = rim - clearance - lowest
+    bottom = _span(held, down @ in_hand[:3, :3], down @ in_hand[:3, 3], 2)[0]
+    hand_z = rim - clearance - bottom
     reaches = hand_z - Robotiq2F140().finger_length < rim + clearance
     hx, hy = OPEN_HAND_HALF_M
     hand = np.array([[sx * hx, sy * hy, 0.0] for sx in (-1, 1) for sy in (-1, 1)]).T
@@ -231,13 +231,14 @@ def held_drop_zones(
         yaw = quarter * math.pi / 2
         c, s = math.cos(yaw), math.sin(yaw)
         turned = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]) @ down
+        fingers = turned @ hand
         bounds = []
         for axis in range(2):
             # The object's extent from the hand, in the world, and the open fingers'.
             least, most = _span(held, turned @ in_hand[:3, :3], turned @ in_hand[:3, 3], axis)
             if reaches:  # the open fingers must clear the walls as well
-                fingers = (turned @ hand)[axis]
-                least, most = min(least, float(fingers.min())), max(most, float(fingers.max()))
+                least = min(least, float(fingers[axis].min()))
+                most = max(most, float(fingers[axis].max()))
             limit = top.half[axis] - clearance
             bounds.append((-limit - least, limit - most))
         if any(low > high for low, high in bounds):

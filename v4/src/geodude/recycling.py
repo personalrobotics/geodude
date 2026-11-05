@@ -711,9 +711,10 @@ def worktop_outcome(
     channel), how far it is tilted from standing as its model file stands it, the height
     of its collision geometry's lowest point above the worktop, and what is still
     attached. ``succeeded`` requires every stage to succeed, nothing
-    attached, and the object upright within ``PLACE_TILT_RAD``, its base on the worktop,
-    and its centre within ``PLACE_SLACK_M`` plus ``PLACE_TOLERANCE_M`` of ``target`` in x
-    and y. An evaluation: it reads the object's privileged pose."""
+    attached, and the object standing within ``PLACE_TILT_RAD``, its base on the
+    worktop, and its frame's origin within ``PLACE_SLACK_M`` plus ``PLACE_TOLERANCE_M`` of
+    ``target`` in x and y, where ``regions.upright`` places it. An evaluation: it reads
+    the object's privileged pose."""
     final = true_pose(ctx, obj)
     shape, rest = physical(kind_of(obj))
     at = regions.matrix(final)

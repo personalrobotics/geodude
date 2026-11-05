@@ -11,14 +11,17 @@ the bins staged far out of reach, and runs the demo's own skills on it: ``pick``
 ``drop`` from the legacy zone over the bin's real base (``recycling.drop_spec``), which
 releases ``max(0.25, height + 0.10)`` above the rim. Nothing is there to strike, so the
 object falls freely. From the start of
-the drop's ``release`` stage until the object's lowest corner falls below the rim's
+the drop's ``release`` stage until the object's lowest point falls below the rim's
 height, every physics step is read, and the trial records:
 - ``sweep_m``: the most any side of the footprint (the bounding box in x and y of its
-  collision geometry's points, ``Shape.surface``, whose extremes ``regions.held_drop_zones``
-  bounds) moves out beyond where it was when the release began;
+  collision geometry's points) moves out beyond where it was when the release began;
 - ``tilt_rad`` and ``drift_m``: the object's tilt from its orientation then, and its
   centre's sideways travel, when it passes the rim;
-- ``drop_m``: how far its lowest corner fell to the rim.
+- ``drop_m``: how far its lowest point fell to the rim.
+
+Points are its collision geometry's (``Shape.surface``): a hull's vertices, a box's
+corners, and a cylinder's rims as inscribed 64-gons, within r(1 - cos(pi/64)) of the
+extremes ``regions.held_drop_zones`` bounds exactly.
 
 Seeds 5000 and up are this calibration's alone: none of the recycling corpora uses them.
 Trials run one process each, so that every trial starts from the same state::

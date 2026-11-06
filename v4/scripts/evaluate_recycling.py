@@ -205,7 +205,8 @@ def _timed_out(round_: dict[str, Any]) -> bool:
         failure = attempt.failure
         if failure is not None and (failure.reason, failure.cause) == ("not_planned", "timeout"):
             return True
-        assert attempt.race is not None  # every attempt of a round is raced
+        if attempt.race is None:  # the hand has no grasp of it (no_grasp): never raced
+            continue
         for candidate in attempt.race.candidates:
             if any(p.plan_status is PlanStatus.TIMEOUT for p in candidate.plans):
                 return True
@@ -219,8 +220,11 @@ def classify(attempt: Attempt | None) -> str:
         return "not_attempted"
     if attempt.succeeded:
         return "recycled"
-    if attempt.arm is None:
-        assert attempt.race is not None  # no arm: the race chose none
+    if attempt.failure is not None and attempt.failure.reason == "no_grasp":  # never raced
+        f = attempt.failure
+        return f"{f.skill}.{f.stage}:{f.reason}"
+    if attempt.arm is None:  # the race chose none
+        assert attempt.race is not None  # every attempt but a no_grasp one is raced
         refused = {
             p.stage
             for c in attempt.race.candidates

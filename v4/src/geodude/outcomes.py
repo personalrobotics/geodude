@@ -11,13 +11,15 @@ version, a duplicate key, or a non-finite number, and never coerces. Each record
   arm has none;
 - ``inconsistent_destination``: an attempt's result is not that of its destination;
 - ``inconsistent_success``: ``succeeded`` disagrees with the checks;
-- ``inconsistent_failure``: a failure without an arm, or beside a success;
+- ``inconsistent_failure``: a failure without an arm, or beside a success, except
+  ``no_grasp``, which an attempt with neither arm nor race carries;
 - ``missing_failure``: a selected arm's attempt with a failed skill check and no failure
   (an object that bounced out of its bin after every skill succeeded is explained by
   ``in_bin`` alone, and needs none);
 - ``inconsistent_recovery``: a recovery without a failure, or a release without an action;
 - ``incomplete_landing``: a released, evaluated drop without its landing;
-- ``unknown_reason``: a failure's reason is neither ssgrasping's nor ``no_drop_zone``;
+- ``unknown_reason``: a failure's reason is neither ssgrasping's nor ``no_drop_zone`` or
+  ``no_grasp``;
 - ``noncontiguous_attempts``: an object's attempts are not numbered 1, 2, ...;
 - ``inconsistent_disposition``: an object's disposition disagrees with its attempts;
 - ``inconsistent_evaluation``: evaluation fields present other than exactly when
@@ -59,7 +61,11 @@ from ssrobot import (
 NO_DROP_ZONE = "no_drop_zone"
 """The reason of a drop that found no zone for the object as it is held: Geodude's,
 beside ssgrasping's ``Reason``s."""
-REASONS = frozenset({*(r.value for r in Reason), NO_DROP_ZONE})
+NO_GRASP = "no_grasp"
+"""The reason of an object the hand has no grasp of at all: none of its grasp regions
+gives a pregrasp region within the hand's limits, wherever it stands. It is never raced:
+its attempt has no arm and no race. Geodude's, beside ssgrasping's ``Reason``s."""
+REASONS = frozenset({*(r.value for r in Reason), NO_DROP_ZONE, NO_GRASP})
 
 
 class Destination(enum.StrEnum):
@@ -74,6 +80,8 @@ class RecoveryAction(enum.StrEnum):
 
     RELEASE_IN_PLACE = "release in place"
     RELEASE_LOST = "detach the lost object"
+    PLACE_BACK = "place back on the worktop"
+    """Held firmly with no drop zone that fits it: put back where it was picked from."""
 
 
 class RaceBasis(enum.StrEnum):
@@ -518,7 +526,18 @@ class Attempt(Value):
                     "a released, evaluated drop has its landing",
                     path="landing",
                 )
-        if self.failure is not None and (self.arm is None or self.succeeded is True):
+        ungraspable = self.failure is not None and self.failure.reason == NO_GRASP
+        if ungraspable and (self.race is not None or self.arm is not None):
+            raise ValidationError(
+                "inconsistent_failure",
+                "an object the hand has no grasp of is neither raced nor taken by an arm",
+                path="race",
+            )
+        if (
+            self.failure is not None
+            and not ungraspable
+            and (self.arm is None or self.succeeded is True)
+        ):
             raise ValidationError(
                 "inconsistent_failure",
                 "a failure only of a selected arm's attempt that did not succeed",

@@ -1031,7 +1031,8 @@ def recover(
       and ``held_drop_spec`` found no zone): it is held as it was lifted, so it is put
       back on the worktop, standing as its model file stands it, at ``origin``, where it
       was picked from (``place_on_worktop``), and registered where it rests. This needs
-      ``package``, ``checker`` and ``origin``; without them nothing is done.
+      ``package``, ``checker`` and ``origin``, which ``recycle`` gives only when
+      ``held_drop_spec`` found no zone; without them nothing is done.
     - **Anything else:** the object may be suspended, or its support unknown, so nothing
       is done, and it stays declared held.
     The fingers are never opened onto nothing known, and ``obj`` is detached only after
@@ -1471,6 +1472,7 @@ def recycle(
         if ctx.scene.attachment(obj) is None:
             continue
         failed = failed_stage(picked, dropped)
+        no_zone = picked.succeeded and spec is None
         recovery = recover(
             ctx,
             obj,
@@ -1482,7 +1484,8 @@ def recycle(
             read,
             package=package,
             checker=checker,
-            origin=(float(origin[0]), float(origin[1])),
+            # Only an object no drop zone fits is placed back (``no_zone``).
+            origin=(float(origin[0]), float(origin[1])) if no_zone else None,
         )
         entry.recovered(recovery)
         if not recovery.released:

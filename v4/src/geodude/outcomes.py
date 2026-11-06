@@ -526,12 +526,25 @@ class Attempt(Value):
                     "a released, evaluated drop has its landing",
                     path="landing",
                 )
-        ungraspable = self.failure is not None and self.failure.reason == NO_GRASP
-        if ungraspable and (self.race is not None or self.arm is not None):
+        refused = self.failure
+        ungraspable = refused is not None and refused.reason == NO_GRASP
+        if (
+            refused is not None
+            and ungraspable
+            and (
+                self.race is not None
+                or self.arm is not None
+                or (refused.skill, refused.stage) != ("grasp", "regions")
+                or self.recovery is not None
+                or self.lookahead is not None
+                or self.times is not None
+            )
+        ):
             raise ValidationError(
                 "inconsistent_failure",
-                "an object the hand has no grasp of is neither raced nor taken by an arm",
-                path="race",
+                "an object the hand has no grasp of is refused at grasp.regions: neither "
+                "raced nor taken by an arm, with nothing planned, timed or recovered",
+                path="failure",
             )
         if (
             self.failure is not None

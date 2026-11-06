@@ -11,8 +11,9 @@ opening and no drop zone fits it: it is put back on the worktop where it was pic
 ``sort_all`` stages a can beside the two at ``SEED`` and sorts them. The test requires:
 - the can lands in a bin;
 - the marker's one attempt is ``no_grasp``, with no arm and no race;
-- each bleach attempt fails with ``no_drop_zone`` and is recovered by placing it back,
-  released; it ends on the worktop, standing as its model file stands it, nothing
+- the bleach bottle's one attempt fails with ``no_drop_zone`` and is recovered by
+  placing it back, released, and it is not raced again (held so again, it would not fit
+  again); it ends on the worktop, standing as its model file stands it, nothing
   attached;
 - the outcome encodes, decodes and validates (``RecyclingRun``), and the corpus
   evaluator's verdicts name each mechanism.
@@ -66,11 +67,10 @@ def test_a_round_goes_on_past_objects_it_cannot_grasp_or_drop(artifacts: Path) -
     assert marker.arm is None and marker.race is None and marker.failure is not None
     assert marker.failure.reason == outcomes.NO_GRASP, marker.failure
     assert verdicts["large_marker_0"] == "grasp.regions:no_grasp", verdicts
-    assert tried["bleach_cleanser_0"], "the bleach bottle was never attempted"
-    for attempt in tried["bleach_cleanser_0"]:
-        assert attempt.failure is not None and attempt.failure.reason == outcomes.NO_DROP_ZONE
-        assert attempt.recovery is not None and attempt.recovery.released, attempt.recovery
-        assert attempt.recovery.action is outcomes.RecoveryAction.PLACE_BACK
+    (attempt,) = tried["bleach_cleanser_0"]  # placed back, and not raced again
+    assert attempt.failure is not None and attempt.failure.reason == outcomes.NO_DROP_ZONE
+    assert attempt.recovery is not None and attempt.recovery.released, attempt.recovery
+    assert attempt.recovery.action is outcomes.RecoveryAction.PLACE_BACK
     final = by_object["bleach_cleanser_0"]
     assert final.bin is None and not final.attached, final
     _, rest = physical("bleach_cleanser")

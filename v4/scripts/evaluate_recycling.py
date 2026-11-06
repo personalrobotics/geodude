@@ -72,7 +72,7 @@ from typing import Any
 
 from ssrobot import PlanStatus, StageOutcome, dumps, loads
 
-from geodude.outcomes import Attempt, Disposition, RecyclingRun
+from geodude.outcomes import NO_GRASP, Attempt, Disposition, RecyclingRun
 
 FORMAT = 7
 """The evaluation artifact's format: raised whenever a field's meaning changes. 2: per
@@ -220,7 +220,7 @@ def classify(attempt: Attempt | None) -> str:
         return "not_attempted"
     if attempt.succeeded:
         return "recycled"
-    if attempt.failure is not None and attempt.failure.reason == "no_grasp":  # never raced
+    if attempt.failure is not None and attempt.failure.reason == NO_GRASP:  # never raced
         f = attempt.failure
         return f"{f.skill}.{f.stage}:{f.reason}"
     if attempt.arm is None:  # the race chose none

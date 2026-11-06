@@ -427,10 +427,11 @@ def _region_candidates(ctx: RobotContext, obj: str, arm: Arm) -> GraspRegions | 
 
 def ungraspable(ctx: RobotContext, obj: str) -> str | None:
     """Why the hand has no grasp of ``obj`` at all, or None when it has one: none of its
-    regions (or, for an asset that declares none, its legacy primitive) gives a pregrasp
-    region within the hand's limits. Whether a region does depends on its size and the
-    hand, not on where the object stands, so this is asked once, before ``obj`` is
-    raced. Both arms carry the same hand: one is asked."""
+    regions (or, for an asset that declares none, its legacy primitive, which may have
+    no grasp family at all) gives a pregrasp region within the hand's limits. Whether a
+    region does depends on its size and the hand, not on where the object stands, so
+    this is asked once, before ``obj`` is raced. Both arms carry the same hand: one is
+    asked."""
     arm = arm_for(registered_pose(ctx, obj).position)
     candidates = _region_candidates(ctx, obj, arm)
     if candidates is not None:
@@ -438,7 +439,11 @@ def ungraspable(ctx: RobotContext, obj: str) -> str | None:
             return None
         return "; ".join(f"{r.region.name}: {r.detail}" for r in candidates.regions)
     geometry = meta(kind_of(obj))["geometric_properties"]
-    if regions.pregrasps(geometry, registered_pose(ctx, obj), CLEARANCE_M):
+    try:
+        offered = regions.pregrasps(geometry, registered_pose(ctx, obj), CLEARANCE_M)
+    except ValueError as error:  # a legacy primitive with no grasp family, such as a sphere
+        return f"its legacy {geometry['type']}: {error}"
+    if offered:
         return None
     return f"its legacy {geometry['type']} has no grasp within the hand's limits"
 
@@ -452,6 +457,7 @@ def place_on_worktop(
     arm: Arm,
     planners: tuple[Planner, Planner],
     tick: Callable[[], None] = lambda: None,
+    read: Read = pose_stub,
 ) -> SkillResult:
     """Place the held ``obj`` upright on the worktop within ``PLACE_SLACK_M`` of
     ``target`` in x and y, under the measured contact guard. It stands as its model
@@ -480,7 +486,7 @@ def place_on_worktop(
     )
     # Released, the object rests on the worktop, where registration sees it again.
     placing = place(
-        ctx, planner, spec, check_planner=checker, released=lambda _: register(ctx, [obj])
+        ctx, planner, spec, check_planner=checker, released=lambda _: register(ctx, [obj], read)
     )
     return drive(ctx, placing, tick)
 
@@ -1064,12 +1070,11 @@ def recover(
             detail=refused or "detached: the object had left the hand",
         )
     if failed is None and package is not None and checker is not None and origin is not None:
+        # Released, the place registers it where it rests, by ``read``.
         placed = place_on_worktop(
-            ctx, package, obj, origin, arm=arm, planners=(planner, checker), tick=tick
+            ctx, package, obj, origin, arm=arm, planners=(planner, checker), tick=tick, read=read
         )
         released = ctx.scene.attachment(obj) is None
-        if released:
-            register(ctx, [obj], read)  # where the place left it
         return outcomes.Recovery(
             action=PLACE_BACK,
             released=released,
@@ -1314,8 +1319,13 @@ def recycle(
     (``bin_outcome``), with the object's attempt number, the arm and the race (``_race``),
     once it is complete (``_Pending``).
 
-    An attempt that fails with the object still attached is recovered by ``recover``. If
-    nothing is safe, the round stops there, the object declared held. An object released
+    An object the hand has no grasp of at all (``ungraspable``) is never raced: its one
+    attempt, recorded ``no_grasp`` before any raced one, has neither arm nor race.
+
+    An attempt that fails with the object still attached is recovered by ``recover``: an
+    object held with no drop zone that fits it is placed back where it was picked from,
+    and not raced again, since raced again it would be held so again. If nothing is safe,
+    the round stops there, the object declared held. An object released
     back onto the worktop, upright, is raced again from the current state, up to
     ``retries`` more times. So is an object the grasp observably missed (``missed``: the
     fingers closed on nothing), which may have moved since it was registered: whatever
@@ -1477,6 +1487,9 @@ def recycle(
         entry.recovered(recovery)
         if not recovery.released:
             break  # still held, and nothing safe to do: the round stops, declared so
+        if recovery.action is PLACE_BACK:
+            # No drop zone fits it as it was held; raced again, it would be held so again.
+            continue
         if attempts[obj] <= retries:
             register(ctx, [obj], read)  # where the recovery left it, for the retry
             if _upright_on_worktop(ctx, obj, start):

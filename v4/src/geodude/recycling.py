@@ -54,6 +54,7 @@ from ssgrasping import (
     DropSpec,
     Evidence,
     GraspObject,
+    GraspRegions,
     GraspSpec,
     LandingSpec,
     Lookahead,
@@ -384,15 +385,8 @@ def grasp_spec(ctx: RobotContext, obj: str, arm: Arm) -> GraspSpec:
     that declares none, by the legacy path from its ``geometric_properties``. The two
     are told apart by the spec's ``pregrasp_labels``: ``region/strategy`` from regions,
     none from the legacy path."""
-    kind = kind_of(obj)
-    declared = grasping.regions_for(kind)
-    if declared is not None:
-        candidates = grasp_regions(
-            GraspObject(obj, registered_pose(ctx, obj), declared.regions),
-            grasping.profile_for(arm.manipulator, arm.hand, arm.gripper, arm.opening),
-            grasping.templates(CLEARANCE_M),
-            approach_m=regions.STANDOFF_M,
-        )
+    candidates = _region_candidates(ctx, obj, arm)
+    if candidates is not None:
         return candidates.spec(
             support="vention_base",
             normal=UP,
@@ -400,7 +394,7 @@ def grasp_spec(ctx: RobotContext, obj: str, arm: Arm) -> GraspSpec:
             line_tolerance_m=LINE_TOLERANCE_M,
             clearance_m=CLEARANCE_M,
         )
-    geometry = meta(kind)["geometric_properties"]
+    geometry = meta(kind_of(obj))["geometric_properties"]
     return GraspSpec(
         manipulator=arm.manipulator,
         end_effector=arm.hand,
@@ -417,6 +411,43 @@ def grasp_spec(ctx: RobotContext, obj: str, arm: Arm) -> GraspSpec:
     )
 
 
+def _region_candidates(ctx: RobotContext, obj: str, arm: Arm) -> GraspRegions | None:
+    """ssgrasping's pregrasp regions for ``obj`` by ``arm``, from the grasp regions its
+    asset declares, at its registered pose; None for an asset that declares none."""
+    declared = grasping.regions_for(kind_of(obj))
+    if declared is None:
+        return None
+    return grasp_regions(
+        GraspObject(obj, registered_pose(ctx, obj), declared.regions),
+        grasping.profile_for(arm.manipulator, arm.hand, arm.gripper, arm.opening),
+        grasping.templates(CLEARANCE_M),
+        approach_m=regions.STANDOFF_M,
+    )
+
+
+def ungraspable(ctx: RobotContext, obj: str) -> str | None:
+    """Why the hand has no grasp of ``obj`` at all, or None when it has one: none of its
+    regions (or, for an asset that declares none, its legacy primitive, which may have
+    no grasp family at all) gives a pregrasp region within the hand's limits. Whether a
+    region does depends on its size and the hand, not on where the object stands, so
+    this is asked once, before ``obj`` is raced. Both arms carry the same hand: one is
+    asked."""
+    arm = arm_for(registered_pose(ctx, obj).position)
+    candidates = _region_candidates(ctx, obj, arm)
+    if candidates is not None:
+        if candidates.ok:
+            return None
+        return "; ".join(f"{r.region.name}: {r.detail}" for r in candidates.regions)
+    geometry = meta(kind_of(obj))["geometric_properties"]
+    try:
+        offered = regions.pregrasps(geometry, registered_pose(ctx, obj), CLEARANCE_M)
+    except ValueError as error:  # a legacy primitive with no grasp family, such as a sphere
+        return f"its legacy {geometry['type']}: {error}"
+    if offered:
+        return None
+    return f"its legacy {geometry['type']} has no grasp within the hand's limits"
+
+
 def place_on_worktop(
     ctx: RobotContext,
     package: RobotPackage,
@@ -426,6 +457,7 @@ def place_on_worktop(
     arm: Arm,
     planners: tuple[Planner, Planner],
     tick: Callable[[], None] = lambda: None,
+    read: Read = pose_stub,
 ) -> SkillResult:
     """Place the held ``obj`` upright on the worktop within ``PLACE_SLACK_M`` of
     ``target`` in x and y, under the measured contact guard. It stands as its model
@@ -454,7 +486,7 @@ def place_on_worktop(
     )
     # Released, the object rests on the worktop, where registration sees it again.
     placing = place(
-        ctx, planner, spec, check_planner=checker, released=lambda _: register(ctx, [obj])
+        ctx, planner, spec, check_planner=checker, released=lambda _: register(ctx, [obj], read)
     )
     return drive(ctx, placing, tick)
 
@@ -912,6 +944,7 @@ released, upright, back on the worktop: once, so that an evaluation can count su
 at the first attempt and after a retry apart (#201)."""
 RELEASE_IN_PLACE = outcomes.RecoveryAction.RELEASE_IN_PLACE
 RELEASE_LOST = outcomes.RecoveryAction.RELEASE_LOST
+PLACE_BACK = outcomes.RecoveryAction.PLACE_BACK
 
 
 def _wait(ctx: RobotContext, execution: Execution, tick: Callable[[], None]) -> ExecutionStatus:
@@ -979,6 +1012,10 @@ def recover(
     planner: Planner,
     tick: Callable[[], None],
     read: Read = pose_stub,
+    *,
+    package: RobotPackage | None = None,
+    checker: Planner | None = None,
+    origin: tuple[float, float] | None = None,
 ) -> outcomes.Recovery:
     """After an attempt that failed with ``obj`` still attached, release it where that is
     safe (``safe_release``), a narrow slice of personalrobotics/geodude#210's recovery:
@@ -990,6 +1027,12 @@ def recover(
       gripper's opening showed the fingers close past it, and the carry stopped there.
       Nothing is in the hand, so opening it releases nothing: open, and detach once the
       fingers have opened, so the scene no longer carries the object.
+    - **Held, with no drop zone that fits it** (no failed stage: every skill succeeded,
+      and ``held_drop_spec`` found no zone): it is held as it was lifted, so it is put
+      back on the worktop, standing as its model file stands it, at ``origin``, where it
+      was picked from (``place_on_worktop``), and registered where it rests. This needs
+      ``package``, ``checker`` and ``origin``, which ``recycle`` gives only when
+      ``held_drop_spec`` found no zone; without them nothing is done.
     - **Anything else:** the object may be suspended, or its support unknown, so nothing
       is done, and it stays declared held.
     The fingers are never opened onto nothing known, and ``obj`` is detached only after
@@ -1026,6 +1069,17 @@ def recover(
             action=RELEASE_LOST,
             released=refused is None,
             detail=refused or "detached: the object had left the hand",
+        )
+    if failed is None and package is not None and checker is not None and origin is not None:
+        # Released, the place registers it where it rests, by ``read``.
+        placed = place_on_worktop(
+            ctx, package, obj, origin, arm=arm, planners=(planner, checker), tick=tick, read=read
+        )
+        released = ctx.scene.attachment(obj) is None
+        return outcomes.Recovery(
+            action=PLACE_BACK,
+            released=released,
+            detail=f"no drop zone fits it as held; placed back: {placed.state.value}",
         )
     return outcomes.Recovery(
         action=None,
@@ -1134,10 +1188,45 @@ class _Pending:
 
     obj: str
     number: int
-    race: outcomes.Race
+    race: outcomes.Race | None
     registration: int
     lookahead: outcomes.Lookahead | None = None
     attempt: outcomes.Attempt | None = None
+
+    def ungraspable(self, detail: str) -> None:
+        """The hand has no grasp of the object (``recycling.ungraspable``): it was never
+        raced, and nothing ran."""
+        self.attempt = outcomes.Attempt(
+            object=self.obj,
+            number=self.number,
+            arm=None,
+            race=None,
+            registration=self.registration,
+            lookahead=None,
+            destination=outcomes.Destination.BIN,
+            grasp=None,
+            drop=None,
+            landing=None,
+            place=None,
+            times=None,
+            failure=outcomes.Failure(
+                skill="grasp",
+                stage="regions",
+                reason=outcomes.NO_GRASP,
+                cause=None,
+                detail=detail,
+                evidence=Evidence.PLANNED,
+                held=False,
+                attached=False,
+            ),
+            recovery=None,
+            transitions=(),
+            attached=None,
+            final_pose=None,
+            bin=None,
+            worktop=None,
+            succeeded=False,
+        )
 
     def unselected(self) -> None:
         """No arm's prefix planned: nothing ran."""
@@ -1231,8 +1320,13 @@ def recycle(
     (``bin_outcome``), with the object's attempt number, the arm and the race (``_race``),
     once it is complete (``_Pending``).
 
-    An attempt that fails with the object still attached is recovered by ``recover``. If
-    nothing is safe, the round stops there, the object declared held. An object released
+    An object the hand has no grasp of at all (``ungraspable``) is never raced: its one
+    attempt, recorded ``no_grasp`` before any raced one, has neither arm nor race.
+
+    An attempt that fails with the object still attached is recovered by ``recover``: an
+    object held with no drop zone that fits it is placed back where it was picked from,
+    and not raced again, since raced again it would be held so again. If nothing is safe,
+    the round stops there, the object declared held. An object released
     back onto the worktop, upright, is raced again from the current state, up to
     ``retries`` more times. So is an object the grasp observably missed (``missed``: the
     fingers closed on nothing), which may have moved since it was registered: whatever
@@ -1251,7 +1345,14 @@ def recycle(
         for side in BIN_OF
     }
     pendings: list[_Pending] = []
-    queue = list(objects)
+    # An object the hand cannot grasp at all is recorded so, and never raced: neither as
+    # the next object while one is carried, nor on its own.
+    refused = {obj: why for obj in objects if (why := ungraspable(ctx, obj)) is not None}
+    for obj, why in refused.items():
+        entry = _Pending(obj, 1, None, registration)
+        entry.ungraspable(why)
+        pendings.append(entry)
+    queue = [obj for obj in objects if obj not in refused]
     attempts: dict[str, int] = {}
     looking: Lookahead | None = None
     pending: Candidates | None = None
@@ -1292,6 +1393,7 @@ def recycle(
         arm = Arm(selection.candidate.label)
         planner, checker = arms[arm.side]
         looking = Lookahead(unsettled=tuple(released))
+        origin = registered_pose(ctx, obj).position[:2]  # where it is picked from
         picked = drive(ctx, selection.grasp(ctx, lookahead=looking), stepped)
         dropped = None
         spec = None
@@ -1370,10 +1472,27 @@ def recycle(
         if ctx.scene.attachment(obj) is None:
             continue
         failed = failed_stage(picked, dropped)
-        recovery = recover(ctx, obj, arm, failed, selection.candidate.grasp, planner, stepped, read)
+        no_zone = picked.succeeded and spec is None
+        recovery = recover(
+            ctx,
+            obj,
+            arm,
+            failed,
+            selection.candidate.grasp,
+            planner,
+            stepped,
+            read,
+            package=package,
+            checker=checker,
+            # Only an object no drop zone fits is placed back (``no_zone``).
+            origin=(float(origin[0]), float(origin[1])) if no_zone else None,
+        )
         entry.recovered(recovery)
         if not recovery.released:
             break  # still held, and nothing safe to do: the round stops, declared so
+        if recovery.action is PLACE_BACK:
+            # No drop zone fits it as it was held; raced again, it would be held so again.
+            continue
         if attempts[obj] <= retries:
             register(ctx, [obj], read)  # where the recovery left it, for the retry
             if _upright_on_worktop(ctx, obj, start):

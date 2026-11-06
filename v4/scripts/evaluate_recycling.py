@@ -72,9 +72,9 @@ from typing import Any
 
 from ssrobot import PlanStatus, StageOutcome, dumps, loads
 
-from geodude.outcomes import Attempt, Disposition, RecyclingRun
+from geodude.outcomes import NO_GRASP, Attempt, Disposition, RecyclingRun
 
-FORMAT = 7
+FORMAT = 8
 """The evaluation artifact's format: raised whenever a field's meaning changes. 2: per
 object, its attempts, where it finally rests, and its verdict, in place of one outcome
 and its mechanism. 3: each round's and object's ``timing``. 4: a failure's ``reason`` and
@@ -95,7 +95,10 @@ holds its outcome, a strictly decoded ``RecyclingRun`` (geodude#246), whose vers
 evaluation records (``outcome_version``), in place of the round's ``staged``,
 ``outcomes`` and ``final``; each object no longer repeats its attempts. A race records a
 candidate outranked by the chosen one without its plans, so a planning timeout counts
-only where it could have decided the race."""
+only where it could have decided the race. 8: outcomes of ``RecyclingRun`` version 2; an
+object the hand has no grasp of is attempted once, armless and unraced, and judged
+``grasp.regions:no_grasp``; an object held with no drop zone that fits it is placed back
+on the worktop and not attempted again."""
 CORPORA = {
     "development": range(0, 40),
     "acceptance": range(1000, 1040),
@@ -205,7 +208,8 @@ def _timed_out(round_: dict[str, Any]) -> bool:
         failure = attempt.failure
         if failure is not None and (failure.reason, failure.cause) == ("not_planned", "timeout"):
             return True
-        assert attempt.race is not None  # every attempt of a round is raced
+        if attempt.race is None:  # the hand has no grasp of it (no_grasp): never raced
+            continue
         for candidate in attempt.race.candidates:
             if any(p.plan_status is PlanStatus.TIMEOUT for p in candidate.plans):
                 return True
@@ -219,8 +223,11 @@ def classify(attempt: Attempt | None) -> str:
         return "not_attempted"
     if attempt.succeeded:
         return "recycled"
-    if attempt.arm is None:
-        assert attempt.race is not None  # no arm: the race chose none
+    if attempt.failure is not None and attempt.failure.reason == NO_GRASP:  # never raced
+        f = attempt.failure
+        return f"{f.skill}.{f.stage}:{f.reason}"
+    if attempt.arm is None:  # the race chose none
+        assert attempt.race is not None  # every attempt but a no_grasp one is raced
         refused = {
             p.stage
             for c in attempt.race.candidates

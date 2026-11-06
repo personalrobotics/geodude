@@ -11,13 +11,18 @@ version, a duplicate key, or a non-finite number, and never coerces. Each record
   arm has none;
 - ``inconsistent_destination``: an attempt's result is not that of its destination;
 - ``inconsistent_success``: ``succeeded`` disagrees with the checks;
-- ``inconsistent_failure``: a failure without an arm, or beside a success;
+- ``inconsistent_failure``: a failure without an arm, or beside a success, except
+  ``no_grasp``, which an attempt with neither arm nor race carries, at grasp.regions, on
+  planned evidence, neither held nor attached, with no lookahead, times or recovery;
 - ``missing_failure``: a selected arm's attempt with a failed skill check and no failure
   (an object that bounced out of its bin after every skill succeeded is explained by
   ``in_bin`` alone, and needs none);
-- ``inconsistent_recovery``: a recovery without a failure, or a release without an action;
+- ``inconsistent_recovery``: a recovery without a failure, a release without an action,
+  or a place-back other than of a selected arm's object bound for a bin after
+  ``no_drop_zone`` (released or not: the placement itself can fail);
 - ``incomplete_landing``: a released, evaluated drop without its landing;
-- ``unknown_reason``: a failure's reason is neither ssgrasping's nor ``no_drop_zone``;
+- ``unknown_reason``: a failure's reason is neither ssgrasping's nor ``no_drop_zone`` or
+  ``no_grasp``;
 - ``noncontiguous_attempts``: an object's attempts are not numbered 1, 2, ...;
 - ``inconsistent_disposition``: an object's disposition disagrees with its attempts;
 - ``inconsistent_evaluation``: evaluation fields present other than exactly when
@@ -34,7 +39,8 @@ one of these records: ``recycling.recycle`` keeps it internal until it is comple
 Nothing here depends on how long anything took in wall-clock time, or where a file was:
 two runs of the same seed on the same OpenBLAS kernel encode to the same bytes. A race
 records only what its selection claims (``Race``). ``RecyclingRun.VERSION`` versions this
-format, and only it.
+format, and only it. 2: the reason ``no_grasp`` and the recovery ``place back on the
+worktop``, which a version 1 decoder cannot read.
 """
 
 from __future__ import annotations
@@ -59,7 +65,11 @@ from ssrobot import (
 NO_DROP_ZONE = "no_drop_zone"
 """The reason of a drop that found no zone for the object as it is held: Geodude's,
 beside ssgrasping's ``Reason``s."""
-REASONS = frozenset({*(r.value for r in Reason), NO_DROP_ZONE})
+NO_GRASP = "no_grasp"
+"""The reason of an object the hand has no grasp of at all: none of its grasp regions
+gives a pregrasp region within the hand's limits, wherever it stands. It is never raced:
+its attempt has no arm and no race. Geodude's, beside ssgrasping's ``Reason``s."""
+REASONS = frozenset({*(r.value for r in Reason), NO_DROP_ZONE, NO_GRASP})
 
 
 class Destination(enum.StrEnum):
@@ -74,6 +84,8 @@ class RecoveryAction(enum.StrEnum):
 
     RELEASE_IN_PLACE = "release in place"
     RELEASE_LOST = "detach the lost object"
+    PLACE_BACK = "place back on the worktop"
+    """Held firmly with no drop zone that fits it: put back where it was picked from."""
 
 
 class RaceBasis(enum.StrEnum):
@@ -518,7 +530,35 @@ class Attempt(Value):
                     "a released, evaluated drop has its landing",
                     path="landing",
                 )
-        if self.failure is not None and (self.arm is None or self.succeeded is True):
+        refused = self.failure
+        ungraspable = refused is not None and refused.reason == NO_GRASP
+        if (
+            refused is not None
+            and ungraspable
+            and (
+                self.race is not None
+                or self.arm is not None
+                or (refused.skill, refused.stage) != ("grasp", "regions")
+                or refused.evidence is not Evidence.PLANNED
+                or refused.held is not False
+                or refused.attached
+                or self.recovery is not None
+                or self.lookahead is not None
+                or self.times is not None
+            )
+        ):
+            raise ValidationError(
+                "inconsistent_failure",
+                "an object the hand has no grasp of is refused at grasp.regions, on "
+                "planned evidence, neither held nor attached: neither raced nor taken by "
+                "an arm, with nothing planned, timed or recovered",
+                path="failure",
+            )
+        if (
+            self.failure is not None
+            and not ungraspable
+            and (self.arm is None or self.succeeded is True)
+        ):
             raise ValidationError(
                 "inconsistent_failure",
                 "a failure only of a selected arm's attempt that did not succeed",
@@ -539,6 +579,22 @@ class Attempt(Value):
         if self.recovery is not None and self.failure is None:
             raise ValidationError(
                 "inconsistent_recovery", "a recovery only after a failure", path="recovery"
+            )
+        if (
+            self.recovery is not None
+            and self.recovery.action is RecoveryAction.PLACE_BACK
+            and (
+                self.arm is None
+                or self.destination is not Destination.BIN
+                or self.failure is None
+                or self.failure.reason != NO_DROP_ZONE
+            )
+        ):
+            raise ValidationError(
+                "inconsistent_recovery",
+                "a place-back only of a selected arm's object bound for a bin that no "
+                "drop zone fits",
+                path="recovery",
             )
 
 
@@ -566,7 +622,7 @@ class RecyclingRun(Record):
     rests in a bin (``cleared``)."""
 
     SCHEMA = "geodude.RecyclingRun"
-    VERSION = 1
+    VERSION = 2
 
     seed: int
     blas_kernel: str | None

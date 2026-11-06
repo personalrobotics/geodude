@@ -11,6 +11,13 @@ code of the rule it breaks:
 - ``partial_landing``: a dropped can, released and evaluated, without its landing: the
   entry an attempt was while its landing was still observed;
 - ``other_version``: the outcome claimed in another version of the format;
+- ``old_version``: the outcome claimed in version 1, which has neither ``no_grasp`` nor
+  ``place back on the worktop``;
+- ``no_grasp_privileged``, ``no_grasp_held``, ``no_grasp_attached``, ``no_grasp_raced``:
+  an object the hand has no grasp of, refused on privileged evidence, held, attached, or
+  raced;
+- ``place_back_unrelated``: an object placed back after a failure other than
+  ``no_drop_zone``;
 - ``failure_missing``: an attempt by a selected arm whose drop failed, with no failure
   and every evaluated check passed;
 - ``failure_missing_evaluated``: an attempt by a selected arm whose grasp failed and
@@ -22,9 +29,15 @@ code of the rule it breaks:
 - ``selected_failed``: a race that selected a candidate that did not succeed;
 - ``outranked_cost``: an outranked candidate with a cost, even a zero one.
 
-One copy has the shape of a real outcome and must decode: ``bounced_out``, an attempt
-whose every skill succeeded but whose object came to rest outside the bin (``in_bin``
-false), not succeeded and with no failure: the evaluation explains it.
+Three copies have the shape of a real outcome and must decode: ``bounced_out``, an
+attempt whose every skill succeeded but whose object came to rest outside the bin
+(``in_bin`` false), not succeeded and with no failure: the evaluation explains it;
+``no_grasp``, the first attempt replaced by one refused at ``grasp.regions`` as
+``recycling`` records it; and ``placed_back``, the first attempt's drop replaced by
+``no_drop_zone`` and a place-back that did not release, as when the placement fails.
+
+The corpus evaluator refuses to reclassify an evaluation of format 7, or of outcomes of
+version 1.
 
 The evidence is ``tampered/``, kept by this test: every tampered copy, and
 ``diagnostics.json``, each copy's refusal (code, path, message), or null where it
@@ -40,9 +53,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import pytest
 from ssrobot import ValidationError, loads
 
-from geodude.outcomes import RecyclingRun
+from geodude.outcomes import NO_DROP_ZONE, NO_GRASP, RecoveryAction, RecyclingRun
+from tests.test_sort_all import _evaluator
 
 
 def _missing(run: dict[str, Any]) -> None:
@@ -69,6 +84,78 @@ def _partial_landing(run: dict[str, Any]) -> None:
 
 def _other_version(run: dict[str, Any]) -> None:
     run["version"] = RecyclingRun.VERSION + 1
+
+
+def _old_version(run: dict[str, Any]) -> None:
+    run["version"] = 1
+
+
+def _no_grasp(run: dict[str, Any]) -> None:
+    attempt = run["attempts"][0]
+    for key in ("arm", "race", "lookahead", "grasp", "drop", "landing", "place", "times"):
+        attempt[key] = None
+    attempt.update(
+        destination="bin",
+        failure={
+            "skill": "grasp",
+            "stage": "regions",
+            "reason": NO_GRASP,
+            "cause": None,
+            "detail": "no pregrasp region within the hand's limits",
+            "evidence": "planned",
+            "held": False,
+            "attached": False,
+        },
+        recovery=None,
+        transitions=[],
+        attached=None,
+        final_pose=None,
+        bin=None,
+        worktop=None,
+        succeeded=False,
+    )
+
+
+def _forged_no_grasp(**change: Any) -> Callable[[dict[str, Any]], None]:
+    def forge(run: dict[str, Any]) -> None:
+        raced = run["attempts"][0]["race"]
+        _no_grasp(run)
+        failure = run["attempts"][0]["failure"]
+        for key, value in change.items():
+            if key == "race":
+                run["attempts"][0]["race"] = raced
+            else:
+                failure[key] = value
+
+    return forge
+
+
+def _placed_back(run: dict[str, Any]) -> None:
+    attempt = run["attempts"][0]
+    attempt.update(drop=None, landing=None, succeeded=False)
+    attempt["times"].update(released=None, landed=None)
+    checks = attempt["bin"]["checks"]
+    checks.update(dropped=False, released=False, landed=False, in_bin=False)
+    attempt["failure"] = {
+        "skill": "drop",
+        "stage": "zone",
+        "reason": NO_DROP_ZONE,
+        "cause": None,
+        "detail": "no drop zone fits the object as it is held",
+        "evidence": "planned",
+        "held": True,
+        "attached": True,
+    }
+    attempt["recovery"] = {
+        "action": RecoveryAction.PLACE_BACK.value,
+        "released": False,
+        "detail": "no drop zone fits it as held; placed back: failed",
+    }
+
+
+def _place_back_unrelated(run: dict[str, Any]) -> None:
+    _placed_back(run)
+    run["attempts"][0]["failure"]["reason"] = "transition_refuted"
 
 
 def _failure_missing(run: dict[str, Any]) -> None:
@@ -120,6 +207,14 @@ TAMPERED: dict[str, tuple[Callable[[dict[str, Any]], None], str | None]] = {
     "inconsistent": (_inconsistent, "inconsistent_success"),
     "partial_landing": (_partial_landing, "incomplete_landing"),
     "other_version": (_other_version, "version_mismatch"),
+    "old_version": (_old_version, "version_mismatch"),
+    "no_grasp": (_no_grasp, None),
+    "no_grasp_privileged": (_forged_no_grasp(evidence="privileged"), "inconsistent_failure"),
+    "no_grasp_held": (_forged_no_grasp(held=True), "inconsistent_failure"),
+    "no_grasp_attached": (_forged_no_grasp(attached=True), "inconsistent_failure"),
+    "no_grasp_raced": (_forged_no_grasp(race=True), "inconsistent_failure"),
+    "placed_back": (_placed_back, None),
+    "place_back_unrelated": (_place_back_unrelated, "inconsistent_recovery"),
     "failure_missing": (_failure_missing, "missing_failure"),
     "failure_missing_evaluated": (_failure_missing_evaluated, "missing_failure"),
     "unstaged": (_unstaged, "staged_mismatch"),
@@ -163,3 +258,16 @@ def test_tampered_outcomes_are_refused_each_with_its_own_code(
 
     codes = {name: (d or {}).get("code") for name, d in diagnostics.items()}
     assert codes == {name: code for name, (_, code) in TAMPERED.items()}, diagnostics
+
+
+def test_the_evaluator_refuses_an_older_evaluation(tmp_path: Path) -> None:
+    evaluator = _evaluator()
+    stale = {
+        "is format 7": {"format": 7, "outcome_version": RecyclingRun.VERSION},
+        "of version 1": {"format": evaluator.FORMAT, "outcome_version": 1},
+    }
+    for refusal, header in stale.items():
+        source = tmp_path / "evaluation.json"
+        source.write_text(json.dumps({**header, "rounds": []}))
+        with pytest.raises(SystemExit, match=refusal):
+            evaluator.reclassify(source)

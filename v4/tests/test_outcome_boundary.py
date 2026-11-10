@@ -16,8 +16,10 @@ code of the rule it breaks:
 - ``no_grasp_privileged``, ``no_grasp_held``, ``no_grasp_attached``, ``no_grasp_raced``:
   an object the hand has no grasp of, refused on privileged evidence, held, attached, or
   raced;
-- ``place_back_unrelated``: an object placed back after a failure other than
-  ``no_drop_zone``;
+- ``place_back_unrelated``: an object placed back after a failure other than its drop's
+  transfer not planning;
+- ``undroppable_held``: an object no resting orientation of which fits the bin's
+  opening, refused before it is raced, yet held;
 - ``failure_missing``: an attempt by a selected arm whose drop failed, with no failure
   and every evaluated check passed;
 - ``failure_missing_evaluated``: an attempt by a selected arm whose grasp failed and
@@ -33,8 +35,10 @@ Three copies have the shape of a real outcome and must decode: ``bounced_out``, 
 attempt whose every skill succeeded but whose object came to rest outside the bin
 (``in_bin`` false), not succeeded and with no failure: the evaluation explains it;
 ``no_grasp``, the first attempt replaced by one refused at ``grasp.regions`` as
-``recycling`` records it; and ``placed_back``, the first attempt's drop replaced by
-``no_drop_zone`` and a place-back that did not release, as when the placement fails.
+``recycling`` records it; ``undroppable``, the same refused at ``drop.zone`` as
+``no_drop_zone``, no resting orientation of it fitting the bin's opening; and
+``placed_back``, the first attempt's drop failing at its transfer, not planned, and a
+place-back that did not release, as when the placement fails.
 
 The corpus evaluator refuses to reclassify an evaluation of format 7, or of outcomes of
 version 1.
@@ -130,18 +134,37 @@ def _forged_no_grasp(**change: Any) -> Callable[[dict[str, Any]], None]:
     return forge
 
 
+def _undroppable(run: dict[str, Any]) -> None:
+    _no_grasp(run)
+    run["attempts"][0]["failure"].update(
+        skill="drop",
+        stage="zone",
+        reason=NO_DROP_ZONE,
+        detail="no resting orientation of it fits the bin's opening",
+    )
+
+
+def _undroppable_held(run: dict[str, Any]) -> None:
+    _undroppable(run)
+    run["attempts"][0]["failure"]["held"] = True
+
+
 def _placed_back(run: dict[str, Any]) -> None:
     attempt = run["attempts"][0]
-    attempt.update(drop=None, landing=None, succeeded=False)
+    attempt.update(landing=None, succeeded=False)
+    attempt["drop"] = [
+        {"name": "preflight", "succeeded": True},
+        {"name": "transfer", "succeeded": False},
+    ]
     attempt["times"].update(released=None, landed=None)
     checks = attempt["bin"]["checks"]
     checks.update(dropped=False, released=False, landed=False, in_bin=False)
     attempt["failure"] = {
         "skill": "drop",
-        "stage": "zone",
-        "reason": NO_DROP_ZONE,
+        "stage": "transfer",
+        "reason": "not_planned",
         "cause": None,
-        "detail": "no drop zone fits the object as it is held",
+        "detail": "no plan in 8 seeds, ending where the release is clear",
         "evidence": "planned",
         "held": True,
         "attached": True,
@@ -149,7 +172,7 @@ def _placed_back(run: dict[str, Any]) -> None:
     attempt["recovery"] = {
         "action": RecoveryAction.PLACE_BACK.value,
         "released": False,
-        "detail": "no drop zone fits it as held; placed back: failed",
+        "detail": "no release planned as it was held; placed back: failed",
     }
 
 
@@ -209,6 +232,8 @@ TAMPERED: dict[str, tuple[Callable[[dict[str, Any]], None], str | None]] = {
     "other_version": (_other_version, "version_mismatch"),
     "old_version": (_old_version, "version_mismatch"),
     "no_grasp": (_no_grasp, None),
+    "undroppable": (_undroppable, None),
+    "undroppable_held": (_undroppable_held, "inconsistent_failure"),
     "no_grasp_privileged": (_forged_no_grasp(evidence="privileged"), "inconsistent_failure"),
     "no_grasp_held": (_forged_no_grasp(held=True), "inconsistent_failure"),
     "no_grasp_attached": (_forged_no_grasp(attached=True), "inconsistent_failure"),

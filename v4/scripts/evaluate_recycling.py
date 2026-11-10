@@ -72,9 +72,9 @@ from typing import Any
 
 from ssrobot import PlanStatus, StageOutcome, dumps, loads
 
-from geodude.outcomes import NO_GRASP, Attempt, Disposition, RecyclingRun
+from geodude.outcomes import NO_DROP_ZONE, NO_GRASP, Attempt, Disposition, RecyclingRun
 
-FORMAT = 9
+FORMAT = 10
 """The evaluation artifact's format: raised whenever a field's meaning changes. 2: per
 object, its attempts, where it finally rests, and its verdict, in place of one outcome
 and its mechanism. 3: each round's and object's ``timing``. 4: a failure's ``reason`` and
@@ -97,12 +97,15 @@ evaluation records (``outcome_version``), in place of the round's ``staged``,
 candidate outranked by the chosen one without its plans, so a planning timeout counts
 only where it could have decided the race. 8: outcomes of ``RecyclingRun`` version 2; an
 object the hand has no grasp of is attempted once, armless and unraced, and judged
-``grasp.regions:no_grasp``; an object held with no drop zone that fits it is placed back
+``grasp.regions:no_grasp``; an object held with no drop zone that fitted it was placed back
 on the worktop and not attempted again. 9: outcomes of ``RecyclingRun`` version 3; a
 gripper command refused before it ran, its fingers about to touch something they must
 not (ssgrasping#54), is judged ``<skill>.<stage>:gripper_obstructed``; a recovery's
 refused open leaves an object in place still held, or, one that had left the hand,
-detached with the fingers unopened."""
+detached with the fingers unopened. 10: outcomes of ``RecyclingRun`` version 4; drops
+release an object in its resting orientations over the opening, composed with how it is
+held (#260): an object no orientation of which fits is refused before it is raced
+(``drop.zone``, armless), and a place-back follows a drop whose transfer did not plan."""
 CORPORA = {
     "development": range(0, 40),
     "acceptance": range(1000, 1040),
@@ -227,7 +230,8 @@ def classify(attempt: Attempt | None) -> str:
         return "not_attempted"
     if attempt.succeeded:
         return "recycled"
-    if attempt.failure is not None and attempt.failure.reason == NO_GRASP:  # never raced
+    # Refused before it was raced: no grasp, or no resting orientation fits the opening.
+    if attempt.failure is not None and attempt.failure.reason in (NO_GRASP, NO_DROP_ZONE):
         f = attempt.failure
         return f"{f.skill}.{f.stage}:{f.reason}"
     if attempt.arm is None:  # the race chose none

@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import dataclasses
+import functools
 import hashlib
 import importlib.metadata
 import json
@@ -95,6 +96,7 @@ from ssrobot import (
     SceneSnapshot,
     StageOutcome,
     Timestamp,
+    Tsr,
     ValidationError,
     WrenchGuard,
     WrenchPart,
@@ -143,6 +145,9 @@ PLACE_TOLERANCE_M = 0.01
 """How far outside its region a placed object may rest and still count: the transfer may
 aim at a region's edge, and the arm tracks a plan only to the runtime's goal tolerance
 (0.01 rad per joint), a few millimetres at the hand."""
+FALL_M = 0.25
+"""How far below its release a dropped object's fall is checked clear of the robot
+(``DropSpec.fall_m``): further than the 2F-140, holding it, reaches below it."""
 CARRY_SCALING = 0.7
 """The fraction of the joints' velocity and acceleration limits a held can is carried at:
 at full speed, sscbirrt 3.11's transfers swing the wrist fast enough to throw it from the
@@ -505,14 +510,14 @@ def drop_in_bin(
     planners: tuple[Planner, Planner],
     tick: Callable[[], None] = lambda: None,
 ) -> tuple[SkillResult, SkillResult | None]:
-    """Drop the held ``obj`` into the bin on ``arm``'s side, from wherever over it the
-    object, as it is held, falls clear of the rim (``held_drop_spec``), then observe
-    whether it came to rest inside (``landing_spec``). The drop's result, and the
-    landing's when the release was confirmed."""
+    """Drop the held ``obj`` into the bin on ``arm``'s side, released in one of its resting
+    orientations over the opening (``drop_spec``), then observe whether it came to rest
+    inside (``landing_spec``). The drop's result, and the landing's when the release was
+    confirmed."""
     planner, checker = planners
-    spec = held_drop_spec(ctx, drop_spec(obj, arm), arm)
+    spec = drop_spec(obj, arm)
     if spec is None:
-        raise ValueError(f"no drop zone over {arm.bin[0]} fits {obj!r} as it is held")
+        raise ValueError(f"no resting orientation of {obj!r} fits {arm.bin[0]}'s opening")
     dropping = drop(ctx, planner, spec, check_planner=checker, released=assume_landed(ctx, obj))
     dropped = drive(ctx, dropping, tick)
     if not _released(dropped):
@@ -520,12 +525,15 @@ def drop_in_bin(
     return dropped, drive(ctx, landing(ctx, landing_spec(obj, arm), _landed(dropped)), tick)
 
 
-def drop_spec(obj: str, arm: Arm) -> DropSpec:
-    """The drop of ``obj`` by ``arm`` into its bin from the legacy demo's drop zone: what
-    the race checks before anything is held. The drop that runs is ``held_drop_spec``'s."""
+def drop_spec(obj: str, arm: Arm) -> DropSpec | None:
+    """The drop of ``obj`` by ``arm`` into its bin: released in one of its resting
+    orientations over the bin's opening (``regions.bin_drops``), regions for the object
+    that ssgrasping composes with how it is held, in the race and in the drop that runs
+    alike. None when no orientation fits the opening (``undroppable``)."""
     name, base = arm.bin
-    container = meta(kind_of(name))
-    height = regions.standing_height(*physical(kind_of(obj)))
+    drops = _bin_drops(kind_of(name), base, kind_of(obj))
+    if not drops:
+        return None
     return DropSpec(
         manipulator=arm.manipulator,
         end_effector=arm.hand,
@@ -534,44 +542,28 @@ def drop_spec(obj: str, arm: Arm) -> DropSpec:
         object=obj,
         container=name,
         normal=UP,
-        regions=[regions.drop_zone(container, base, height)],
+        regions=drops,
         retreat_m=0.0,  # the next can's motion starts from the drop: no retreat (#223)
+        fall_m=FALL_M,
         carry_scaling=CARRY_SCALING,
         clearance_m=CLEARANCE_M,
     )
 
 
-def no_zone(ended: Stage) -> outcomes.Failure:
-    """The failure recorded when ``held_drop_spec`` finds no zone: nothing was dropped. Its
-    held and attached state are the grasp's, as it ``ended``."""
-    return outcomes.Failure(
-        skill="drop",
-        stage="zone",
-        reason=outcomes.NO_DROP_ZONE,
-        cause=None,
-        detail="no drop zone fits the object as it is held",
-        evidence=Evidence.PLANNED,
-        held=ended.held,
-        attached=ended.attached,
-    )
+@functools.cache
+def _bin_drops(container: str, base: tuple[float, float, float], kind: str) -> tuple[Tsr, ...]:
+    """``regions.bin_drops`` for an object of ``kind`` into a ``container`` standing at
+    ``base``: it depends on nothing else, and every race asks again."""
+    return tuple(regions.bin_drops(meta(container), base, physical(kind)[0], CLEARANCE_M))
 
 
-def held_drop_spec(ctx: RobotContext, raced: DropSpec, arm: Arm) -> DropSpec | None:
-    """``raced``, the drop the race planned with the legacy zone (``drop_spec``), over the
-    zones where the object, as it is now held, falls clear of the bin's rim
-    (``regions.held_drop_zones``), a ``CLEARANCE_M`` inside its walls. None when no zone
-    fits: the object, held so, cannot be dropped clear of the rim."""
-    attachment = ctx.scene.attachment(raced.object)
-    assert attachment is not None  # a grasp that succeeded left it attached
-    name, base = arm.bin
-    zones = regions.held_drop_zones(
-        meta(kind_of(name)),
-        base,
-        physical(kind_of(raced.object))[0],
-        attachment.transform,
-        CLEARANCE_M,
-    )
-    return dataclasses.replace(raced, regions=zones) if zones else None
+def undroppable(obj: str) -> str | None:
+    """Why no resting orientation of ``obj`` fits a bin's opening, or None when one does.
+    It depends on the object's shape and the bin's, not on where either stands, and both
+    bins are the same, so this is asked once, before ``obj`` is raced."""
+    if drop_spec(obj, Arm(next(iter(BIN_OF)))) is not None:
+        return None
+    return "no resting orientation of it fits the bin's opening"
 
 
 def landing_spec(obj: str, arm: Arm) -> LandingSpec:
@@ -832,8 +824,7 @@ def bin_outcome(
 ) -> outcomes.Attempt:
     """What a pick, drop, and landing achieved, observed when the landing ends, or the
     drop when it released nothing: every stage, whether the release was confirmed, and
-    what is still attached, which may be the next object. A grasp that succeeded with
-    nothing dropped found no drop zone (``no_zone``). With ``evaluate``, where ``obj``
+    what is still attached, which may be the next object. With ``evaluate``, where ``obj``
     rests, from its privileged pose, relative to the bin's base: ``succeeded`` requires
     every stage to succeed, ``obj`` no longer attached, its landing scored ``confirmed``
     (``landed``), and its centre within the bin's prl_assets interior: inside its inner
@@ -856,8 +847,6 @@ def bin_outcome(
         in_bin=None if final is None else _in_bin(final, arm),
     )
     failure = _failure(picked, dropped, landed)
-    if picked.succeeded and dropped is None:
-        failure = no_zone(picked.stage)
     return outcomes.Attempt(
         object=obj,
         number=number,
@@ -1016,8 +1005,7 @@ def safe_release(failed: Stage | None) -> outcomes.RecoveryAction | None:
     stage's name, its reason and cause, whether the skill then believed the object held,
     and the object still declared attached; never by its detail, which is prose. A lost
     object is detached only if the skill reported it not held (``held`` exactly False).
-    None, with no failed stage: every skill succeeded and the object is still held, as
-    when no drop zone fits it."""
+    None, with no failed stage: every skill succeeded and the object is still held."""
     if failed is None or not failed.attached:
         return None
     if (failed.name, failed.reason) == ("lift", Reason.NOT_PLANNED):  # only a grasp lifts
@@ -1052,12 +1040,12 @@ def recover(
       gripper's opening showed the fingers close past it, and the carry stopped there.
       Nothing is in the hand, so opening it releases nothing: open, and detach once the
       fingers have opened, so the scene no longer carries the object.
-    - **Held, with no drop zone that fits it** (no failed stage: every skill succeeded,
-      and ``held_drop_spec`` found no zone): it is held as it was lifted, so it is put
-      back on the worktop, standing as its model file stands it, at ``origin``, where it
-      was picked from (``place_on_worktop``), and registered where it rests. This needs
-      ``package``, ``checker`` and ``origin``, which ``recycle`` gives only when
-      ``held_drop_spec`` found no zone; without them nothing is done.
+    - **Held, with no release that plans** (the drop's ``transfer``, ``not_planned``:
+      nothing moved since the lift): it is held as it was lifted, so it is put back on
+      the worktop, standing as its model file stands it, at ``origin``, where it was
+      picked from (``place_on_worktop``), and registered where it rests. This needs
+      ``package``, ``checker`` and ``origin``, which ``recycle`` gives only then; without
+      them nothing is done.
     - **Anything else:** the object may be suspended, or its support unknown, so nothing
       is done, and it stays declared held.
     The fingers are never opened onto nothing known, nor where, opened, they would touch
@@ -1108,7 +1096,11 @@ def recover(
             released=refused is None,
             detail=refused or "detached: the object had left the hand",
         )
-    if failed is None and package is not None and checker is not None and origin is not None:
+    unreleasable = failed is not None and (failed.name, failed.reason) == (
+        "transfer",
+        Reason.NOT_PLANNED,
+    )
+    if unreleasable and package is not None and checker is not None and origin is not None:
         # Released, the place registers it where it rests, by ``read``.
         placed = place_on_worktop(
             ctx, package, obj, origin, arm=arm, planners=(planner, checker), tick=tick, read=read
@@ -1117,13 +1109,13 @@ def recover(
         return outcomes.Recovery(
             action=PLACE_BACK,
             released=released,
-            detail=f"no drop zone fits it as held; placed back: {placed.state.value}",
+            detail=f"no release planned as it was held; placed back: {placed.state.value}",
         )
     return outcomes.Recovery(
         action=None,
         released=False,
         detail="no safe release "
-        + ("with no drop zone" if failed is None else f"after {failed.name}")
+        + ("with every skill succeeded" if failed is None else f"after {failed.name}")
         + ": still declared held",
     )
 
@@ -1266,6 +1258,16 @@ class _Pending:
             succeeded=False,
         )
 
+    def undroppable(self, detail: str) -> None:
+        """No resting orientation of the object fits a bin's opening
+        (``recycling.undroppable``): it was never raced, and nothing ran."""
+        self.ungraspable(detail)
+        assert self.attempt is not None and self.attempt.failure is not None
+        failure = dataclasses.replace(
+            self.attempt.failure, skill="drop", stage="zone", reason=outcomes.NO_DROP_ZONE
+        )
+        self.attempt = dataclasses.replace(self.attempt, failure=failure)
+
     def unselected(self) -> None:
         """No arm's prefix planned: nothing ran."""
         self.attempt = outcomes.Attempt(
@@ -1362,12 +1364,12 @@ def recycle(
     attempt, recorded ``no_grasp`` before any raced one, has neither arm nor race.
 
     An attempt that fails with the object still attached is recovered by ``recover``: an
-    object held with no drop zone that fits it is placed back where it was picked from,
-    and not raced again, since raced again it would be held so again. If nothing is safe,
-    the round stops there, the object declared held. An object released
-    back onto the worktop, upright, is raced again from the current state, up to
-    ``retries`` more times. So is an object the grasp observably missed (``missed``: the
-    fingers closed on nothing), which may have moved since it was registered: whatever
+    object held whose drop's transfer did not plan is placed back where it was picked
+    from. If nothing is safe, the round stops there, the object declared held. An object
+    released back onto the worktop, upright, placed back or released in place, is raced
+    again from the current state, up to ``retries`` more times. So is an object the grasp
+    observably missed (``missed``: the fingers closed on nothing), which may have moved
+    since it was registered: whatever
     was planned ahead is discarded, every free object on the table is registered again,
     and the object is raced again from a fresh snapshot. Each attempt records the scene
     revision of the registration its race planned on (``registration``). A landing still
@@ -1390,6 +1392,14 @@ def recycle(
         entry = _Pending(obj, 1, None, registration)
         entry.ungraspable(why)
         pendings.append(entry)
+    # So is an object no resting orientation of which fits a bin's opening: picked, it
+    # could only be put back.
+    for obj in objects:
+        if obj not in refused and (why := undroppable(obj)) is not None:
+            refused[obj] = why
+            entry = _Pending(obj, 1, None, registration)
+            entry.undroppable(why)
+            pendings.append(entry)
     queue = [obj for obj in objects if obj not in refused]
     attempts: dict[str, int] = {}
     looking: Lookahead | None = None
@@ -1434,12 +1444,9 @@ def recycle(
         origin = registered_pose(ctx, obj).position[:2]  # where it is picked from
         picked = drive(ctx, selection.grasp(ctx, lookahead=looking), stepped)
         dropped = None
-        spec = None
+        spec = selection.candidate.drop
+        assert spec is not None  # every candidate drops
         if picked.succeeded:
-            raced = selection.candidate.drop
-            assert raced is not None  # every candidate drops
-            spec = held_drop_spec(ctx, raced, arm)
-        if spec is not None:
             following = queue[i + 1] if i + 1 < len(queue) else None
             dropping = drop(
                 ctx,
@@ -1469,7 +1476,8 @@ def recycle(
             pending = _drop_racing_next(ctx, dropping, race_next if following else None, stepped)
             assert dropping.result is not None
             dropped = dropping.result
-            released.append(obj)
+            if _released(dropped):  # only a released object is unsettled, as it lands
+                released.append(obj)
             if pending is not None and not _released(dropped):
                 # Planned on a release that did not happen: none of it can be used. Stop it,
                 # rather than let it finish, and race again.
@@ -1510,7 +1518,12 @@ def recycle(
         if ctx.scene.attachment(obj) is None:
             continue
         failed = failed_stage(picked, dropped)
-        no_zone = picked.succeeded and spec is None
+        # Held, with no transfer to a release that plans: nothing moved since the lift.
+        unreleasable = (
+            dropped is not None
+            and dropped.stage.name == "transfer"
+            and dropped.stage.reason is Reason.NOT_PLANNED
+        )
         recovery = recover(
             ctx,
             obj,
@@ -1522,15 +1535,12 @@ def recycle(
             read,
             package=package,
             checker=checker,
-            # Only an object no drop zone fits is placed back (``no_zone``).
-            origin=(float(origin[0]), float(origin[1])) if no_zone else None,
+            # Only an object with no release that plans is placed back.
+            origin=(float(origin[0]), float(origin[1])) if unreleasable else None,
         )
         entry.recovered(recovery)
         if not recovery.released:
             break  # still held, and nothing safe to do: the round stops, declared so
-        if recovery.action is PLACE_BACK:
-            # No drop zone fits it as it was held; raced again, it would be held so again.
-            continue
         if attempts[obj] <= retries:
             register(ctx, [obj], read)  # where the recovery left it, for the retry
             if _upright_on_worktop(ctx, obj, start):

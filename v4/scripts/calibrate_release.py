@@ -3,15 +3,16 @@ falls past the rim (#237).
 
 The release itself moves an object: the pads let go of one side first, so it tilts and
 drifts as it slides out, and a corner that sweeps over the rim before the object's bottom
-has fallen below it strikes the rim. This script measures that sweep, away from any bin.
-It is why ``regions.held_drop_zones`` releases below the rim instead.
+has fallen below it strikes the rim. This script measures that sweep, away from any bin:
+``regions.RELEASE_DRIFT_M`` keeps a release that far inside the opening.
 
 Each trial stages one object of a legacy type (``recycling.MIX_KINDS``) at a seed, with
 the bins staged far out of reach, and runs the demo's own skills on it: ``pick``, then
-``drop`` from the legacy zone over the bin's real base (``recycling.drop_spec``), which
-releases ``max(0.25, height + 0.10)`` above the rim. Nothing is there to strike, so the
-object falls freely. From the start of
-the drop's ``release`` stage until the object's lowest point falls below the rim's
+``drop`` over the bin's real base (``recycling.drop_spec``), which releases the object
+in one of its resting orientations, its lowest point ``regions.RELEASE_LOWEST_M`` above
+the rim. Nothing is there to strike, so the object falls freely. (The 16 mm
+``RELEASE_DRIFT_M`` cites was measured with the legacy zone, the hand pointing down.)
+From the start of the drop's ``release`` stage until the object's lowest point falls below the rim's
 height, every physics step is read, and the trial records:
 - ``sweep_m``: the most any side of the footprint (the bounding box in x and y of its
   collision geometry's points) moves out beyond where it was when the release began;
@@ -21,7 +22,7 @@ height, every physics step is read, and the trial records:
 
 Points are its collision geometry's (``Shape.surface``): a hull's vertices, a box's
 corners, and a cylinder's rims as inscribed 64-gons, within r(1 - cos(pi/64)) of the
-extremes ``regions.held_drop_zones`` bounds exactly.
+extremes of its support.
 
 Seeds 5000 and up are this calibration's alone: none of the recycling corpora uses them.
 Trials run one process each, so that every trial starts from the same state::
@@ -147,6 +148,8 @@ def trial(kind: str, seed: int) -> dict[str, Any]:
             if not picked.succeeded:
                 return {**out, "outcome": "not picked"}
             spec = recycling.drop_spec(obj, arm)
+            if spec is None:
+                return {**out, "outcome": "no resting orientation fits the opening"}
             dropped = recycling.drive(
                 ctx, drop(ctx, planners[0], spec, check_planner=planners[1]), lambda: None
             )

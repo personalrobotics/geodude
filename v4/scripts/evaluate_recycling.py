@@ -97,7 +97,7 @@ evaluation records (``outcome_version``), in place of the round's ``staged``,
 candidate outranked by the chosen one without its plans, so a planning timeout counts
 only where it could have decided the race. 8: outcomes of ``RecyclingRun`` version 2; an
 object the hand has no grasp of is attempted once, armless and unraced, and judged
-``grasp.regions:no_grasp``; an object held with no drop zone that fits it is placed back
+``grasp.regions:no_grasp``; an object held with no drop zone that fitted it was placed back
 on the worktop and not attempted again. 9: outcomes of ``RecyclingRun`` version 3; a
 gripper command refused before it ran, its fingers about to touch something they must
 not (ssgrasping#54), is judged ``<skill>.<stage>:gripper_obstructed``; a recovery's

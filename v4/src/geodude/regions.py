@@ -172,9 +172,9 @@ def bin_drops(
     ``meta.yaml``) standing at ``base``, by sstsr's ``OpeningPlacer`` on its declared top
     opening: regions for the object's frame, one per resting orientation that fits, any
     yaw, its lowest point ``RELEASE_LOWEST_M`` above the rim, and the whole object
-    ``clearance`` plus ``RELEASE_DRIFT_M`` inside the opening. None when no orientation
-    fits. They are for the object, not the hand: ssgrasping's ``drop`` composes them with
-    how it is held."""
+    ``clearance`` plus ``RELEASE_DRIFT_M`` inside the opening. Empty when no
+    orientation fits. They are for the object, not the hand: ssgrasping's ``drop``
+    composes them with how it is held."""
     top = opening(container, base)
     placer = OpeningPlacer(size=(2 * top.half[0], 2 * top.half[1]), depth=top.depth)
     templates = placer.place(
@@ -193,12 +193,6 @@ def _span(shape: Shape, rotation: np.ndarray, origin: np.ndarray, axis: int) -> 
     describes, at ``rotation`` with its origin at ``origin``: exact, from its support."""
     n = rotation[axis]  # the world axis, in the object's frame
     return float(origin[axis]) - shape.support(-n), float(origin[axis]) + shape.support(n)
-
-
-def standing_height(shape: Shape, rest: np.ndarray) -> float:
-    """How tall the object ``shape`` describes stands as ``rest`` stands it."""
-    up = rest[:3, :3].T[:, 2]  # world up, in the object's frame
-    return float(shape.support(up) + shape.support(-up))
 
 
 def lowest(shape: Shape, at: np.ndarray) -> float:

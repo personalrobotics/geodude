@@ -91,7 +91,8 @@ class RecoveryAction(enum.StrEnum):
     RELEASE_IN_PLACE = "release in place"
     RELEASE_LOST = "detach the lost object"
     PLACE_BACK = "place back on the worktop"
-    """Held firmly with no drop zone that fits it: put back where it was picked from."""
+    """Held firmly with no transfer to a release that plans: put back where it was picked
+    from."""
 
 
 class RaceBasis(enum.StrEnum):

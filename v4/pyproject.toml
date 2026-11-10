@@ -25,8 +25,9 @@ dependencies = [
     "ssgrasping[sstsr] @ git+https://github.com/personalrobotics/ssgrasping@7d9f83e1828e4930bdab135565659158197dab51",
     # With its placement extra: collision_shape, an object's collision geometry for
     # StablePlacer.place (prl_assets#50), each container's measured opening (#49), and the
-    # grasp regions measured by recipe (#52).
-    "prl-assets[placement] @ git+https://github.com/personalrobotics/prl_assets@746f831c0b877bec9e6c205f78f464da37f40ee3",
+    # grasp regions measured by recipe (#52), and flat resting faces for the scanned
+    # boxes and bottles (#54).
+    "prl-assets[placement] @ git+https://github.com/personalrobotics/prl_assets@6b5cc8d029e97264c59e61631f437e5999b671fa",
     # The 2F-140 driven like the real gripper (geodude_assets#38), with its declared
     # completion detector (#40), and each pad's torsional friction its contact face's
     # (#41), its MuJoCo rest criteria (#46), the driver's real 0.7 rad travel (#51), and

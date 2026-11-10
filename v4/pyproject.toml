@@ -22,7 +22,7 @@ dependencies = [
     # Pinned by commit: the contracts and skills this app is proven against.
     "ssrobot[mujoco,planning] @ git+https://github.com/personalrobotics/ssrobot@87dac5842b62a9637fc4320496bf42add970fbd8",
     # With its sstsr adapter (ssgrasping.sstsr), whose requirements the resolver enforces.
-    "ssgrasping[sstsr] @ git+https://github.com/personalrobotics/ssgrasping@7d9f83e1828e4930bdab135565659158197dab51",
+    "ssgrasping[sstsr] @ git+https://github.com/personalrobotics/ssgrasping@d2940c05321436824cb1df4990a201d3a8650471",
     # With its placement extra: collision_shape, an object's collision geometry for
     # StablePlacer.place (prl_assets#50), each container's measured opening (#49), and the
     # grasp regions measured by recipe (#52), and flat resting faces for the scanned

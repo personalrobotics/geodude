@@ -146,10 +146,11 @@ CARRY_SCALING = 0.7
 at full speed, sscbirrt 3.11's transfers swing the wrist fast enough to throw it from the
 fingers (personalrobotics/ssgrasping#16)."""
 CLEARANCE_M = 0.005
-"""The clearance the grasp's pregrasp and the drop's transfer, Geodude's moves through
-free space, keep from the worktop, the bins and the other cans
+"""The clearance the grasp's pregrasp and the drop's and the place's transfers, Geodude's
+moves through free space, keep from the worktop, the bins and the other objects
 (``PlanningRequest.clearance_m``). Over 100 seeds of four cans, racing: 380 cans
-recycled against 344 with none (personalrobotics/ssrobot#183)."""
+recycled against 344 with none (personalrobotics/ssrobot#183). Without it, a held object
+put back on the worktop was carried grazing a can, and knocked it over (#272)."""
 LINE_TOLERANCE_M = 0.002
 """How far a straight approach or lift may stray from its line (``GraspSpec``'s
 ``line_tolerance_m``, 1 mm by default). After rest, the arm arrives at a pregrasp 0.6 mm
@@ -483,6 +484,7 @@ def place_on_worktop(
         retreat_m=0.08,
         region_tolerance=(PLACE_TOLERANCE_M, PLACE_TILT_RAD),
         carry_scaling=CARRY_SCALING,
+        clearance_m=CLEARANCE_M,
     )
     # Released, the object rests on the worktop, where registration sees it again.
     placing = place(

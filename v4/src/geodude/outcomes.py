@@ -12,14 +12,15 @@ version, a duplicate key, or a non-finite number, and never coerces. Each record
 - ``inconsistent_destination``: an attempt's result is not that of its destination;
 - ``inconsistent_success``: ``succeeded`` disagrees with the checks;
 - ``inconsistent_failure``: a failure without an arm, or beside a success, except
-  ``no_grasp``, which an attempt with neither arm nor race carries, at grasp.regions, on
-  planned evidence, neither held nor attached, with no lookahead, times or recovery;
+  ``no_grasp`` at grasp.regions and ``no_drop_zone`` at drop.zone, which an attempt with
+  neither arm nor race carries, on planned evidence, neither held nor attached, with no
+  lookahead, times or recovery: an object refused before it is raced;
 - ``missing_failure``: a selected arm's attempt with a failed skill check and no failure
   (an object that bounced out of its bin after every skill succeeded is explained by
   ``in_bin`` alone, and needs none);
 - ``inconsistent_recovery``: a recovery without a failure, a release without an action,
-  or a place-back other than of a selected arm's object bound for a bin after
-  ``no_drop_zone`` (released or not: the placement itself can fail);
+  or a place-back other than of a selected arm's object bound for a bin whose drop's
+  transfer did not plan (released or not: the placement itself can fail);
 - ``incomplete_landing``: a released, evaluated drop without its landing;
 - ``unknown_reason``: a failure's reason is neither ssgrasping's nor ``no_drop_zone`` or
   ``no_grasp``;
@@ -42,7 +43,10 @@ records only what its selection claims (``Race``). ``RecyclingRun.VERSION`` vers
 format, and only it. 2: the reason ``no_grasp`` and the recovery ``place back on the
 worktop``, which a version 1 decoder cannot read. 3: ssgrasping's reason
 ``gripper_obstructed``, a gripper command refused before it ran (ssgrasping#54), which a
-version 2 decoder cannot read.
+version 2 decoder cannot read. 4: drops to regions for the object (#260): ``no_drop_zone``
+refuses an object before it is raced, armless, when no resting orientation of it fits
+the bin's opening, and a place-back follows a drop whose transfer did not plan, which a
+version 3 decoder cannot read.
 """
 
 from __future__ import annotations
@@ -533,14 +537,15 @@ class Attempt(Value):
                     path="landing",
                 )
         refused = self.failure
-        ungraspable = refused is not None and refused.reason == NO_GRASP
+        before = {NO_GRASP: ("grasp", "regions"), NO_DROP_ZONE: ("drop", "zone")}
+        ungraspable = refused is not None and refused.reason in before
         if (
             refused is not None
             and ungraspable
             and (
                 self.race is not None
                 or self.arm is not None
-                or (refused.skill, refused.stage) != ("grasp", "regions")
+                or (refused.skill, refused.stage) != before.get(refused.reason or "")
                 or refused.evidence is not Evidence.PLANNED
                 or refused.held is not False
                 or refused.attached
@@ -551,9 +556,10 @@ class Attempt(Value):
         ):
             raise ValidationError(
                 "inconsistent_failure",
-                "an object the hand has no grasp of is refused at grasp.regions, on "
-                "planned evidence, neither held nor attached: neither raced nor taken by "
-                "an arm, with nothing planned, timed or recovered",
+                "an object refused before it is raced (no_grasp at grasp.regions, "
+                "no_drop_zone at drop.zone) is so on planned evidence, neither held nor "
+                "attached: neither raced nor taken by an arm, with nothing planned, timed "
+                "or recovered",
                 path="failure",
             )
         if (
@@ -589,13 +595,14 @@ class Attempt(Value):
                 self.arm is None
                 or self.destination is not Destination.BIN
                 or self.failure is None
-                or self.failure.reason != NO_DROP_ZONE
+                or (self.failure.skill, self.failure.stage, self.failure.reason)
+                != ("drop", "transfer", Reason.NOT_PLANNED.value)
             )
         ):
             raise ValidationError(
                 "inconsistent_recovery",
-                "a place-back only of a selected arm's object bound for a bin that no "
-                "drop zone fits",
+                "a place-back only of a selected arm's object bound for a bin whose drop's "
+                "transfer did not plan",
                 path="recovery",
             )
 
@@ -624,7 +631,7 @@ class RecyclingRun(Record):
     rests in a bin (``cleared``)."""
 
     SCHEMA = "geodude.RecyclingRun"
-    VERSION = 3
+    VERSION = 4
 
     seed: int
     blas_kernel: str | None

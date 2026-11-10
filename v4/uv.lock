@@ -267,10 +267,10 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "prl-assets", extras = ["placement"], git = "https://github.com/personalrobotics/prl_assets?rev=6b5cc8d029e97264c59e61631f437e5999b671fa" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ssgrasping", extras = ["sstsr"], git = "https://github.com/personalrobotics/ssgrasping?rev=d2940c05321436824cb1df4990a201d3a8650471" },
+    { name = "ssgrasping", extras = ["sstsr"], git = "https://github.com/personalrobotics/ssgrasping?rev=0e45e1a73dd34eca8ee8f7eec49a932e34eda35b" },
     { name = "ssmjviser", specifier = "==1.0.0" },
-    { name = "ssrobot", extras = ["mujoco", "planning"], git = "https://github.com/personalrobotics/ssrobot?rev=87dac5842b62a9637fc4320496bf42add970fbd8" },
-    { name = "sstsr", specifier = "==4.3.0" },
+    { name = "ssrobot", extras = ["mujoco", "planning"], git = "https://github.com/personalrobotics/ssrobot?rev=297e2684ce487f3331f5985fd909cd342452c185" },
+    { name = "sstsr", specifier = "==4.4.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -988,7 +988,7 @@ ssik = [
 [[package]]
 name = "ssgrasping"
 version = "0.0.1"
-source = { git = "https://github.com/personalrobotics/ssgrasping?rev=d2940c05321436824cb1df4990a201d3a8650471#d2940c05321436824cb1df4990a201d3a8650471" }
+source = { git = "https://github.com/personalrobotics/ssgrasping?rev=0e45e1a73dd34eca8ee8f7eec49a932e34eda35b#0e45e1a73dd34eca8ee8f7eec49a932e34eda35b" }
 dependencies = [
     { name = "ssrobot" },
 ]
@@ -1050,7 +1050,7 @@ wheels = [
 [[package]]
 name = "ssrobot"
 version = "0.0.0"
-source = { git = "https://github.com/personalrobotics/ssrobot?rev=87dac5842b62a9637fc4320496bf42add970fbd8#87dac5842b62a9637fc4320496bf42add970fbd8" }
+source = { git = "https://github.com/personalrobotics/ssrobot?rev=297e2684ce487f3331f5985fd909cd342452c185#297e2684ce487f3331f5985fd909cd342452c185" }
 
 [package.optional-dependencies]
 mujoco = [
@@ -1064,7 +1064,7 @@ planning = [
 
 [[package]]
 name = "sstsr"
-version = "4.3.0"
+version = "4.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1073,9 +1073,9 @@ dependencies = [
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/62/d6/7ea5d956b464ae4ec36c3c7458809c546459c2c88dee0b6f62278f754cb5/sstsr-4.3.0.tar.gz", hash = "sha256:1ae64f30abbdf5e863a209ecf2c9f9040c21cc877b5609e08a3ddaa341fc7d8e", size = 1891241, upload-time = "2026-11-05T19:16:13.566Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/f9/d3133c7a65a950f2a3bc6bfe9299f0d95168be45b6a8b0509eaa6a7f319e/sstsr-4.4.0.tar.gz", hash = "sha256:7c492c6c469c26d9da5cb7886905fe7b8cbb3072fce65987f5383a19490d655c", size = 1907379, upload-time = "2026-11-09T22:23:41.134Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/49/fb/62f07e44c5b9f8d488bb0dbe02afffcbc95e805789035c0b13749b79e9ef/sstsr-4.3.0-py3-none-any.whl", hash = "sha256:0f863a577e10d758c14b851826b33d456faec0790b825b94adfdb786f5630177", size = 150039, upload-time = "2026-11-05T19:16:11.701Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/08/a6e2c7ccca2f34aeec66cc7fe79b6d840b3054bc3e3b1b07d58a65e3f34a/sstsr-4.4.0-py3-none-any.whl", hash = "sha256:0ddea00c27a1d987aabbef5cc3de0a562edf44916c8d7f676573d2de0f55deaa", size = 153778, upload-time = "2026-11-09T22:23:39.771Z" },
 ]
 
 [[package]]

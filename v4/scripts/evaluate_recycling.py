@@ -74,7 +74,7 @@ from ssrobot import PlanStatus, StageOutcome, dumps, loads
 
 from geodude.outcomes import NO_GRASP, Attempt, Disposition, RecyclingRun
 
-FORMAT = 8
+FORMAT = 9
 """The evaluation artifact's format: raised whenever a field's meaning changes. 2: per
 object, its attempts, where it finally rests, and its verdict, in place of one outcome
 and its mechanism. 3: each round's and object's ``timing``. 4: a failure's ``reason`` and
@@ -98,7 +98,11 @@ candidate outranked by the chosen one without its plans, so a planning timeout c
 only where it could have decided the race. 8: outcomes of ``RecyclingRun`` version 2; an
 object the hand has no grasp of is attempted once, armless and unraced, and judged
 ``grasp.regions:no_grasp``; an object held with no drop zone that fits it is placed back
-on the worktop and not attempted again."""
+on the worktop and not attempted again. 9: outcomes of ``RecyclingRun`` version 3; a
+gripper command refused before it ran, its fingers about to touch something they must
+not (ssgrasping#54), is judged ``<skill>.<stage>:gripper_obstructed``; a recovery's
+refused open leaves an object in place still held, or, one that had left the hand,
+detached with the fingers unopened."""
 CORPORA = {
     "development": range(0, 40),
     "acceptance": range(1000, 1040),
@@ -240,8 +244,8 @@ def classify(attempt: Attempt | None) -> str:
         failed = sorted(k for k, ok in attempt.checks.items() if not ok)
         return "checks:" + "+".join(failed)
     skill, stage, reason, cause = failure.skill, failure.stage, failure.reason, failure.cause
-    # Nothing in the fingers, lost in the lift, or a gripper command refused: the fingers
-    # would have touched something they must not.
+    # Nothing in the fingers, lost in the lift, or a gripper command refused before it
+    # ran: each a mechanism of its own.
     if reason in ("missed", "lost", "gripper_obstructed"):
         return f"{skill}.{stage}:{reason}"
     if reason == "not_planned" and cause is not None:  # the planner's status

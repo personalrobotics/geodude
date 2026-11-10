@@ -40,7 +40,9 @@ Nothing here depends on how long anything took in wall-clock time, or where a fi
 two runs of the same seed on the same OpenBLAS kernel encode to the same bytes. A race
 records only what its selection claims (``Race``). ``RecyclingRun.VERSION`` versions this
 format, and only it. 2: the reason ``no_grasp`` and the recovery ``place back on the
-worktop``, which a version 1 decoder cannot read.
+worktop``, which a version 1 decoder cannot read. 3: ssgrasping's reason
+``gripper_obstructed``, a gripper command refused before it ran (ssgrasping#54), which a
+version 2 decoder cannot read.
 """
 
 from __future__ import annotations
@@ -622,7 +624,7 @@ class RecyclingRun(Record):
     rests in a bin (``cleared``)."""
 
     SCHEMA = "geodude.RecyclingRun"
-    VERSION = 2
+    VERSION = 3
 
     seed: int
     blas_kernel: str | None

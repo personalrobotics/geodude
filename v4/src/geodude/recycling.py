@@ -95,6 +95,7 @@ from ssrobot import (
     SceneSnapshot,
     StageOutcome,
     Timestamp,
+    ValidationError,
     WrenchGuard,
     WrenchPart,
     dumps,
@@ -979,7 +980,10 @@ def _release(
     ``allow``: otherwise nothing is commanded, ``gripper_obstructed``, naming what they
     would touch (personalrobotics/geodude#272: opened beside the other arm, they would
     touch its hand, and every later plan would start in collision)."""
-    touched = obstructing(ctx, ctx.snapshot(), arm.manipulator, arm.gripper, "open", allow)
+    try:
+        touched = obstructing(ctx, ctx.snapshot(), arm.manipulator, arm.gripper, "open", allow)
+    except ValidationError as e:  # such as a description that declares no positions
+        return f"the fingers' end could not be checked: {e.code}"
     if touched:
         return (
             f"{Reason.GRIPPER_OBSTRUCTED.value}: the fingers open would touch {', '.join(touched)}"
@@ -1058,9 +1062,11 @@ def recover(
       is done, and it stays declared held.
     The fingers are never opened onto nothing known, nor where, opened, they would touch
     anything but the object or, released in place, its support (``_release``): then
-    nothing is commanded and the object stays declared held. ``obj`` is detached only
-    after they reached open. Returns what was done: its ``action`` (None when nothing),
-    whether ``obj`` was ``released``, and a ``detail``."""
+    nothing is commanded, and an object released in place stays declared held, while one
+    that had left the hand is detached all the same, the fingers left as they are.
+    Otherwise ``obj`` is detached only after they reached open. Returns what was done:
+    its ``action`` (None when nothing), whether ``obj`` was ``released``, and a
+    ``detail``."""
     action = safe_release(failed)
     if action == RELEASE_IN_PLACE:
         refused = _release(ctx, obj, arm, spec, tick, allow=(obj, spec.support))
@@ -1088,6 +1094,15 @@ def recover(
         )
     if action == RELEASE_LOST:
         refused = _release(ctx, obj, arm, spec, tick, allow=(obj,))
+        if refused is not None and ctx.scene.attachment(obj) is not None:
+            # The object had left the hand, so the scene must not carry it there; the
+            # fingers, though, stay as they are rather than open into what they would touch.
+            ctx.detach(obj)
+            return outcomes.Recovery(
+                action=RELEASE_LOST,
+                released=True,
+                detail=f"detached: the object had left the hand; the fingers not opened: {refused}",
+            )
         return outcomes.Recovery(
             action=RELEASE_LOST,
             released=refused is None,

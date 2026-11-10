@@ -70,6 +70,7 @@ from ssgrasping import (
     grasp,
     grasp_regions,
     landing,
+    obstructing,
     place,
     run_together,
 )
@@ -394,6 +395,7 @@ def grasp_spec(ctx: RobotContext, obj: str, arm: Arm) -> GraspSpec:
             lift_m=0.06,
             line_tolerance_m=LINE_TOLERANCE_M,
             clearance_m=CLEARANCE_M,
+            lift_scaling=CARRY_SCALING,
         )
     geometry = meta(kind_of(obj))["geometric_properties"]
     return GraspSpec(
@@ -409,6 +411,7 @@ def grasp_spec(ctx: RobotContext, obj: str, arm: Arm) -> GraspSpec:
         lift_m=0.06,
         line_tolerance_m=LINE_TOLERANCE_M,
         clearance_m=CLEARANCE_M,
+        lift_scaling=CARRY_SCALING,
     )
 
 
@@ -960,11 +963,27 @@ def _wait(ctx: RobotContext, execution: Execution, tick: Callable[[], None]) -> 
 
 
 def _release(
-    ctx: RobotContext, obj: str, arm: Arm, spec: GraspSpec, tick: Callable[[], None]
+    ctx: RobotContext,
+    obj: str,
+    arm: Arm,
+    spec: GraspSpec,
+    tick: Callable[[], None],
+    allow: tuple[str, ...],
 ) -> str | None:
     """Open ``arm``'s gripper, and detach ``obj`` only once the fingers reached their open
     target, nothing between them. None when released; otherwise why not, ``obj`` still
-    attached."""
+    attached.
+
+    As the skills check every gripper command (ssgrasping's ``obstructing``), the fingers
+    are opened only if, opened where the arm is, they would touch nothing new but
+    ``allow``: otherwise nothing is commanded, ``gripper_obstructed``, naming what they
+    would touch (personalrobotics/geodude#272: opened beside the other arm, they would
+    touch its hand, and every later plan would start in collision)."""
+    touched = obstructing(ctx, ctx.snapshot(), arm.manipulator, arm.gripper, "open", allow)
+    if touched:
+        return (
+            f"{Reason.GRIPPER_OBSTRUCTED.value}: the fingers open would touch {', '.join(touched)}"
+        )
     command = GripperCommand(gripper=arm.gripper, opening=spec.open_opening)
     status = _wait(ctx, ctx.submit(command, timeout_ns=spec.gripper_timeout_ns), tick)
     result = status.gripper
@@ -1037,12 +1056,14 @@ def recover(
       ``held_drop_spec`` found no zone; without them nothing is done.
     - **Anything else:** the object may be suspended, or its support unknown, so nothing
       is done, and it stays declared held.
-    The fingers are never opened onto nothing known, and ``obj`` is detached only after
-    they reached open. Returns what was done: its ``action`` (None when nothing),
+    The fingers are never opened onto nothing known, nor where, opened, they would touch
+    anything but the object or, released in place, its support (``_release``): then
+    nothing is commanded and the object stays declared held. ``obj`` is detached only
+    after they reached open. Returns what was done: its ``action`` (None when nothing),
     whether ``obj`` was ``released``, and a ``detail``."""
     action = safe_release(failed)
     if action == RELEASE_IN_PLACE:
-        refused = _release(ctx, obj, arm, spec, tick)
+        refused = _release(ctx, obj, arm, spec, tick, allow=(obj, spec.support))
         if refused is not None:
             return outcomes.Recovery(action=RELEASE_IN_PLACE, released=False, detail=refused)
         register(ctx, [obj], read)  # detached, it is unknown until registered where it rests
@@ -1066,7 +1087,7 @@ def recover(
             detail=f"released where grasped; backed out: {retreat}",
         )
     if action == RELEASE_LOST:
-        refused = _release(ctx, obj, arm, spec, tick)
+        refused = _release(ctx, obj, arm, spec, tick, allow=(obj,))
         return outcomes.Recovery(
             action=RELEASE_LOST,
             released=refused is None,

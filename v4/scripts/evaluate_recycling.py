@@ -240,7 +240,9 @@ def classify(attempt: Attempt | None) -> str:
         failed = sorted(k for k, ok in attempt.checks.items() if not ok)
         return "checks:" + "+".join(failed)
     skill, stage, reason, cause = failure.skill, failure.stage, failure.reason, failure.cause
-    if reason in ("missed", "lost"):  # nothing in the fingers, or lost in the lift
+    # Nothing in the fingers, lost in the lift, or a gripper command refused: the fingers
+    # would have touched something they must not.
+    if reason in ("missed", "lost", "gripper_obstructed"):
         return f"{skill}.{stage}:{reason}"
     if reason == "not_planned" and cause is not None:  # the planner's status
         return f"{skill}.{stage}:{cause}"

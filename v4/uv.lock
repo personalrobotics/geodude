@@ -263,13 +263,13 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "geodude-assets", git = "https://github.com/personalrobotics/geodude_assets?rev=f130a8f435ef7780fbc28014805c25cce6acd67b" },
+    { name = "geodude-assets", git = "https://github.com/personalrobotics/geodude_assets?rev=e9538a26553e10a9613f9a61af86cb9f63db144e" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "prl-assets", extras = ["placement"], git = "https://github.com/personalrobotics/prl_assets?rev=746f831c0b877bec9e6c205f78f464da37f40ee3" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ssgrasping", extras = ["sstsr"], git = "https://github.com/personalrobotics/ssgrasping?rev=fff4ba6a49524d6e4287403818cb5097e79b85e4" },
+    { name = "ssgrasping", extras = ["sstsr"], git = "https://github.com/personalrobotics/ssgrasping?rev=7d9f83e1828e4930bdab135565659158197dab51" },
     { name = "ssmjviser", specifier = "==1.0.0" },
-    { name = "ssrobot", extras = ["mujoco", "planning"], git = "https://github.com/personalrobotics/ssrobot?rev=1d3cb77bdd7211304a8e2d898228ba5215e3ce6d" },
+    { name = "ssrobot", extras = ["mujoco", "planning"], git = "https://github.com/personalrobotics/ssrobot?rev=87dac5842b62a9637fc4320496bf42add970fbd8" },
     { name = "sstsr", specifier = "==4.3.0" },
 ]
 
@@ -284,7 +284,7 @@ dev = [
 [[package]]
 name = "geodude-assets"
 version = "0.1.0"
-source = { git = "https://github.com/personalrobotics/geodude_assets?rev=f130a8f435ef7780fbc28014805c25cce6acd67b#f130a8f435ef7780fbc28014805c25cce6acd67b" }
+source = { git = "https://github.com/personalrobotics/geodude_assets?rev=e9538a26553e10a9613f9a61af86cb9f63db144e#e9538a26553e10a9613f9a61af86cb9f63db144e" }
 dependencies = [
     { name = "mujoco" },
     { name = "numpy-stl" },
@@ -988,7 +988,7 @@ ssik = [
 [[package]]
 name = "ssgrasping"
 version = "0.0.1"
-source = { git = "https://github.com/personalrobotics/ssgrasping?rev=fff4ba6a49524d6e4287403818cb5097e79b85e4#fff4ba6a49524d6e4287403818cb5097e79b85e4" }
+source = { git = "https://github.com/personalrobotics/ssgrasping?rev=7d9f83e1828e4930bdab135565659158197dab51#7d9f83e1828e4930bdab135565659158197dab51" }
 dependencies = [
     { name = "ssrobot" },
 ]
@@ -1050,7 +1050,7 @@ wheels = [
 [[package]]
 name = "ssrobot"
 version = "0.0.0"
-source = { git = "https://github.com/personalrobotics/ssrobot?rev=1d3cb77bdd7211304a8e2d898228ba5215e3ce6d#1d3cb77bdd7211304a8e2d898228ba5215e3ce6d" }
+source = { git = "https://github.com/personalrobotics/ssrobot?rev=87dac5842b62a9637fc4320496bf42add970fbd8#87dac5842b62a9637fc4320496bf42add970fbd8" }
 
 [package.optional-dependencies]
 mujoco = [

@@ -209,7 +209,9 @@ Not every seed recycles every object. A run that fails reports the stage that de
 it, such as no arm finding a feasible prefix, and the record preserves the evidence
 needed to diagnose it. `scripts/evaluate_recycling.py` measures reliability over fixed
 corpora of rounds (personalrobotics/geodude#201): `development`, seeds 0-39, for
-diagnosis and every fix, and two frozen corpora, each run once, whole, from a clean
+diagnosis and every fix; `catalog`, seeds 3000-3059, also for development, which deals
+every catalog object that stages on the worktop (`recycling.CATALOG_KINDS`) ten times each
+(#267); and two frozen corpora, each run once, whole, from a clean
 tree: `acceptance`, seeds 1000-1039, #201's, and `cutover`, seeds 2000-2039, the Geodude
 4.0 cutover's (#213), on the Haswell kernel. Both are spent. On the cutover corpus, 199
 of 200 objects were recycled and 39 of 40 rounds cleared; its evaluation is

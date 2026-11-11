@@ -1,7 +1,8 @@
 """Evaluate the recycling demo over a seeded corpus of mixed rounds (#201).
 
-Each round stages ``recycling.mix(seed, OBJECTS)``, the legacy demo's five objects drawn
-from its nine types, and sorts them into the bins with ``recycling.sort_all``, as the demo
+Each round stages five objects: ``recycling.mix(seed, OBJECTS)``, drawn from the legacy
+demo's nine types, or, in the ``catalog`` corpus, ``recycling.dealt``'s from every type
+of the catalog (#267). It sorts them into the bins with ``recycling.sort_all``, as the demo
 runs: racing both arms with lookahead, recovering a failed attempt where that is safe,
 and retrying an object released back onto the worktop once. The evaluation is one JSON
 artifact:
@@ -30,10 +31,12 @@ would not alone. Rounds run in parallel, at most ``--jobs`` at once; every round
 records a planning timeout is then run again alone, and its verdict is that run's. Each
 round records which run its verdict came from.
 
-The corpora are fixed: ``development`` (seeds 0-39), for diagnosis and every fix, and
-two frozen corpora, each run once, whole, from a clean tree, on the reference OpenBLAS
-kernel (``recycling.REFERENCE_BLAS_KERNEL``, selected with ``OPENBLAS_CORETYPE``), and
-both now spent:
+The corpora are fixed: ``development`` (seeds 0-39), for diagnosis and every fix;
+``catalog`` (seeds 3000-3059), also for development, over the catalog's 30 types that
+stage on the worktop (``recycling.CATALOG_KINDS``), each dealt exactly ten times; and two
+frozen corpora, each run once, whole, from a clean tree, on
+the reference OpenBLAS kernel (``recycling.REFERENCE_BLAS_KERNEL``, selected with
+``OPENBLAS_CORETYPE``), and both now spent:
 - ``acceptance`` (seeds 1000-1039) was #201's: it is refused;
 - ``cutover`` (seeds 2000-2039) was the Geodude 4.0 cutover's (#213): it is refused. Its
   evaluation is ``evidence/cutover/``.
@@ -110,6 +113,7 @@ CORPORA = {
     "development": range(0, 40),
     "acceptance": range(1000, 1040),
     "cutover": range(2000, 2040),
+    "catalog": range(3000, 3060),
 }
 SPENT = {
     "acceptance": "it was run once, for #201, and stays that claim's evidence",
@@ -130,13 +134,17 @@ def run_round(seed: int) -> dict[str, Any]:
     from geodude import recycling
     from geodude.scene import stage_scene
 
+    if seed in CORPORA["catalog"]:
+        drawn = recycling.dealt(seed - CORPORA["catalog"].start, OBJECTS, recycling.CATALOG_KINDS)
+    else:
+        drawn = recycling.mix(seed, OBJECTS)
     package = load_installed_package("geodude_assets")
     work = Path(tempfile.mkdtemp(prefix="geodude-eval-"))
     try:
         scene = stage_scene(
             work / "scene",
             package,
-            objects=recycling.mix(seed, OBJECTS),
+            objects=drawn,
             fixtures=recycling.BINS,
             seed=seed,
         )

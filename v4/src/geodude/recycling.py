@@ -186,6 +186,43 @@ MIX_KINDS = (
 )
 """The legacy demo's graspable types (``src/geodude/demos/recycling.py``), from which its
 mix of objects is drawn."""
+CATALOG_KINDS = (
+    "banana",
+    "bleach_cleanser",
+    "can",
+    "cracker_box",
+    "extra_large_clamp",
+    "foam_brick",
+    "fuze_bottle",
+    "gelatin_box",
+    "herring_tin",
+    "large_clamp",
+    "large_marker",
+    "master_chef_can",
+    "mug",
+    "mustard_bottle",
+    "notebook",
+    "pitcher_base",
+    "plastic_bowl",
+    "plastic_glass",
+    "plastic_plate",
+    "pocky_box",
+    "pop_tarts_case",
+    "power_drill",
+    "pudding_box",
+    "scissors",
+    "spam_can",
+    "sugar_box",
+    "tomato_soup_can",
+    "tuna_fish_can",
+    "wood_block",
+    "ycb_bowl",
+)
+"""Every prl_assets type (at the pinned commit) whose ``category`` lists ``graspable`` and
+that stages alone on the worktop, from which the catalog corpus deals (#267). Pinned, so a
+seed deals the same objects across fixes. Two graspable types are left out because no
+rest that fits the worktop stands them as their model files do: ``lunchbox`` (the nearest
+2.5 deg away) and ``wicker_tray`` (90 deg)."""
 MAX_TICKS = 200_000
 SOURCES = (
     "geodude",
@@ -353,6 +390,24 @@ def mix(seed: int, count: int) -> dict[str, int]:
     """The legacy demo's mix: ``count`` objects drawn, with a generator seeded by
     ``seed``, from ``MIX_KINDS``, as ``stage_scene``'s counts by type."""
     drawn = random.Random(seed).choices(MIX_KINDS, k=count)
+    return {kind: drawn.count(kind) for kind in sorted(set(drawn))}
+
+
+def dealt(index: int, count: int, kinds: Sequence[str]) -> dict[str, int]:
+    """Round ``index``'s ``count`` objects, dealt in order from passes over ``kinds``,
+    each pass shuffled with a generator seeded by its number, as ``stage_scene``'s counts
+    by type. Consecutive rounds draw every kind equally often, a pass at a time; a round
+    that straddles two passes may draw a kind twice."""
+    if not kinds or count > len(kinds):
+        raise ValueError(f"cannot deal {count} objects a round from {len(kinds)} kinds")
+
+    def shuffled(number: int) -> list[str]:
+        deck = sorted(kinds)
+        random.Random(number).shuffle(deck)
+        return deck
+
+    first, at = divmod(index * count, len(kinds))
+    drawn = (shuffled(first) + shuffled(first + 1))[at : at + count]
     return {kind: drawn.count(kind) for kind in sorted(set(drawn))}
 
 

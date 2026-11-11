@@ -356,6 +356,22 @@ def mix(seed: int, count: int) -> dict[str, int]:
     return {kind: drawn.count(kind) for kind in sorted(set(drawn))}
 
 
+def dealt(index: int, count: int, kinds: Sequence[str]) -> dict[str, int]:
+    """Round ``index``'s ``count`` objects, dealt in order from passes over ``kinds``,
+    each pass shuffled with a generator seeded by its number, as ``stage_scene``'s counts
+    by type. Consecutive rounds draw every kind equally often, a pass at a time; a round
+    that straddles two passes may draw a kind twice."""
+    start, passes = index * count, 0
+    deck: list[str] = []
+    while len(deck) < start + count:
+        shuffled = sorted(kinds)
+        random.Random(passes).shuffle(shuffled)
+        deck += shuffled
+        passes += 1
+    drawn = deck[start : start + count]
+    return {kind: drawn.count(kind) for kind in sorted(set(drawn))}
+
+
 def kind_of(name: str) -> str:
     """An instance's prl_assets type: ``can_0`` is a ``can``."""
     return name.rsplit("_", 1)[0]

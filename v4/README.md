@@ -57,10 +57,9 @@ leave the hand during a carry, which then stopped and reported it not held, is
 detached: nothing is left in the hand. A held object whose drop's transfer does not plan
 is put back on the worktop where it was picked from. An object released back onto the
 worktop upright is tried once more. Anything else stops the round, the object still
-declared held: the fingers are never opened where what lies below them is unknown. That
-includes a transfer whose command fails mid-carry and a release that is not confirmed,
-2 of 500 objects over the development and catalog corpora (#210). The table is clear
-once every object rests in a bin.
+declared held: the fingers open only onto the object's known support or an empty hand.
+That includes a transfer whose command fails mid-carry and a release that is not
+confirmed (#210). The table is clear once every object rests in a bin.
 
 ## Running it
 

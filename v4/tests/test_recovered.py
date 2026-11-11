@@ -30,15 +30,15 @@ from typing import Any
 
 import numpy as np
 from ssgrasping import Reason, drop
-from ssrobot import Pose, RobotContext, load_installed_package
+from ssrobot import Pose, RobotContext, RobotPackage, load_installed_package
 
 from geodude import outcomes, recycling, regions
 from geodude.scene import physical, stage_scene
 
 SEED = 0
 CAN = "can_0"
-CAN_HEIGHT_M = 0.123  # its frame is at its centre
 SHELF_GAP_M = 0.05
+"""Between the can's top and the shelf: less than the grasp's lift (checked)."""
 PULL_N = 200.0
 PULL_NS = 100_000_000
 PULL_AFTER_NS = 500_000_000
@@ -46,15 +46,21 @@ STAND_TOLERANCE_M = 0.005
 """How far the can, released in place, may stand from where it was picked."""
 
 
-def _staged(work: Path, shelf: bool) -> Path:
-    package = load_installed_package("geodude_assets")
+def _top(kind: str) -> float:
+    """How far above its frame an object standing as its model file stands it reaches, by
+    its collision geometry."""
+    shape, _ = physical(kind)
+    return float(shape.support(np.array([0.0, 0.0, 1.0])))
+
+
+def _staged(package: RobotPackage, work: Path, shelf: bool) -> Path:
     scene = stage_scene(
         work / "scene", package, objects={"can": 1}, fixtures=recycling.BINS, seed=SEED
     )
     if shelf:
         (placed,) = json.loads((scene.parent / "manifest.json").read_text())["objects"]
         x, y, z = placed["position"]
-        at = z + CAN_HEIGHT_M / 2 + SHELF_GAP_M + 0.01  # the board is 0.02 m thick
+        at = z + _top("can") + SHELF_GAP_M + 0.01  # the board is 0.02 m thick
         board = (
             f'<body name="shelf" pos="{x} {y} {at}"><geom type="box" size="0.15 0.15 0.01"/></body>'
         )
@@ -72,7 +78,7 @@ def _hand(ctx: RobotContext, runtime: Any, arm: recycling.Arm) -> np.ndarray:
 def _scenario(shelf: bool, fail: Callable[..., Any]) -> dict[str, Any]:
     package = load_installed_package("geodude_assets")
     with tempfile.TemporaryDirectory() as work:
-        scene = _staged(Path(work), shelf)
+        scene = _staged(package, Path(work), shelf)
         runtime = recycling.runtime(package, scene)
         with RobotContext(package.description, runtime, object_poses=recycling.OBJECT_POSES) as ctx:
             recycling.register(ctx, recycling.on_table(ctx))
@@ -80,7 +86,9 @@ def _scenario(shelf: bool, fail: Callable[..., Any]) -> dict[str, Any]:
             arm = recycling.arm_for(recycling.registered_pose(ctx, CAN).position)
             planner, checker = recycling.planners(package, arm)
             spec = recycling.grasp_spec(ctx, CAN, arm)
+            assert not shelf or SHELF_GAP_M < spec.lift_m, (SHELF_GAP_M, spec.lift_m)
             failed = fail(ctx, runtime, arm, planner, checker)
+            failed_at = _hand(ctx, runtime, arm)
             recovery = recycling.recover(ctx, CAN, arm, failed, spec, planner, lambda: None)
             can = recycling.true_pose(ctx, CAN)
             return {
@@ -101,7 +109,9 @@ def _scenario(shelf: bool, fail: Callable[..., Any]) -> dict[str, Any]:
                 "attached": ctx.scene.attachment(CAN) is not None,
                 "start": {"position": list(start.position), "quat_wxyz": list(start.quat_wxyz)},
                 "can": {"position": list(can.position), "quat_wxyz": list(can.quat_wxyz)},
+                "hand_at_failure": [float(v) for v in failed_at],
                 "hand": [float(v) for v in _hand(ctx, runtime, arm)],
+                "approach_m": spec.approach_m,
             }
 
 
@@ -150,8 +160,9 @@ def test_failed_stages_recover_by_their_rules(artifacts: Path) -> None:
     assert np.linalg.norm(can - start) <= STAND_TOLERANCE_M, (start, can)
     pose = Pose(position=tuple(can), quat_wxyz=tuple(shelf["can"]["quat_wxyz"]))
     assert regions.tilt(regions.matrix(pose), rest) <= recycling.PLACE_TILT_RAD, shelf
-    # Backed out along its approach: the hand is clear of the can it let go of.
-    assert np.linalg.norm(np.array(shelf["hand"]) - can) > CAN_HEIGHT_M / 2, shelf
+    # Backed out along its approach, by its length, from where it closed.
+    backed = np.linalg.norm(np.array(shelf["hand"]) - np.array(shelf["hand_at_failure"]))
+    assert backed >= 0.9 * shelf["approach_m"], (backed, shelf["approach_m"])
 
     pulled = report["pulled"]
     assert pulled["failed"] is not None, pulled
@@ -162,8 +173,11 @@ def test_failed_stages_recover_by_their_rules(artifacts: Path) -> None:
     ), pulled
     assert pulled["failed"]["held"] is False and pulled["failed"]["attached"], pulled
     assert pulled["recovery"]["action"] == outcomes.RecoveryAction.RELEASE_LOST, pulled
+    # Detached after the fingers reached open, not with them left as they were.
+    assert pulled["recovery"]["detail"] == "detached: the object had left the hand", pulled
     assert pulled["recovery"]["released"] and not pulled["attached"], pulled
-    # The physics agrees nothing is in the hand: the can fell away from it.
+    # The physics agrees nothing is in the hand: the can fell away from it, and rests
+    # below where it was picked from, above the floor.
     can = np.array(pulled["can"]["position"])
     assert np.linalg.norm(np.array(pulled["hand"]) - can) > 0.1, pulled
-    assert can[2] < np.array(pulled["start"]["position"])[2] + 0.05, pulled
+    assert 0.0 < can[2] < np.array(pulled["start"]["position"])[2], pulled

@@ -54,9 +54,13 @@ The legacy demo's round stages five objects drawn, by the seed, from its nine ty
 that fails is recovered only where releasing the object is safe: a lift that did not
 plan releases it where it was grasped, and an object whose gripper opening showed it
 leave the hand during a carry, which then stopped and reported it not held, is
-detached: nothing is left in the hand. An object released back onto the worktop upright is tried once
-more. Anything else stops the round, the object still declared held. The table is
-clear once every object rests in a bin.
+detached: nothing is left in the hand. A held object whose drop's transfer does not plan
+is put back on the worktop where it was picked from. An object released back onto the
+worktop upright is tried once more. Anything else stops the round, the object still
+declared held: the fingers are never opened where what lies below them is unknown. That
+includes a transfer whose command fails mid-carry and a release that is not confirmed,
+2 of 500 objects over the development and catalog corpora (#210). The table is clear
+once every object rests in a bin.
 
 ## Running it
 
@@ -199,6 +203,7 @@ bundle](https://github.com/personalrobotics/mj_viser#replay-a-run-bundle).
 | Recycle several cans, racing both arms and planning each can during the previous transfer | Implemented; four cans tested, and the same round with planning delayed by up to 3 s gives the same trace (`test_planning_latency`) |
 | Pick and drop each of the legacy demo's nine object types | Implemented; each type tested alone (`test_object_types`) |
 | Sort a five-object round of the mix into the bins, recovering where it is safe | Implemented; seed 0 tested, its bundle verified and judged by the corpus evaluator (`test_sort_all`) |
+| Recover a failed stage by its rule: release in place, detach a lost object, put back, retry | Implemented; a lift blocked by a shelf and a can pulled out mid-transfer each recover, judged against privileged poses (`test_recovered`); putting back (`test_unpickable`) and retrying (`test_registered_control`) |
 | Control on registered object poses | Implemented; a round with privileged channels withheld decides exactly as one with them (`test_registered_control`) |
 | A typed, versioned, strictly decoded outcome | Implemented; tampered copies are each refused with their own code (`test_outcome_boundary`), and the outcome file is byte-identical with planning delayed (`test_planning_latency`) |
 | Perception | Not implemented; registration reads privileged simulator channels |

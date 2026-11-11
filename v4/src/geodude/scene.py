@@ -119,12 +119,6 @@ def _catalog() -> dict[str, Path]:
     return found
 
 
-def graspable_kinds() -> tuple[str, ...]:
-    """Every prl_assets type whose ``meta.yaml`` lists ``graspable`` in its ``category``:
-    the catalog's objects, as opposed to its fixtures and receptacles (#267)."""
-    return tuple(k for k in sorted(_catalog()) if "graspable" in (meta(k).get("category") or ()))
-
-
 def object_dir(kind: str) -> Path:
     """The directory of prl_assets object ``kind``."""
     try:

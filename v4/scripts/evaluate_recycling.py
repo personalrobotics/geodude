@@ -32,9 +32,9 @@ records a planning timeout is then run again alone, and its verdict is that run'
 round records which run its verdict came from.
 
 The corpora are fixed: ``development`` (seeds 0-39), for diagnosis and every fix;
-``catalog`` (seeds 3000-3059), also for development, over every catalog type
-(``scene.graspable_kinds``) that stages alone on the worktop, each dealt equally often,
-about ten times; and two frozen corpora, each run once, whole, from a clean tree, on
+``catalog`` (seeds 3000-3059), also for development, over the catalog's 30 types that
+stage on the worktop (``recycling.CATALOG_KINDS``), each dealt exactly ten times; and two
+frozen corpora, each run once, whole, from a clean tree, on
 the reference OpenBLAS kernel (``recycling.REFERENCE_BLAS_KERNEL``, selected with
 ``OPENBLAS_CORETYPE``), and both now spent:
 - ``acceptance`` (seeds 1000-1039) was #201's: it is refused;
@@ -49,9 +49,7 @@ corpus runs as::
 
     uv run python scripts/evaluate_recycling.py development out/development.json
 
-``--seeds 3,7`` evaluates only those seeds of the development corpus. A catalog
-evaluation records the types it dealt (``kinds``) and each type it left out, with why
-it does not stage alone (``unstaged``).
+``--seeds 3,7`` evaluates only those seeds of the development corpus.
 
 ``--classify EVALUATION OUT`` reclassifies an existing evaluation, without running
 anything, after a change to ``classify``. It never touches ``EVALUATION``: ``OUT`` is a
@@ -129,45 +127,15 @@ JOBS = 16
 each round's races plan on worker threads."""
 
 
-def catalog_kinds() -> tuple[list[str], dict[str, str]]:
-    """The catalog corpus's types: each of ``scene.graspable_kinds`` that stages alone on
-    the worktop, beside the bins; and each that does not, with why."""
-    from ssrobot import load_installed_package
-
-    from geodude import recycling
-    from geodude.scene import graspable_kinds, stage_scene
-
-    package = load_installed_package("geodude_assets")
-    kinds, unstaged = [], {}
-    for kind in graspable_kinds():
-        with tempfile.TemporaryDirectory(prefix="geodude-eval-") as work:
-            try:
-                stage_scene(
-                    Path(work) / "scene",
-                    package,
-                    objects={kind: 1},
-                    fixtures=recycling.BINS,
-                    seed=0,
-                )
-            except ValueError as error:  # no rest fits the worktop, or no room on it
-                unstaged[kind] = str(error)
-            else:
-                kinds.append(kind)
-    return kinds, unstaged
-
-
-def run_round(seed: int, kinds: list[str] | None = None) -> dict[str, Any]:
-    """One round of ``seed``, in this process; a catalog round deals from ``kinds``,
-    ``catalog_kinds``' by default."""
+def run_round(seed: int) -> dict[str, Any]:
+    """One round of ``seed``, in this process."""
     from ssrobot import RobotContext, load_installed_package
 
     from geodude import recycling
     from geodude.scene import stage_scene
 
     if seed in CORPORA["catalog"]:
-        if kinds is None:
-            kinds, _ = catalog_kinds()
-        drawn = recycling.dealt(seed - CORPORA["catalog"].start, OBJECTS, kinds)
+        drawn = recycling.dealt(seed - CORPORA["catalog"].start, OBJECTS, recycling.CATALOG_KINDS)
     else:
         drawn = recycling.mix(seed, OBJECTS)
     package = load_installed_package("geodude_assets")
@@ -449,10 +417,9 @@ def _cpu_model() -> str:
     return "unknown"
 
 
-def _round_in_subprocess(seed: int, kinds: list[str] | None) -> dict[str, Any]:
-    dealing = [] if kinds is None else ["--kinds", ",".join(kinds)]
+def _round_in_subprocess(seed: int) -> dict[str, Any]:
     done = subprocess.run(
-        [sys.executable, __file__, "--round", str(seed), *dealing], capture_output=True, text=True
+        [sys.executable, __file__, "--round", str(seed)], capture_output=True, text=True
     )
     if done.returncode != 0:
         return {"seed": seed, "error": done.stderr[-4000:]}
@@ -514,15 +481,13 @@ def reclassify(source: Path) -> dict[str, Any]:
 
 def evaluate(corpus: str, seeds: list[int], jobs: int) -> dict[str, Any]:
     provenance = _provenance()
-    kinds, unstaged = catalog_kinds() if corpus == "catalog" else (None, None)
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         rounds = {
-            r["seed"]: {**r, "run": "parallel"}
-            for r in pool.map(lambda seed: _round_in_subprocess(seed, kinds), seeds)
+            r["seed"]: {**r, "run": "parallel"} for r in pool.map(_round_in_subprocess, seeds)
         }
     for seed in seeds:  # alone, every round a planning budget may have decided
         if "error" not in rounds[seed] and _timed_out(rounds[seed]):
-            rounds[seed] = {**_round_in_subprocess(seed, kinds), "run": "alone, after a timeout"}
+            rounds[seed] = {**_round_in_subprocess(seed), "run": "alone, after a timeout"}
     finished = [rounds[s] for s in seeds]
     for round_ in finished:
         if "error" not in round_:
@@ -534,7 +499,6 @@ def evaluate(corpus: str, seeds: list[int], jobs: int) -> dict[str, Any]:
             "corpus": corpus,
             "seeds": seeds,
             "objects_per_round": OBJECTS,
-            **({} if kinds is None else {"kinds": kinds, "unstaged": unstaged}),
             "jobs": jobs,
             **provenance,
             "load_after": list(os.getloadavg()),
@@ -550,7 +514,6 @@ def main() -> int:
     parser.add_argument("--seeds", help="comma-separated seeds of the corpus, instead of all")
     parser.add_argument("--jobs", type=int, default=JOBS, help="rounds run at once")
     parser.add_argument("--round", type=int, help=argparse.SUPPRESS)  # one round, to stdout
-    parser.add_argument("--kinds", help=argparse.SUPPRESS)  # a catalog round's, dealt from
     parser.add_argument(
         "--classify",
         nargs=2,
@@ -563,8 +526,7 @@ def main() -> int:
         for corpus, reason in SPENT.items():
             if args.round in CORPORA[corpus]:
                 parser.error(f"seed {args.round} is of the spent {corpus} corpus: {reason}")
-        kinds = None if args.kinds is None else args.kinds.split(",")
-        print(json.dumps(run_round(args.round, kinds)))
+        print(json.dumps(run_round(args.round)))
         return 0
     if args.classify is not None:
         source, out = args.classify

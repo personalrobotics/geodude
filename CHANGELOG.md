@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-Geodude 4.0, on ssrobot and ssgrasping, becomes `geodude` (#212). It is still versioned `4.0.0.dev0`; the 4.0.0 release is a separate decision.
+## v4.0.0 (2026-11-12)
+
+Geodude 4.0, on ssrobot and ssgrasping, becomes `geodude` (#212).
 - **The project moves to the root.** The application developed in `v4/` (#208 onward) is now the repository's project. The 3.x sources, tests, docs and dependencies (mj_manipulator, mj_environment, the old mj-viser) are removed; 3.x remains at `v3.1.0`.
 - **What it does:**
   - **Recycling:** seeded scenes, both arms raced for each object, bin drops and worktop placement.

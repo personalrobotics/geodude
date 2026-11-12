@@ -239,7 +239,7 @@ wheels = [
 
 [[package]]
 name = "geodude"
-version = "4.0.0.dev0"
+version = "4.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "geodude-assets" },

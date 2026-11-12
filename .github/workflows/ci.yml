@@ -11,6 +11,12 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Every job reads the repository and nothing more: the dispatch to robot-code uses its own
+# token, not GITHUB_TOKEN. Actions are pinned by commit; Dependabot proposes updates
+# (.github/dependabot.yml).
+permissions:
+  contents: read
+
 env:
   # Standalone CI has no workspace context. Skip [tool.uv.sources]
   # workspace overrides and use the git URLs in dependencies instead.
@@ -24,10 +30,10 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
@@ -63,10 +69,10 @@ jobs:
       # Outcomes are claimed on one OpenBLAS kernel (geodude.recycling.REFERENCE_BLAS_KERNEL).
       OPENBLAS_CORETYPE: Haswell
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
         with:
           enable-cache: true
           python-version: "3.13"
@@ -115,7 +121,7 @@ jobs:
 
       - name: Upload evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: geodude-v4-evidence
           path: v4/artifacts/
@@ -126,7 +132,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Dispatch integration run
-        uses: peter-evans/repository-dispatch@v3
+        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0  # v3.0.0
         with:
           token: ${{ secrets.ROBOT_CODE_DISPATCH_TOKEN }}
           repository: personalrobotics/robot-code

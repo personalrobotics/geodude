@@ -6,7 +6,7 @@
 Built on mj_manipulator for generic arm control, planning, and execution.
 """
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 
 
 # Lazy imports to avoid circular dependencies

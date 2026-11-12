@@ -1,0 +1,178 @@
+command: OPENBLAS_CORETYPE=Haswell python scripts/evaluate_recycling.py catalog-frozen runs/20261111-215523-catalog-frozen.json --jobs 8
+commit 18b6bbdf6da5d723b9599ec5b4e7e4a5a71c04f8 dirty=0
+2026-11-11T21:55:23-08:00
+ 21:55:23 up 19 days, 16:41,  3 users,  load average: 0.10, 0.06, 0.09
+               total        used        free      shared  buff/cache   available
+Mem:             125           8          19           0          97         116
+Swap:              7           0           7
+0
+sscbirrt 3.16.0 mujoco 3.14.0 sstsr 4.4.0 numpy 2.5.4
+{
+ "objects_staged": 300,
+ "objects_recycled": 174,
+ "recycled_at_first_attempt": 172,
+ "recycled_after_retry": 2,
+ "recycled_after_recovery": 0,
+ "rounds": 60,
+ "rounds_cleared": 3,
+ "sim_ns": 1177850000000,
+ "idle_ns": 113466000000,
+ "by_kind": {
+  "banana": {
+   "recycled": 0,
+   "staged": 10
+  },
+  "bleach_cleanser": {
+   "recycled": 10,
+   "staged": 10
+  },
+  "can": {
+   "recycled": 10,
+   "staged": 10
+  },
+  "cracker_box": {
+   "recycled": 10,
+   "staged": 10
+  },
+  "extra_large_clamp": {
+   "recycled": 0,
+   "staged": 10
+  },
+  "foam_brick": {
+   "recycled": 10,
+   "staged": 10
+  },
+  "fuze_bottle": {
+   "recycled": 10,
+   "staged": 10
+  },
+  "gelatin_box": {
+   "recycled": 10,
+   "staged": 10
+  },
+  "herring_tin": {
+   "recycled": 9,
+   "staged": 10
+  },
+  "large_clamp": {
+   "recycled": 0,
+   "staged": 10
+  },
+  "large_marker": {
+   "recycled": 0,
+   "staged": 10
+  },
+  "master_chef_can": {
+   "recycled": 10,
+   "staged": 10
+  },
+  "mug": {
+   "recycled": 10,
+   "staged": 10
+  },
+  "mustard_bottle": {
+   "recycled": 9,
+   "staged": 10
+  },
+  "notebook": {
+   "recycled": 0,
+   "staged": 10
+  },
+  "pitcher_base": {
+   "recycled": 0,
+   "staged": 10
+  },
+  "plastic_bowl": {
+   "recycled": 0,
+   "staged": 10
+  },
+  "plastic_glass": {
+   "recycled": 10,
+   "staged": 10
+  },
+  "plastic_plate": {
+   "recycled": 0,
+   "staged": 10
+  },
+  "pocky_box": {
+   "recycled": 10,
+   "staged": 10
+  },
+  "pop_tarts_case": {
+   "recycled": 9,
+   "staged": 10
+  },
+  "power_drill": {
+   "recycled": 0,
+   "staged": 10
+  },
+  "pudding_box": {
+   "recycled": 8,
+   "staged": 10
+  },
+  "scissors": {
+   "recycled": 0,
+   "staged": 10
+  },
+  "spam_can": {
+   "recycled": 10,
+   "staged": 10
+  },
+  "sugar_box": {
+   "recycled": 10,
+   "staged": 10
+  },
+  "tomato_soup_can": {
+   "recycled": 9,
+   "staged": 10
+  },
+  "tuna_fish_can": {
+   "recycled": 0,
+   "staged": 10
+  },
+  "wood_block": {
+   "recycled": 10,
+   "staged": 10
+  },
+  "ycb_bowl": {
+   "recycled": 0,
+   "staged": 10
+  }
+ },
+ "mechanisms": {
+  "grasp.regions:no_grasp": 60,
+  "no_arm_plans:pregrasp": 29,
+  "drop.zone:no_drop_zone": 20,
+  "no_arm_plans:transfer": 8,
+  "drop.release": 2,
+  "checks:in_bin+landed": 1,
+  "drop.transfer": 1,
+  "no_arm_plans:pregrasp+transfer": 1,
+  "not_attempted": 1,
+  "no_arm_plans:approach+lift+pregrasp+transfer": 1,
+  "grasp.lift:infeasible": 1,
+  "no_arm_plans:approach+pregrasp+transfer": 1
+ },
+ "transitions": {
+  "landed": {
+   "unobserved/confirmed": 174,
+   "unobserved/refuted": 1
+  },
+  "retained": {
+   "confirmed/confirmed": 355,
+   "confirmed/refuted": 1,
+   "refuted/refuted": 1
+  }
+ },
+ "assumptions": {
+  "landed": {
+   "assumed": 175,
+   "confirmed": 174,
+   "refuted": 1,
+   "none": 0,
+   "refuted_rate": 0.005714285714285714
+  }
+ }
+}
+EXIT=0
+2026-11-11T21:59:13-08:00

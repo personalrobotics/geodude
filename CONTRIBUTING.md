@@ -12,8 +12,11 @@ cd robot-code
 ./setup.sh
 ```
 
-This clones every sibling repo (including this one) into a single uv workspace
-and runs `uv sync`. You can then work in any sibling's directory.
+This clones every sibling repo, including this one, and runs `uv sync` for the shared
+workspace. Geodude is not a member of it: its dependencies (ssrobot, ssgrasping, and
+ssmjviser, which imports as `mj_viser`) cannot share an environment with the
+workspace's 3.x stack. So it has its own pinned environment, `uv sync --locked` in this
+directory.
 
 ## Running tests and linters
 
@@ -23,6 +26,7 @@ From inside this repo:
 uv run pytest tests/ -v
 uv run ruff check .
 uv run ruff format --check .
+uv run mypy
 ```
 
 From the workspace root, you can also run the cross-repo integration suite:

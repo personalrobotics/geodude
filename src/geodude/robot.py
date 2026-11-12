@@ -1,1047 +1,541 @@
-# SPDX-License-Identifier: MIT
-# Copyright (c) 2025 Siddhartha Srinivasa
+"""Geodude's robot API: everyday calls over ssrobot and ssgrasping, with Geodude's defaults
+(personalrobotics/geodude#209).
 
-"""Main Geodude robot interface.
+``Geodude`` binds to an open ``RobotContext`` and wires, once, what a program would
+otherwise repeat: each arm's planners and the names its package declares, the object
+registration, the driving of each skill on the context's clock, and Geodude's recovery
+(``recycling.recover``). It owns policy: which arm, which object, which bin. Planning,
+execution, observation and the skills stay ssrobot's and ssgrasping's, and every
+``recycling`` function stays available beneath it.
 
-Composes mj_manipulator Arms, RobotiqGrippers, and VentionBases into a
-bimanual robot with high-level planning and manipulation primitives.
+    with RobotContext(package.description, recycling.runtime(package, scene),
+                      object_poses=recycling.OBJECT_POSES) as ctx:
+        robot = Geodude(ctx, package)
+        if robot.pickup("can"):
+            robot.place()  # into the bin on the holding arm's side
+        robot.go_home()
+
+Abort (``request_abort``) cancels the active skill (``SkillExecution.cancel``) or stops the
+active command, and leaves what the robot holds as it is: the result reports it, and
+``holding`` still does. Nothing starts again until ``clear_abort``.
 """
 
 from __future__ import annotations
 
-import logging
-import random
+import threading
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 
-import mujoco
-import numpy as np
-from mj_environment import Environment
-from mj_manipulator import (
-    Arm,
-    GraspManager,
-    PlanResult,
-    RobotiqGripper,
-    SimContext,
+from ssgrasping import (
+    Candidate,
+    Candidates,
+    GraspSpec,
+    SkillExecution,
+    SkillResult,
+    Stage,
+    drop,
+    obstructing,
+    run_together,
 )
-from mj_manipulator.arms.ssik_solver import MuJoCoSSIKSolver
-from mj_manipulator.arms.ur5e import (
-    UR5E_ACCELERATION_LIMITS,
-    UR5E_VELOCITY_LIMITS,
+from ssrobot import (
+    Execution,
+    ExecutionState,
+    GripperCommand,
+    GripperTermination,
+    ObservationRequest,
+    Planner,
+    Pose,
+    RobotContext,
+    RobotPackage,
+    ValidationError,
 )
-from mj_manipulator.config import ArmConfig, KinematicLimits
-from mj_manipulator.grasp_verifier import GraspVerifier
 
-from geodude.config import GeodudConfig, GeodudeArmSpec, setup_logging
-from geodude.vention_base import VentionBase
+from geodude import outcomes, recycling
 
-logger = logging.getLogger(__name__)
-
-
-class _GeodudeSimContext:
-    """Wrapper that sets robot._active_context on enter/exit."""
-
-    def __init__(self, inner: SimContext, robot: "Geodude"):
-        self._inner = inner
-        self._robot = robot
-
-    def __enter__(self):
-        ctx = self._inner.__enter__()
-        self._robot._active_context = ctx
-        return ctx
-
-    def __exit__(self, *args):
-        self._robot._active_context = None
-        return self._inner.__exit__(*args)
+SIDES = tuple(recycling.BIN_OF)
+"""Geodude's arms, by side."""
+HOME = "ready"
+"""The package's home configuration."""
+AT_GOAL_RAD = 1e-3
+"""How near its goal, in every joint, an arm already is when ``go_to`` leaves it there."""
+ABORTED = "aborted by request"
 
 
-class _ArmScope:
-    """Unified arm interface — high-level primitives + low-level Arm access.
+@dataclass(frozen=True)
+class TaskResult:
+    """What a call did. True when it succeeded.
 
-    Returned by ``robot.right`` / ``robot.left``. Provides geodude-specific
-    methods (pickup, place, close, open) and delegates everything else to
-    the underlying mj_manipulator Arm via ``__getattr__``::
+    ``held`` is what the deciding stage believed of the object (ssgrasping's conservative
+    ``Stage.held``: None when it could not tell), ``attached`` whether the scene declares
+    it in the hand now. ``results`` are the skills' own results, ``recovery`` what
+    Geodude's recovery did after a failure."""
 
-        robot.left.pickup("can")        # geodude primitive
-        robot.left.close()              # gripper control
-        robot.left.get_ee_pose()        # Arm method (delegated)
-        robot.left.get_ft_wrench()      # Arm method (delegated)
-        robot.left.plan_to_pose(target) # Arm method (delegated)
+    succeeded: bool
+    detail: str
+    object: str | None = None
+    arm: str | None = None
+    held: bool | None = None
+    attached: bool = False
+    aborted: bool = False
+    results: tuple[SkillResult, ...] = ()
+    recovery: outcomes.Recovery | None = None
 
-    Class-level annotations expose delegated Arm methods to IPython/Jedi
-    for tab completion (Jedi uses static analysis and can't follow __getattr__).
-    """
+    def __bool__(self) -> bool:
+        return self.succeeded
 
-    def __init__(self, robot: "Geodude", side: str):
-        self._robot = robot
-        self._side = side
 
-    @property
-    def _arm(self):
-        return self._robot._resolve_arm(self._side)
+@dataclass
+class _Held:
+    """An object an arm picked: how it was grasped, and where from, for its recovery."""
 
-    def __getattr__(self, name):
-        # Delegate unknown attributes to the underlying Arm
-        return getattr(self._arm, name)
-
-    def __dir__(self):
-        # Combine _ArmScope methods + Arm methods for tab completion
-        return sorted(set(super().__dir__()) | set(dir(self._arm)))
-
-    # -- Delegated Arm methods (explicit for IPython tab completion) --
-    # IPython's runtime completer only sees methods defined on the class,
-    # not __getattr__ delegated ones. These thin wrappers make the key
-    # methods tab-completable.
-
-    def get_ee_pose(self):
-        """Current end-effector pose as 4x4 homogeneous transform."""
-        return self._arm.get_ee_pose()
-
-    def get_ft_wrench(self):
-        """Wrist F/T reading [fx,fy,fz,tx,ty,tz] in sensor local frame."""
-        return self._arm.get_ft_wrench()
-
-    def get_ft_wrench_world(self):
-        """Wrist F/T reading [fx,fy,fz,tx,ty,tz] in world frame."""
-        return self._arm.get_ft_wrench_world()
-
-    def tare_ft(self):
-        """Zero the F/T sensor at the current reading."""
-        return self._arm.tare_ft()
-
-    def get_joint_positions(self):
-        """Current joint positions (rad)."""
-        return self._arm.get_joint_positions()
-
-    def set_joint_positions(self, q):
-        """Set joint positions directly (sim only). Use plan_to_configuration() on hardware."""
-        return self._arm.set_joint_positions(q, ctx=self._robot._active_context)
-
-    def get_joint_velocities(self):
-        """Current joint velocities (rad/s)."""
-        return self._arm.get_joint_velocities()
-
-    def get_joint_limits(self):
-        """Joint position limits as (lower, upper) arrays."""
-        return self._arm.get_joint_limits()
-
-    def forward_kinematics(self, q):
-        """Compute end-effector pose for a given joint configuration."""
-        return self._arm.forward_kinematics(q)
-
-    def plan_to_pose(self, pose, **kwargs):
-        """Plan a collision-free path to an end-effector pose."""
-        return self._arm.plan_to_pose(pose, **kwargs)
-
-    def plan_to_configuration(self, q_goal, **kwargs):
-        """Plan a collision-free path to a joint configuration."""
-        return self._arm.plan_to_configuration(q_goal, **kwargs)
-
-    def plan_to_tsrs(self, goal_tsrs, **kwargs):
-        """Plan a collision-free path to a TSR-defined goal region."""
-        return self._arm.plan_to_tsrs(goal_tsrs, **kwargs)
-
-    def retime(self, path, **kwargs):
-        """Retime a joint path into a smooth trajectory."""
-        return self._arm.retime(path, **kwargs)
-
-    def check_collisions(self):
-        """Check current configuration for collisions. Prints a summary."""
-        return self._arm.check_collisions()
-
-    @property
-    def has_ft_sensor(self) -> bool:
-        """Whether this arm has a wrist F/T sensor configured."""
-        return self._arm.has_ft_sensor
-
-    @property
-    def gripper(self) -> RobotiqGripper:
-        """The arm's gripper."""
-        return self._arm.gripper
-
-    @property
-    def config(self) -> ArmConfig:
-        """Arm configuration (joint names, limits, ee_site, etc.)."""
-        return self._arm.config
-
-    @property
-    def grasp_manager(self) -> GraspManager:
-        """GraspManager for grasp state queries."""
-        return self._arm.grasp_manager
-
-    @property
-    def ee_site_id(self) -> int:
-        """MuJoCo site ID for the end-effector."""
-        return self._arm.ee_site_id
-
-    def pickup(self, target: str | None = None, **kwargs) -> bool:
-        return self._robot.pickup(target, arm=self._side, **kwargs)
-
-    def place(self, destination: str | None = None, **kwargs) -> bool:
-        return self._robot.place(destination, arm=self._side, **kwargs)
-
-    def go_home(self, **kwargs) -> bool:
-        from geodude.primitives import go_home
-
-        return go_home(self._robot, arm=self._side, **kwargs)
-
-    def close(self) -> str | None:
-        """Close the gripper. Grasps whatever is between the fingers.
-
-        Returns:
-            Name of grasped object, or None if nothing detected.
-        """
-        ctx = self._robot._active_context
-        if ctx is None:
-            raise RuntimeError("No active execution context. Use 'with robot.sim() as ctx:'")
-        return ctx.arm(self._side).grasp()
-
-    def open(self) -> None:
-        """Open the gripper. Releases whatever is held."""
-        ctx = self._robot._active_context
-        if ctx is None:
-            raise RuntimeError("No active execution context. Use 'with robot.sim() as ctx:'")
-        ctx.arm(self._side).release()
+    object: str
+    spec: GraspSpec
+    origin: tuple[float, float]
 
 
 class Geodude:
-    """High-level interface for the Geodude bimanual robot.
-
-    Provides:
-    - Two UR5e arms with Robotiq 2F-140 grippers (from mj_manipulator)
-    - Optional Vention linear actuator bases
-    - Bimanual planning with arm/height interleaving
-    - Named configurations from MuJoCo keyframes
-    - Affordance-driven pickup/place primitives
-
-    Example::
-
-        robot = Geodude(objects={"can": 2, "recycle_bin": 1})
-        with robot.sim(physics=True) as ctx:
-            robot.pickup("can_0")
-            robot.place("recycle_bin_0")
-    """
-
-    config: GeodudConfig
-    model: mujoco.MjModel
-    data: mujoco.MjData
-    grasp_manager: GraspManager
+    """Geodude in an open ``RobotContext`` (see the module). ``tick`` is called after each
+    step of the clock (a viewer refresh); ``read`` registers each object's pose, as
+    ``recycling.register`` does. Construction registers the objects on the table, builds
+    each arm's planners, and builds both planning scenes."""
 
     def __init__(
         self,
-        config: GeodudConfig | None = None,
-        objects: dict[str, int] | None = None,
-    ):
-        self.config: GeodudConfig = config or GeodudConfig.default()
+        ctx: RobotContext,
+        package: RobotPackage,
+        *,
+        tick: Callable[[], None] = lambda: None,
+        read: recycling.Read = recycling.pose_stub,
+    ) -> None:
+        self._ctx = ctx
+        self._package = package
+        self._tick = tick
+        self._read = read
+        self._abort = threading.Event()
+        self._skill: SkillExecution | None = None
+        self._held: dict[str, _Held] = {}
+        self.left = GeodudeArm(self, "left")
+        self.right = GeodudeArm(self, "right")
+        recycling.register(ctx, recycling.on_table(ctx), read)
+        recycling.warm_planning(ctx, ctx.snapshot(), [a.arm for a in self.arms])
 
-        # Load MuJoCo model via mj_environment
-        if not self.config.model_path.exists():
-            raise FileNotFoundError(
-                f"MuJoCo model not found: {self.config.model_path}\nMake sure geodude_assets is available."
-            )
+    @property
+    def ctx(self) -> RobotContext:
+        return self._ctx
 
-        if objects:
-            from prl_assets import OBJECTS_DIR
+    @property
+    def arms(self) -> tuple[GeodudeArm, GeodudeArm]:
+        return self.right, self.left
 
-            scene_config = self._create_temp_scene_config(objects)
-            self._env = Environment(
-                base_scene_xml=str(self.config.model_path),
-                objects_dir=str(OBJECTS_DIR),
-                scene_config_yaml=scene_config,
-            )
-        else:
-            self._env = Environment(
-                base_scene_xml=str(self.config.model_path),
-                objects_dir=None,
-                scene_config_yaml=None,
-            )
+    def arm(self, side: str) -> GeodudeArm:
+        if side not in SIDES:
+            raise ValueError(f"no arm {side!r}; one of {SIDES}")
+        return self.right if side == "right" else self.left
 
-        self.model: mujoco.MjModel = self._env.model
-        self.data: mujoco.MjData = self._env.data
-
-        # Shared grasp manager
-        self.grasp_manager: GraspManager = GraspManager(self.model, self.data)
-
-        # Create arms from mj_manipulator
-        self._left_arm = self._create_arm(self.config.left_arm, "left")
-        self._right_arm = self._create_arm(self.config.right_arm, "right")
-
-        # Cache freejoint qpos addresses (for hide-all in reset)
-        self._freejoint_qpos_addrs = [
-            self.model.jnt_qposadr[i]
-            for i in range(self.model.njnt)
-            if self.model.jnt_type[i] == mujoco.mjtJoint.mjJNT_FREE
-        ]
-
-        # Create bases (if configured)
-        self._left_base: VentionBase | None = None
-        self._right_base: VentionBase | None = None
-        if self.config.left_base is not None:
-            self._left_base = VentionBase(
-                self.model,
-                self.data,
-                self.config.left_base,
-                self._left_arm,
-            )
-        if self.config.right_base is not None:
-            self._right_base = VentionBase(
-                self.model,
-                self.data,
-                self.config.right_base,
-                self._right_arm,
-            )
-
-        # Cross-wire the bases so each treats the other arm as robot-self
-        # for collision checking. Without this, contacts between the two
-        # UR5e chains read as "arm vs environment" and falsely block base
-        # motion (geodude#197).
-        if self._left_base is not None and self._right_base is not None:
-            self._left_base.set_other_robot_body_ids(self._right_base.arm_body_ids)
-            self._right_base.set_other_robot_body_ids(self._left_base.arm_body_ids)
-
-        # Named poses from keyframes
-        keyframe_poses = self._load_keyframe_poses()
-        self._named_poses = {**self.config.named_poses, **keyframe_poses}
-
-        # Perception service — runs the full pipeline (mock detection →
-        # alias resolution → tracker → env.update) same as hardware.
-        from mj_manipulator.perception import SimPerceptionService
-
-        asset_mgr = None
-        try:
-            from asset_manager import AssetManager
-            from prl_assets import OBJECTS_DIR
-
-            asset_mgr = AssetManager(str(OBJECTS_DIR))
-        except ImportError:
-            pass
-
-        self._perception = SimPerceptionService(
-            self._env,
-            grasp_manager=self.grasp_manager,
-            asset_manager=asset_mgr,
-        )
-        # fixture_types is populated later by setup_scene when the
-        # demo config is known. Until then, refresh() preserves
-        # nothing as fixtures (empty set).
-
-        # Initialize state
-        mujoco.mj_forward(self.model, self.data)
-        setup_logging(self.config.debug)
-
-        # Active execution context (set by sim() context manager)
-        self._context: SimContext | None = None
-
-        # Abort flag (thread-safe, shared between terminal and Viser)
-        import threading
-
-        self._abort_event = threading.Event()
-
-    # -----------------------------------------------------------------
-    # Abort mechanism
-    # -----------------------------------------------------------------
+    # Abort.
 
     def request_abort(self) -> None:
-        """Global kill switch: stop everything immediately.
-
-        - Sets the abort flag (checked by all primitives and trajectory
-          runners on the next tick)
-        - Aborts all arms via the ownership registry
-        - Deactivates all teleop (operator must re-activate)
-
-        The abort flag stays set until the user starts a new command
-        from the REPL, which calls ``clear_abort()``. Primitives
-        check ``is_abort_requested()`` at the top and return False
-        immediately without clearing it.
-        """
-        if not self._abort_event.is_set():
-            logger.warning("⛔ E-Stop activated — all execution halted")
-        if self._context is not None and self._context.ownership is not None:
-            self._context.ownership.abort_all()
-        # Deactivate all teleop — stop means stop, everything
-        if self._context is not None and hasattr(self._context, "_event_loop"):
-            loop = self._context._event_loop
-            if loop is not None and hasattr(loop, "_deactivate_all_teleop"):
-                loop._deactivate_all_teleop()
-        self._abort_event.set()
+        """Cancel the active skill or command at the next step, and refuse every call until
+        ``clear_abort``. Safe from another thread. A race being planned, which steps no
+        time, is not interrupted: the grasp it selects is cancelled before it moves."""
+        self._abort.set()
 
     def clear_abort(self) -> None:
-        """Clear the abort flag (call before starting a new operation)."""
-        if self._abort_event.is_set():
-            logger.warning("✓ E-Stop cleared — resuming")
-        if self._context is not None and self._context.ownership is not None:
-            self._context.ownership.clear_all()
-        self._abort_event.clear()
-
-    def is_abort_requested(self) -> bool:
-        """Check if a global abort has been requested."""
-        return self._abort_event.is_set()
-
-    def _create_arm(self, spec: GeodudeArmSpec, name: str) -> Arm:
-        """Create an mj_manipulator Arm from a GeodudeArmSpec."""
-        joint_names = self.config.joint_names(spec)
-        arm_config = ArmConfig(
-            name=name,
-            entity_type="arm",
-            joint_names=joint_names,
-            kinematic_limits=KinematicLimits(
-                velocity=UR5E_VELOCITY_LIMITS.copy(),
-                acceleration=UR5E_ACCELERATION_LIMITS.copy(),
-            ),
-            ee_site=spec.ee_site,
-            ft_force_sensor=f"{spec.prefix}/ft_sensor_force",
-            ft_torque_sensor=f"{spec.prefix}/ft_sensor_torque",
-        )
-
-        # Create arm first to get joint indices for IK solver
-        arm = Arm(self._env, arm_config)
-
-        # ssik IK, built from the arm's kinematics in the live model
-        joint_limits = arm.get_joint_limits()
-        first_joint_body = self._env.model.jnt_bodyid[arm.joint_ids[0]]
-        base_body_id = int(self._env.model.body_parentid[first_joint_body])
-
-        ik_solver = MuJoCoSSIKSolver.from_model(
-            self._env.model,
-            self._env.data,
-            joint_ids=list(arm.joint_ids),
-            joint_qpos_indices=arm.joint_qpos_indices,
-            ee_site_id=arm.ee_site_id,
-            base_body_id=base_body_id,
-            joint_limits=joint_limits,
-        )
-
-        # Rewrite the Robotiq actuator for constant grip force. The
-        # geodude_assets 2F-140 ships with the menagerie position-
-        # actuator bug: force couples to tendon length so grip → 0 at
-        # full close, and a forcerange=[-5, 5] clamp caps peak force at
-        # ~90 N (low end of the real 20–235 N Robotiq spec). The 2F-140
-        # hides the bug in practice because its large pads provide
-        # enough contact area to hold typical objects, but as soon as
-        # we grasp something smaller or slipperier the force-to-zero
-        # behaviour bites. See docs in mj_manipulator/docs/grippers.md
-        # §2 and mj_manipulator#129/geodude#189.
-        from mj_manipulator.grippers.robotiq import fix_robotiq_grip_force
-
-        fix_robotiq_grip_force(self.model, prefix=spec.gripper_prefix)
-
-        # Create Robotiq gripper
-        gripper = RobotiqGripper(
-            self.model,
-            self.data,
-            name,
-            prefix=spec.gripper_prefix,
-            grasp_manager=self.grasp_manager,
-        )
-
-        arm = Arm(
-            self._env,
-            arm_config,
-            ik_solver=ik_solver,
-            gripper=gripper,
-            grasp_manager=self.grasp_manager,
-        )
-
-        # Attach a sensor-based grasp verifier so gripper.is_holding /
-        # gripper.held_object reflect real signals instead of stale
-        # GraspManager bookkeeping.
-        #
-        # The grasp verifier uses no load signals — the only check is
-        # the decisive-negative branch (gripper at mechanical stop →
-        # nothing held), which reads gripper.get_actual_position()
-        # directly inside _collect_facts, not through the signal list.
-        #
-        # GripperPositionSignal was previously in the signal list, but
-        # the load-drop check (|val| < |baseline| * 0.7) is wrong for
-        # position: tiny compliance drift (fingers flex ~0.06 rad
-        # under load) triggers false LOST on objects grasped at low
-        # position values (pop_tarts_case_0 at 0.209 → 0.146 drift).
-        # The object is still firmly held; the fingers just flexed.
-        #
-        # With an empty signal list, the verifier has one check:
-        # "did the gripper reach the mechanical stop?" If yes → LOST.
-        # If no → HOLDING. Delayed detection of a mid-transport drop
-        # (object falls out, fingers close to stop) is acceptable —
-        # the decisive-negative fires within a few ticks once the
-        # fingers close through the now-empty space.
-        gripper.grasp_verifier = GraspVerifier(
-            gripper=gripper,
-            signals=[],
-        )
-
-        return arm
-
-    # -- Properties ----------------------------------------------------------
+        self._abort.clear()
 
     @property
-    def left(self) -> _ArmScope:
-        """Left arm: ``robot.left.pickup("can")``, ``robot.left.get_ee_pose()``."""
-        return _ArmScope(self, "left")
+    def aborted(self) -> bool:
+        return self._abort.is_set()
 
-    @property
-    def right(self) -> _ArmScope:
-        """Right arm: ``robot.right.pickup("can")``, ``robot.right.get_ee_pose()``."""
-        return _ArmScope(self, "right")
-
-    @property
-    def left_arm(self) -> Arm:
-        import warnings
-
-        warnings.warn(
-            "robot.left_arm is deprecated. Use robot.left instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self._left_arm
-
-    @property
-    def right_arm(self) -> Arm:
-        import warnings
-
-        warnings.warn(
-            "robot.right_arm is deprecated. Use robot.right instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self._right_arm
-
-    @property
-    def left_base(self) -> VentionBase | None:
-        return self._left_base
-
-    @property
-    def right_base(self) -> VentionBase | None:
-        return self._right_base
-
-    @property
-    def env(self) -> Environment:
-        return self._env
-
-    @property
-    def arms(self) -> dict[str, Arm]:
-        """All arms, keyed by side name."""
-        return {"left": self._left_arm, "right": self._right_arm}
-
-    @property
-    def grasp_source(self):
-        """GraspSource backed by prl_assets geometry."""
-        if not hasattr(self, "_grasp_source"):
-            from geodude.grasp_source import GeodueGraspSource
-
-            self._grasp_source = GeodueGraspSource(self)
-        return self._grasp_source
-
-    @property
-    def named_poses(self) -> dict[str, dict[str, list[float]]]:
-        return self._named_poses
-
-    @property
-    def _active_context(self) -> SimContext | None:
-        """Currently active execution context (set by sim())."""
-        return self._context
-
-    @_active_context.setter
-    def _active_context(self, ctx: SimContext | None) -> None:
-        self._context = ctx
-
-    def get_arm_spec(self, arm: Arm) -> GeodudeArmSpec:
-        """Get the GeodudeArmSpec for an arm (has hand_type, prefix, etc.)."""
-        if arm is self._left_arm:
-            return self.config.left_arm
-        return self.config.right_arm
-
-    # -- Arm resolution ------------------------------------------------------
-
-    def _resolve_arms(self, arm: Arm | str | None) -> list[Arm]:
-        """Resolve arm specification to list of Arm instances."""
-        if arm is None:
-            return [self._right_arm, self._left_arm]
-        if isinstance(arm, str):
-            if arm in ("left", "left_arm"):
-                return [self._left_arm]
-            if arm in ("right", "right_arm"):
-                return [self._right_arm]
-            raise ValueError(f"Unknown arm name: {arm}")
-        if isinstance(arm, Arm):
-            return [arm]
-        raise ValueError(f"Invalid arm specification: {arm}")
-
-    def _resolve_arm(self, arm: Arm | str) -> Arm:
-        """Resolve a single arm specification to an Arm instance."""
-        if isinstance(arm, Arm):
-            return arm
-        if arm in ("left", "left_arm"):
-            return self._left_arm
-        if arm in ("right", "right_arm"):
-            return self._right_arm
-        raise ValueError(f"Unknown arm name: {arm}")
-
-    def _get_base_for_arm(self, arm: Arm) -> VentionBase | None:
-        """Get the base associated with an arm."""
-        if arm is self._left_arm:
-            return self._left_base
-        return self._right_base
-
-    def arm_name(self, arm: Arm) -> str:
-        """Get the side name for an arm ('left' or 'right')."""
-        if arm is self._left_arm:
-            return "left"
-        return "right"
-
-    # -- Simulation context --------------------------------------------------
-
-    # (see _GeodudeSimContext below)
-
-    def sim(
-        self,
-        physics: bool = True,
-        viewer=None,
-        viewer_fps: float = 30.0,
-        headless: bool = False,
-        event_loop=None,
-    ) -> _GeodudeSimContext:
-        """Create simulation execution context.
-
-        Returns a context manager for executing trajectories in MuJoCo.
-        Sets robot._active_context on enter, clears on exit.
-
-        Example::
-
-            with robot.sim(physics=True) as ctx:
-                path = robot.left_arm.plan_to_pose(target)
-                traj = robot.left_arm.retime(path)
-                ctx.execute(traj)
-                ctx.arm("left").grasp("can_0")
-        """
-        arms = {"left": self._left_arm, "right": self._right_arm}
-        entities = {}
-        if self._left_base is not None:
-            entities[self._left_base.config.name] = self._left_base
-        if self._right_base is not None:
-            entities[self._right_base.config.name] = self._right_base
-        inner = SimContext(
-            self.model,
-            self.data,
-            arms,
-            physics=physics,
-            headless=headless,
-            viewer=viewer,
-            viewer_fps=viewer_fps,
-            entities=entities,
-            abort_fn=self.is_abort_requested,
-            event_loop=event_loop,
-        )
-        return _GeodudeSimContext(inner, self)
-
-    # -- Named poses ---------------------------------------------------------
-
-    def go_to(self, pose_name: str, ctx: SimContext | None = None) -> bool:
-        """Move both arms to a named configuration.
-
-        Args:
-            pose_name: Name of the configuration (e.g., 'ready').
-            ctx: Execution context. If None, uses the active context.
-
-        Returns:
-            True if both arms planned and executed successfully.
-        """
-        if pose_name not in self.named_poses:
-            raise ValueError(f"Unknown named pose: {pose_name}")
-
-        ctx = ctx or self._active_context
-        if ctx is None:
-            raise RuntimeError("No active execution context. Use robot.sim().")
-
-        pose = self.named_poses[pose_name]
-        success = True
-        for side, arm in [("left", self._left_arm), ("right", self._right_arm)]:
-            if side in pose:
-                q_goal = np.array(pose[side])
-                path = arm.plan_to_configuration(q_goal)
-                if path is not None:
-                    traj = arm.retime(path)
-                    ctx.execute(traj)
-                else:
-                    logger.warning("Failed to plan %s arm to '%s'", side, pose_name)
-                    success = False
-        return success
-
-    # -- Planning (bimanual with base height search) -------------------------
-
-    def plan_to_tsrs(
-        self,
-        goal_tsrs,
-        *,
-        arm: Arm | str | None = None,
-        base_heights: list[float] | None = None,
-        strategy: str = "first",
-        timeout: float | None = None,
-        seed: int | None = None,
-    ) -> PlanResult | None:
-        """Plan to TSR goals with arm/height interleaving.
-
-        If no arm is specified, tries both arms. If base_heights are given,
-        tries each arm at each height.
-
-        Returns:
-            PlanResult with arm trajectory (and base trajectory if height changed),
-            or None if all attempts failed.
-        """
-        return self._plan_with_sequence(
-            goal_tsrs=goal_tsrs,
-            arm=arm,
-            base_heights=base_heights,
-            strategy=strategy,
-            timeout=timeout,
-            seed=seed,
-        )
-
-    def plan_to_pose(
-        self,
-        pose: np.ndarray,
-        *,
-        arm: Arm | str | None = None,
-        base_heights: list[float] | None = None,
-        strategy: str = "first",
-        timeout: float | None = None,
-        seed: int | None = None,
-    ) -> PlanResult | None:
-        """Plan to an EE pose with arm/height interleaving."""
-        return self._plan_with_sequence(
-            pose=pose,
-            arm=arm,
-            base_heights=base_heights,
-            strategy=strategy,
-            timeout=timeout,
-            seed=seed,
-        )
-
-    def _plan_with_sequence(
-        self,
-        *,
-        goal_tsrs=None,
-        pose: np.ndarray | None = None,
-        arm: Arm | str | None = None,
-        base_heights: list[float] | None = None,
-        strategy: str = "first",
-        timeout: float | None = None,
-        seed: int | None = None,
-    ) -> PlanResult | None:
-        """Core planning: try arm/height combinations, return first or best."""
-        arms = self._resolve_arms(arm)
-
-        # Build (arm, height) sequence
-        heights = base_heights if base_heights else [None]
-        sequence: list[tuple[Arm, float | None]] = []
-
-        # Randomize arm order for fairness
-        arms_shuffled = list(arms)
-        random.shuffle(arms_shuffled)
-
-        for h in heights:
-            for a in arms_shuffled:
-                sequence.append((a, h))
-
-        # Try each combination
-        results: list[PlanResult] = []
-        for a, h in sequence:
-            result = self._plan_single(a, h, goal_tsrs=goal_tsrs, pose=pose, timeout=timeout, seed=seed)
-            if result is not None:
-                if strategy == "first":
-                    return result
-                results.append(result)
-
-        if not results:
-            return None
-
-        # "best" strategy: pick shortest arm trajectory
-        return min(results, key=lambda r: r.arm_trajectory.duration)
-
-    def _plan_single(
-        self,
-        arm: Arm,
-        height: float | None,
-        *,
-        goal_tsrs=None,
-        pose: np.ndarray | None = None,
-        timeout: float | None = None,
-        seed: int | None = None,
-    ) -> PlanResult | None:
-        """Plan with a single arm at a specific base height.
-
-        Plans in a forked environment with the base at the target height,
-        so live state is never mutated. The base trajectory is included
-        in the PlanResult so ctx.execute() moves the base properly.
-        """
-        base = self._get_base_for_arm(arm)
-        base_traj = None
-
-        # Plan base trajectory on live state (read-only collision query)
-        if height is not None and base is not None:
-            current_height = base.get_height()
-            if abs(current_height - height) > 0.001:
-                base_traj = base.plan_to(height, check_collisions=True)
-                if base_traj is None:
-                    return None  # path blocked by collision
-
-        # Fork env and set base to target height for arm planning.
-        # No live state mutation — the fork is discarded after planning.
-        planning_env = self._env.fork()
-        if height is not None and base is not None:
-            planning_env.data.qpos[base._qpos_idx] = height
-            mujoco.mj_forward(planning_env.model, planning_env.data)
-
-        if timeout is None:
-            timeout = self.config.planning.timeout
-
-        # Plan arm in the fork (base at target height, everything else live)
-        try:
-            config = arm._make_planner_config(timeout, None)
-            planner = arm.create_planner(config, planning_env=planning_env)
-            start = arm.get_joint_positions()
-
-            if goal_tsrs is not None:
-                tsrs = goal_tsrs if isinstance(goal_tsrs, list) else [goal_tsrs]
-                path = planner.plan(start=start, goal_tsrs=tsrs, seed=seed)
-            elif pose is not None:
-                path = planner.plan(start=start, goal_tsrs=[arm._make_pose_tsr(pose)], seed=seed)
-            else:
-                raise ValueError("Must provide goal_tsrs or pose")
-        except Exception as e:
-            logger.info("Planning failed: %s", e)
-            path = None
-
-        if path is None:
-            return None
-
-        arm_traj = arm.retime(path)
-
-        return PlanResult(
-            arm_name=arm.config.name,
-            arm_trajectory=arm_traj,
-            base_trajectory=base_traj,
-            base_height=height,
-        )
-
-    # -- Scene setup ---------------------------------------------------------
-
-    def setup_scene(
-        self,
-        fixtures: dict[str, list[list[float]]] | None = None,
-    ) -> None:
-        """Set up the scene: place fixtures and ready the robot.
-
-        Activates fixture objects at specified positions, sets bases to
-        midpoint height, and arms to "ready" keyframe.
-
-        Args:
-            fixtures: Stationary objects and their positions, e.g.
-                ``{"recycle_bin": [[0.85, -0.35, 0.01], [-0.85, -0.35, 0.01]]}``
-        """
-        fixtures = fixtures or {}
-        self._fixtures = fixtures
-
-        # Tell the perception service which types are fixtures so
-        # refresh() preserves them (they're not detected by perception).
-        self._perception._fixture_types = set(fixtures.keys())
-
-        # 1. Activate fixtures at specified positions
-        for obj_type, positions in fixtures.items():
-            for pos in positions:
-                self._env.registry.activate(obj_type, pos=list(pos))
-
-        # 2. Set bases to midpoint
-        for base in [self._left_base, self._right_base]:
-            if base is not None:
-                base.set_height(0.25)
-
-        # 3. Set arms to ready keyframe
-        if "ready" in self._named_poses:
-            for side, arm in [("left", self._left_arm), ("right", self._right_arm)]:
-                q = np.array(self._named_poses["ready"][side])
-                for i, idx in enumerate(arm.joint_qpos_indices):
-                    self.data.qpos[idx] = q[i]
-
-        self.forward()
-
-    def holding(self) -> tuple[str, str] | None:
-        """Return which arm is holding an object.
-
-        Returns:
-            ``(side, object_name)`` if either arm is holding, else ``None``.
-
-        Example::
-
-            result = robot.holding()
-            if result:
-                side, obj = result
-                print(f"{side} arm is holding {obj}")
-        """
-        for side in ("left", "right"):
-            held = list(self.grasp_manager.get_grasped_by(side))
-            if held:
-                return (side, held[0])
-        return None
-
-    # -- Scene queries -------------------------------------------------------
+    # Lookups.
 
     def find_objects(self, target: str | None = None) -> list[str]:
-        """Find objects in the scene.
+        """The objects on the table, neither held nor removed as landed, that ``target``
+        names: an instance (``can_0``), a type (``can``), or anything (None)."""
+        return [
+            name
+            for name in recycling.on_table(self._ctx)
+            if target is None or target in (name, recycling.kind_of(name))
+        ]
 
-        Args:
-            target: "can_0" (specific), "can" (type), None (all graspable).
+    def holding(self) -> tuple[str, str] | None:
+        """``(side, object)`` for an object the scene declares in a hand, the right first."""
+        for a in self.arms:
+            if (obj := a.holding()) is not None:
+                return a.side, obj
+        return None
 
-        Returns:
-            List of body names on the table (active, not grasped, not hidden).
+    # Tasks.
 
-        Example::
+    def pickup(self, target: str | None = None, *, arm: str | None = None) -> TaskResult:
+        """Pick up one object that ``target`` names (``find_objects``) with a free hand:
+        ``arm``'s, or either, the arm on the object's side preferred. Every such object
+        and arm is raced at once (ssgrasping's ``Candidates``): the first that plans by
+        priority, then cost, is grasped and lifted. A failure with the object still in
+        the hand is recovered (``recycling.recover``)."""
+        if self.aborted:
+            return TaskResult(False, ABORTED, aborted=True)
+        allowed = self.arms if arm is None else (self.arm(arm),)
+        free = [a for a in allowed if a.holding() is None]
+        if not free:
+            return TaskResult(False, "no free hand", arm=arm)
+        recycling.register(self._ctx, recycling.on_table(self._ctx), self._read)
+        found = self.find_objects(target)
+        refused = {o: why for o in found if (why := recycling.ungraspable(self._ctx, o))}
+        objects = [o for o in found if o not in refused]
+        if not objects:
+            why = "".join(f"; {o}: {w}" for o, w in refused.items())
+            return TaskResult(False, f"nothing graspable matches {target!r}{why}")
+        candidates = []
+        for obj in objects:
+            preferred = recycling.arm_for(recycling.registered_pose(self._ctx, obj).position)
+            for a in free:
+                planner, checker = a.planners
+                candidates.append(
+                    Candidate(
+                        label=f"{a.side} {obj}",
+                        grasp=recycling.grasp_spec(self._ctx, obj, a.arm),
+                        planner=planner,
+                        checker=checker,
+                        priority=recycling.PREFERRED if a.side == preferred.side else 0,
+                    )
+                )
+        race = Candidates(self._ctx, candidates)
+        run_together(self._ctx, [race], max_ticks=recycling.MAX_TICKS, tick=self._stepped)
+        selection = race.selection
+        if selection is None:
+            return TaskResult(False, f"no grasp of {', '.join(objects)} planned")
+        side, obj = selection.candidate.label.split(" ")
+        chosen = self.arm(side)
+        origin = recycling.registered_pose(self._ctx, obj).position
+        spec = selection.candidate.grasp
+        # Kept while the object stays in the hand, however the grasp ended: attached, it is
+        # no longer registered, and its recovery needs how it was grasped and where from.
+        self._held[side] = _Held(obj, spec, (float(origin[0]), float(origin[1])))
+        picked = self._run(self._ctx, selection.grasp(self._ctx), self._stepped)
+        return self._finish(chosen, obj, picked, self._held[side])
 
-            robot.find_objects()         # ['can_0', 'can_1', 'spam_can_0']
-            robot.find_objects("can")    # ['can_0', 'can_1']
-        """
-        objects = self.grasp_source.get_graspable_objects()
-        if target is not None:
-            # Filter: exact match (instance) or prefix match (type)
-            objects = [o for o in objects if o == target or o.startswith(target + "_")]
-        return objects
+    def place(
+        self,
+        destination: str | None = None,
+        *,
+        arm: str | None = None,
+        at: tuple[float, float] | None = None,
+    ) -> TaskResult:
+        """Place what ``arm``'s hand holds (``holding``'s, by default): into the bin on its
+        side (None, ``recycle_bin`` or that bin's name; each arm reaches only its own), or
+        upright on the worktop (``worktop``) at ``at``, where it was picked from by
+        default. A failure with the object still in the hand is recovered, if this robot
+        picked it.
 
-    # -- Primitives (delegate to primitives module) --------------------------
+        A drop succeeds once its release is confirmed. Where the object then comes to rest
+        has no portable signal, so it is assumed landed and removed from the scene
+        (``recycling.assume_landed``, #248), as ``recycle`` does without ``evaluate``."""
+        if at is not None and destination != "worktop":
+            raise ValueError(f"at={at!r} is a worktop position; destination is {destination!r}")
+        if self.aborted:
+            return TaskResult(False, ABORTED, aborted=True)
+        if arm is None:
+            held = self.holding()
+            if held is None:
+                return TaskResult(False, "nothing held")
+            arm = held[0]
+        chosen = self.arm(arm)
+        obj = chosen.holding()
+        if obj is None:
+            return TaskResult(False, "nothing held", arm=arm)
+        bin_name, _ = chosen.arm.bin
+        if destination not in (None, "recycle_bin", bin_name, "worktop"):
+            raise ValueError(
+                f"no destination {destination!r} for the {arm} arm; "
+                f"one of None, 'recycle_bin', {bin_name!r}, 'worktop'"
+            )
+        record = self._held.get(arm)
+        if record is not None and record.object != obj:
+            record = None  # attached by something else: nothing known to recover it by
+        if destination == "worktop" and at is None:
+            if record is None:
+                raise ValueError(f"{obj} was not picked by this robot: give at=")
+            at = record.origin
+        planner, checker = chosen.planners
+        if destination == "worktop":
+            assert at is not None
+            placed = recycling.place_on_worktop(
+                self._ctx,
+                self._package,
+                obj,
+                at,
+                arm=chosen.arm,
+                planners=chosen.planners,
+                tick=self._stepped,
+                read=self._read,
+                run=self._run,
+            )
+            return self._finish(chosen, obj, placed, record)
+        spec = recycling.drop_spec(obj, chosen.arm)
+        if spec is None:
+            return TaskResult(
+                False, f"undroppable: {recycling.undroppable(obj)}", obj, arm, True, True
+            )
+        dropping = drop(
+            self._ctx,
+            planner,
+            spec,
+            check_planner=checker,
+            released=recycling.assume_landed(self._ctx, obj),
+        )
+        dropped = self._run(self._ctx, dropping, self._stepped)
+        return self._finish(chosen, obj, dropped, record, put_back=True)
 
-    def pickup(self, target: str | None = None, **kwargs) -> bool:
-        """Pick up an object.
+    def go_to(self, name: str, *, arm: str | None = None) -> TaskResult:
+        """Move ``arm``, or each arm in turn, the right first, to its joints' positions in
+        the package's named configuration ``name``. The lifts stay where they are, and
+        what a hand holds is carried."""
+        if self.aborted:
+            return TaskResult(False, ABORTED, aborted=True)
+        configuration = self._ctx.description.configuration(name)
+        joints = self._ctx.description.group(configuration.group).joints
+        target = dict(zip(joints, configuration.positions, strict=True))
+        covered = [a for a in self.arms if all(j in target for j in a.joints)]
+        if arm is not None:
+            if self.arm(arm) not in covered:
+                raise ValueError(f"configuration {name!r} does not cover the {arm} arm")
+            covered = [self.arm(arm)]
+        if not covered:
+            raise ValueError(f"configuration {name!r} covers neither arm")
+        details = []
+        for a in covered:
+            reached = a.move_to(tuple(target[j] for j in a.joints))
+            details.append(f"{a.side}: {reached}")
+            if reached != ExecutionState.SUCCEEDED.value:
+                return TaskResult(False, "; ".join(details), arm=a.side, aborted=self.aborted)
+        return TaskResult(True, "; ".join(details), arm=arm)
 
-        Args:
-            target: "can_0" (specific), "can" (any can), None (anything).
-            arm: "left", "right", or None (try both).
-            verbose: Show BT tree status.
-        """
-        from geodude.primitives import pickup
+    def go_home(self, *, arm: str | None = None) -> TaskResult:
+        """``go_to`` the package's home (``HOME``)."""
+        return self.go_to(HOME, arm=arm)
 
-        return pickup(self, target, **kwargs)
+    # Driving.
 
-    def place(self, destination: str | None = None, **kwargs) -> bool:
-        """Place held object at a destination.
-
-        Args:
-            destination: "recycle_bin_0" (specific), "recycle_bin" (any), None (any).
-            arm: "left", "right", or None (auto-detect).
-            verbose: Show BT tree status.
-        """
-        from geodude.primitives import place
-
-        return place(self, destination, **kwargs)
-
-    def go_home(self) -> bool:
-        """Return all arms to ready configuration."""
-        from geodude.primitives import go_home
-
-        return go_home(self)
-
-    # -- State management ----------------------------------------------------
-
-    def forward(self) -> None:
-        """Run forward kinematics and sync viewer."""
-        mujoco.mj_forward(self.model, self.data)
-        if self._context is not None:
-            self._context.sync()
-
-    def reset(self) -> None:
-        """Reset the scene to its initial state.
-
-        Hides all objects, releases grasps, restores fixtures to their
-        original positions, and sets the robot to the ready keyframe.
-        Call ``_spawn_manipulable_objects`` after to re-scatter objects.
-
-        For just returning the robot to home, use ``robot.go_home()``
-        which plans and executes through the context.
-        """
-        # Reset MuJoCo state + deactivate teleop, release grasps
-        if self._context is not None:
-            self._context.reset_to_keyframe("ready")
+    def _stepped(self) -> None:
+        """After each step: the caller's tick, then, if abort was requested, cancel the
+        active skill, or stop whatever else is executing."""
+        self._tick()
+        if not self.aborted:
+            return
+        if self._skill is not None:
+            self._skill.cancel(ABORTED)
         else:
-            key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, "ready")
-            if key_id != -1:
-                mujoco.mj_resetDataKeyframe(self.model, self.data, key_id)
-            else:
-                mujoco.mj_resetData(self.model, self.data)
+            self._ctx.stop()
 
-        # Clear F/T tare
-        for arm in [self._left_arm, self._right_arm]:
-            arm._ft_tare_offset = np.zeros(6)
+    def _run(
+        self, ctx: RobotContext, execution: SkillExecution, tick: Callable[[], None]
+    ) -> SkillResult:
+        """``recycling.drive``, with ``execution`` the skill an abort cancels."""
+        self._skill = execution
+        try:
+            if self.aborted:
+                execution.cancel(ABORTED)
+            return recycling.drive(ctx, execution, tick)
+        finally:
+            self._skill = None
 
-        # Move ALL freejoint bodies to hide position. The keyframe reset put
-        # them at the origin; setup_scene and _spawn_manipulable_objects will
-        # activate the ones that should be visible.
-        if self._env.registry is not None:
-            hide_pos = self._env.hide_pos
-            for qpos_adr in self._freejoint_qpos_addrs:
-                self.data.qpos[qpos_adr : qpos_adr + 3] = hide_pos
-            # Clear the registry's active state
-            for name in list(self._env.registry.active_objects):
-                self._env.registry.hide(name)
+    def _wait(self, execution: Execution) -> str:
+        """Step until ``execution`` ends, cancelling it if it has not after
+        ``recycling.MAX_TICKS``; its end state."""
+        if self.aborted:
+            self._ctx.cancel(execution)
+        status = recycling.step_until(self._ctx, execution, self._stepped)
+        if not execution.done:
+            status = self._ctx.cancel(execution)
+        return status.state.value
 
-        # Re-setup scene (fixtures + robot pose — calls forward() internally).
-        # setup_scene may modify qpos (base heights, arm positions).
-        # reset_to_keyframe deferred the hold, so the next tick captures
-        # whatever qpos exists after setup_scene — no manual hold needed.
-        self.setup_scene(fixtures=getattr(self, "_fixtures", None))
-
-    def reset_to_keyframe(self, name: str) -> None:
-        """Reset robot to a MuJoCo keyframe by name."""
-        if self._context is not None:
-            self._context.reset_to_keyframe(name)
+    def _finish(
+        self,
+        chosen: GeodudeArm,
+        obj: str,
+        result: SkillResult,
+        record: _Held | None,
+        *,
+        put_back: bool = False,
+    ) -> TaskResult:
+        """The result of a skill on ``obj``, recovered first when it failed with ``obj``
+        still in the hand, was not aborted, and ``record`` says how it was grasped. With
+        ``put_back``, for a drop: an object no release planned for goes back where it was
+        picked from (``recycling.recover``)."""
+        failed: Stage | None = recycling.failed_stage(result)
+        decided = failed or result.stage
+        recovery = None
+        if failed is not None and record is not None and not self.aborted:
+            if chosen.holding() == obj:
+                planner, checker = chosen.planners
+                recovery = recycling.recover(
+                    self._ctx,
+                    obj,
+                    chosen.arm,
+                    failed,
+                    record.spec,
+                    planner,
+                    self._stepped,
+                    self._read,
+                    package=self._package,
+                    checker=checker,
+                    origin=record.origin if put_back else None,
+                )
+        aborted = self.aborted  # requested during the recovery, too
+        attached = chosen.holding() == obj
+        if not attached:
+            self._held.pop(chosen.side, None)
+        if failed is None:
+            outcome = "succeeded"
         else:
-            key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, name)
-            if key_id == -1:
-                raise ValueError(f"Keyframe '{name}' not found in model")
-            mujoco.mj_resetDataKeyframe(self.model, self.data, key_id)
-            self.forward()
+            outcome = "failed" if failed.reason is None else failed.reason.value
+        detail = f"{result.skill}.{decided.name}: {outcome}"
+        if recovery is not None:
+            detail += f"; {recovery.detail}"
+        return TaskResult(
+            succeeded=failed is None,
+            detail=detail,
+            object=obj,
+            arm=chosen.side,
+            held=decided.held,
+            attached=attached,
+            aborted=aborted,
+            results=(result,),
+            recovery=recovery,
+        )
+
+
+@dataclass
+class GeodudeArm:
+    """One of Geodude's arms, its components named once (``recycling.Arm``), checked
+    against the package's description, and its planners built once."""
+
+    robot: Geodude
+    side: str
+    arm: recycling.Arm = field(init=False)
+    planners: tuple[Planner, Planner] = field(init=False, repr=False)
+    _tare: tuple[float, ...] = field(init=False, repr=False, default=(0.0,) * 6)
+
+    def __post_init__(self) -> None:
+        self.arm = recycling.Arm(self.side)
+        description = self.robot.ctx.description
+        description.manipulator(self.arm.manipulator)  # each fails if the package lacks it
+        description.end_effector(self.arm.hand)
+        description.gripper(self.arm.gripper)
+        description.channel(self.arm.opening)
+        description.channel(self.arm.wrench)
+        self.planners = recycling.planners(self.robot._package, self.arm)
 
     @property
-    def perception(self):
-        """Perception service for object pose queries."""
-        return self._perception
+    def joints(self) -> tuple[str, ...]:
+        return tuple(self.robot.ctx.description.group(self.arm.manipulator).joints)
 
-    def get_object_pose(self, object_name: str) -> np.ndarray:
-        """Get the 4x4 pose of an object in the scene."""
-        pose = self._perception.get_pose(object_name)
-        if pose is not None:
-            return pose
-        # Fallback for non-registry bodies (fixtures, robot links)
-        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, object_name)
-        if body_id == -1:
-            raise ValueError(f"Object '{object_name}' not found in model")
-        self.forward()
-        T = np.eye(4)
-        T[:3, :3] = self.data.xmat[body_id].reshape(3, 3)
-        T[:3, 3] = self.data.xpos[body_id]
-        return T
+    # State.
 
-    # -- Internal helpers ----------------------------------------------------
+    def joint_positions(self) -> tuple[float, ...]:
+        """The arm's joint positions now."""
+        snapshot = self.robot.ctx.snapshot()
+        return tuple(snapshot.position(j) for j in self.joints)
 
-    def _load_keyframe_poses(self) -> dict[str, dict[str, list[float]]]:
-        """Extract named poses from MuJoCo keyframes."""
-        poses: dict[str, dict[str, list[float]]] = {}
-        for key_id in range(self.model.nkey):
-            name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_KEY, key_id)
-            if name is None:
-                continue
-            key_qpos = self.model.key_qpos[key_id]
-            left_qpos = [float(key_qpos[i]) for i in self._left_arm.joint_qpos_indices]
-            right_qpos = [float(key_qpos[i]) for i in self._right_arm.joint_qpos_indices]
-            poses[name] = {"left": left_qpos, "right": right_qpos}
-        return poses
+    def end_effector_pose(self) -> Pose:
+        """The hand's frame, by forward kinematics at the arm's joint positions now."""
+        ctx = self.robot.ctx
+        frame = ctx.description.end_effector(self.arm.hand).frame
+        snapshot = ctx.snapshot()
+        q = tuple(snapshot.position(j) for j in self.joints)
+        return ctx.planning_scene(snapshot, self.arm.manipulator).forward_kinematics(q, frame)
 
-    def _create_temp_scene_config(self, objects: dict[str, int]) -> str:
-        """Create temporary scene_config.yaml from objects dict."""
-        import tempfile
+    def wrench(self) -> tuple[float, ...]:
+        """The wrist's force and torque now, less the reading at the last ``tare``."""
+        raw = self._wrench()
+        return tuple(r - t for r, t in zip(raw, self._tare, strict=True))
 
-        import yaml
+    def tare(self) -> None:
+        """Take the wrist's reading now as its zero."""
+        self._tare = self._wrench()
 
-        config = {"objects": {obj_type: {"count": count} for obj_type, count in objects.items()}}
-        temp_file = tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=".yaml",
-            delete=False,
+    def _wrench(self) -> tuple[float, ...]:
+        observed = self.robot.ctx.observe(ObservationRequest(channels=(self.arm.wrench,)))
+        value = observed.reading(self.arm.wrench).value
+        assert isinstance(value, tuple)
+        return tuple(float(v) for v in value)
+
+    def holding(self) -> str | None:
+        """The object the scene declares in this hand."""
+        for attachment in self.robot.ctx.scene.attachments:
+            if attachment.end_effector == self.arm.hand:
+                return attachment.object
+        return None
+
+    # Gripper.
+
+    def open(self) -> TaskResult:
+        """Open the fingers, unless the hand holds an object (``place`` it), or the fingers,
+        opened, would touch something (ssgrasping's ``obstructing``)."""
+        if (obj := self.holding()) is not None:
+            return TaskResult(False, f"holding {obj}: place it", obj, self.side, True, True)
+        ctx = self.robot.ctx
+        try:
+            touched = obstructing(
+                ctx, ctx.snapshot(), self.arm.manipulator, self.arm.gripper, "open", ()
+            )
+        except ValidationError as e:
+            return TaskResult(
+                False, f"the fingers' end could not be checked: {e.code}", arm=self.side
+            )
+        if touched:
+            return TaskResult(
+                False, f"opened, the fingers would touch {', '.join(touched)}", arm=self.side
+            )
+        return self._grip(1.0)
+
+    def close(self) -> TaskResult:
+        """Close the fingers. Nothing is attached: ``pickup`` grasps."""
+        return self._grip(0.0)
+
+    def _grip(self, opening: float) -> TaskResult:
+        if self.robot.aborted:
+            return TaskResult(False, ABORTED, arm=self.side, aborted=True)
+        ctx = self.robot.ctx
+        execution = ctx.submit(GripperCommand(gripper=self.arm.gripper, opening=opening))
+        state = self.robot._wait(execution)
+        status = execution.status.gripper
+        ended = (
+            "" if status is None else f", {status.termination.value} at {status.final_opening:.3f}"
         )
-        yaml.dump(config, temp_file)
-        temp_file.close()
-        return temp_file.name
+        # Opening must reach open; closing may stop short, on whatever is between the fingers.
+        succeeded = (
+            state == ExecutionState.SUCCEEDED.value
+            and status is not None
+            and (opening == 0.0 or status.termination is GripperTermination.REACHED_TARGET)
+        )
+        return TaskResult(succeeded, f"{state}{ended}", arm=self.side, aborted=self.robot.aborted)
+
+    # Motion.
+
+    def move_to(self, q: Sequence[float]) -> str:
+        """Plan to the joint positions ``q`` and execute: the end state, or why it did not
+        plan. An arm already within ``AT_GOAL_RAD`` of ``q`` in every joint is not moved
+        (ssrobot#253: planning to where it is raises)."""
+        ctx = self.robot.ctx
+        if all(abs(a - b) <= AT_GOAL_RAD for a, b in zip(self.joint_positions(), q, strict=True)):
+            return ExecutionState.SUCCEEDED.value
+        planner, _ = self.planners
+        plan = ctx.manipulator(self.arm.manipulator).plan_to_configuration(q, planner=planner)
+        if not plan.succeeded:
+            return f"not planned: {plan.status.value}"
+        return self.robot._wait(ctx.execute(plan, planner=planner))
+
+    # The robot's tasks, with this arm.
+
+    def pickup(self, target: str | None = None) -> TaskResult:
+        return self.robot.pickup(target, arm=self.side)
+
+    def place(
+        self, destination: str | None = None, *, at: tuple[float, float] | None = None
+    ) -> TaskResult:
+        return self.robot.place(destination, arm=self.side, at=at)
+
+    def go_home(self) -> TaskResult:
+        return self.robot.go_home(arm=self.side)

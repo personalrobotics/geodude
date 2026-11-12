@@ -1,189 +1,201 @@
-# SPDX-License-Identifier: MIT
-# Copyright (c) 2025 Siddhartha Srinivasa
+"""Geodude's robot API drives every public call in a seeded recycling scene, each judged by
+the physics (personalrobotics/geodude#209).
 
-"""Tests for Geodude robot class."""
+Two cans and a sugar box are staged at ``SEED``, all on the right arm's side. One
+``Geodude`` drives, in turn:
+- ``find_objects`` by anything, by type, and by instance;
+- ``pickup("can")``: a type, resolved to whichever can and arm the race selects;
+- ``place()``: into the holding arm's own bin, where the can then rests;
+- ``robot.right.pickup`` of the other can (an arm chosen by side), then
+  ``place("worktop")``: it stands upright where it was picked from;
+- ``go_home``: each arm at the package's ``ready``, the one already there not moved
+  (ssrobot#253);
+- per arm, at rest: the end-effector pose against the hand's pose channel, the wrench
+  zeroed by ``tare``, and ``close`` and ``open`` against the opening channel;
+- an abort requested from the tick once a can is in the hand: the grasp is cancelled
+  (``SkillExecution.cancel``), no recovery runs, and the result reports the can held,
+  as ``holding`` does; ``open`` refuses while it is, and every call until
+  ``clear_abort``. Cleared, the can is placed in the bin, and the arm goes home, by when
+  both cans rest in the bin.
 
+The privileged pose of each object (``recycling.true_pose``), never the registered one,
+is what the bin and the worktop are judged by. The evidence is ``robot.json``: every call,
+what it returned, and where each object ended. Reproduce with
+``uv run pytest tests/test_robot.py``.
+"""
+
+from __future__ import annotations
+
+import json
+import tempfile
 from pathlib import Path
+from typing import Any
 
 import numpy as np
-import pytest
+from ssgrasping import Reason
+from ssrobot import ObservationRequest, Pose, RobotContext, load_installed_package
 
-from geodude.config import GeodudConfig
-from geodude.robot import Geodude
+from geodude import recycling, regions
+from geodude.robot import HOME, Geodude, TaskResult
+from geodude.scene import meta, physical, stage_scene
 
-
-class TestGeodude:
-    """Tests for Geodude class."""
-
-    def test_init(self):
-        """Geodude initializes correctly with default config."""
-        robot = Geodude()
-        assert robot.model is not None
-        assert robot.data is not None
-        assert robot.left is not None
-        assert robot.right is not None
-        assert robot.grasp_manager is not None
-
-    def test_model_not_found_raises(self):
-        """Missing model file raises FileNotFoundError."""
-        config = GeodudConfig.default()
-        config.model_path = Path("/nonexistent/path/to/model.xml")
-        with pytest.raises(FileNotFoundError):
-            Geodude(config)
-
-    def test_left_arm_has_6_joints(self):
-        """Left arm has 6 joints (UR5e)."""
-        robot = Geodude()
-        assert robot.left.dof == 6
-
-    def test_right_arm_has_6_joints(self):
-        """Right arm has 6 joints (UR5e)."""
-        robot = Geodude()
-        assert robot.right.dof == 6
-
-    def test_arm_names(self):
-        """Arms have correct names."""
-        robot = Geodude()
-        assert robot.left.config.name == "left"
-        assert robot.right.config.name == "right"
-
-    def test_named_poses(self):
-        """named_poses returns configuration dict from keyframes."""
-        robot = Geodude()
-        assert "ready" in robot.named_poses
-
-    def test_named_poses_have_left_right(self):
-        """Named poses contain left and right arm configs."""
-        robot = Geodude()
-        ready = robot.named_poses["ready"]
-        assert "left" in ready
-        assert "right" in ready
-        assert len(ready["left"]) == 6
-        assert len(ready["right"]) == 6
-
-    def test_forward(self):
-        """forward runs FK without error."""
-        robot = Geodude()
-        robot.forward()
-
-    def test_reset(self):
-        """reset returns to initial state."""
-        robot = Geodude()
-        for i, idx in enumerate(robot.right.joint_qpos_indices):
-            robot.data.qpos[idx] = 0.5
-        robot.reset()
-        # After reset, time should be 0
-        assert robot.data.time == 0
-
-    def test_grippers_attached(self):
-        """Both arms have grippers."""
-        robot = Geodude()
-        assert robot.left.gripper is not None
-        assert robot.right.gripper is not None
-
-    def test_gripper_actuator_ids(self):
-        """Both grippers have valid actuator IDs."""
-        robot = Geodude()
-        assert robot.left.gripper.actuator_id is not None
-        assert robot.right.gripper.actuator_id is not None
-
-    def test_ik_solvers_attached(self):
-        """Both arms have IK solvers."""
-        robot = Geodude()
-        assert robot.left.ik_solver is not None
-        assert robot.right.ik_solver is not None
-
-    def test_resolve_arms_both(self):
-        """_resolve_arms(None) returns both arms."""
-        robot = Geodude()
-        arms = robot._resolve_arms(None)
-        assert len(arms) == 2
-
-    def test_resolve_arms_left(self):
-        """_resolve_arms('left') returns left arm only."""
-        robot = Geodude()
-        arms = robot._resolve_arms("left")
-        assert len(arms) == 1
-        assert arms[0] is robot._left_arm
-
-    def test_resolve_arms_invalid_raises(self):
-        """_resolve_arms with invalid name raises."""
-        robot = Geodude()
-        with pytest.raises(ValueError):
-            robot._resolve_arms("invalid_arm")
-
-    def test_sim_context_creation(self):
-        """sim() creates a SimContext that can be entered."""
-        robot = Geodude()
-        with robot.sim(headless=True) as ctx:
-            assert ctx is not None
-            assert ctx.is_running()
-
-    def test_get_arm_spec(self):
-        """get_arm_spec returns correct spec for each arm."""
-        robot = Geodude()
-        left_spec = robot.get_arm_spec(robot._left_arm)
-        right_spec = robot.get_arm_spec(robot._right_arm)
-        assert "left_ur5e" in left_spec.prefix
-        assert "right_ur5e" in right_spec.prefix
+SEED = 0
+OBJECTS = {"can": 2, "sugar_box": 1}
+HOME_TOLERANCE_RAD = 0.01
+"""How near ``ready`` each arm's joints come: the runtime's goal tolerance."""
+FRAME_TOLERANCE_M = 1e-6
 
 
-class TestGeodueWithObjects:
-    """Tests for Geodude with objects in the scene."""
-
-    @pytest.fixture
-    def robot_with_object(self, geodude_xml):
-        import tempfile
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".xml", delete=False) as f:
-            f.write(geodude_xml)
-            temp_path = Path(f.name)
-
-        config = GeodudConfig.default()
-        config.model_path = temp_path
-        robot = Geodude(config)
-        yield robot
-        temp_path.unlink()
-
-    def test_get_object_pose(self, robot_with_object):
-        """get_object_pose returns 4x4 matrix."""
-        pose = robot_with_object.get_object_pose("box1")
-        assert pose.shape == (4, 4)
-        assert np.allclose(pose[3, :], [0, 0, 0, 1])
-
-    def test_get_object_pose_unknown_raises(self, robot_with_object):
-        """get_object_pose with unknown object raises ValueError."""
-        with pytest.raises(ValueError, match="not found"):
-            robot_with_object.get_object_pose("nonexistent_object")
+def _call(name: str, result: TaskResult) -> dict[str, Any]:
+    return {
+        "call": name,
+        "succeeded": result.succeeded,
+        "object": result.object,
+        "arm": result.arm,
+        "held": result.held,
+        "attached": result.attached,
+        "aborted": result.aborted,
+        "detail": result.detail,
+    }
 
 
-class TestEndEffectors:
-    """Tests for end effector functionality."""
-
-    def test_left_arm_ee_pose_valid(self):
-        """Left arm EE pose is a valid transform."""
-        robot = Geodude()
-        pose = robot.left.get_ee_pose()
-        assert pose.shape == (4, 4)
-        det = np.linalg.det(pose[:3, :3])
-        assert np.isclose(det, 1.0, atol=1e-6)
-
-    def test_right_arm_ee_pose_valid(self):
-        """Right arm EE pose is a valid transform."""
-        robot = Geodude()
-        pose = robot.right.get_ee_pose()
-        assert pose.shape == (4, 4)
-        det = np.linalg.det(pose[:3, :3])
-        assert np.isclose(det, 1.0, atol=1e-6)
+def _reading(ctx: RobotContext, channel: str) -> tuple[float, ...]:
+    value = ctx.observe(ObservationRequest(channels=(channel,))).reading(channel).value
+    assert isinstance(value, tuple)
+    return tuple(float(v) for v in value)
 
 
-class TestJointLimits:
-    """Tests for joint limits."""
+def _in_bin(pose: Pose, side: str) -> bool:
+    name, base = recycling.Arm(side).bin
+    region = regions.interior(meta(recycling.kind_of(name)), base)
+    local = [pose.position[i] - region.origin.position[i] for i in range(3)]
+    return all(lo <= v <= hi for v, (lo, hi) in zip(local, region.position_bounds, strict=True))
 
-    def test_joint_limits_reasonable(self):
-        """Joint limits are reasonable for UR5e."""
-        robot = Geodude()
-        lower, upper = robot.right.get_joint_limits()
-        assert np.all(lower < 0)
-        assert np.all(upper > 0)
-        assert np.all(upper - lower > 3)
+
+def test_robot_api_drives_every_call(artifacts: Path) -> None:
+    package = load_installed_package("geodude_assets")
+    calls: list[dict[str, Any]] = []
+    with tempfile.TemporaryDirectory() as work:
+        scene = stage_scene(
+            Path(work) / "scene", package, objects=OBJECTS, fixtures=recycling.BINS, seed=SEED
+        )
+        runtime = recycling.runtime(package, scene)
+        with RobotContext(package.description, runtime, object_poses=recycling.OBJECT_POSES) as ctx:
+            armed: list[bool] = []
+
+            def tick() -> None:  # the abort, once armed and a can is in a hand
+                if armed and robot.holding() is not None:
+                    robot.request_abort()
+
+            robot = Geodude(ctx, package, tick=tick)
+            everything = robot.find_objects()
+            cans = robot.find_objects("can")
+            assert everything == ["can_0", "can_1", "sugar_box_0"], everything
+            assert cans == ["can_0", "can_1"], cans
+            assert robot.find_objects("can_1") == ["can_1"]
+            assert robot.holding() is None
+
+            # A type, resolved: the race selects the can and the arm.
+            picked = robot.pickup("can")
+            calls.append(_call("pickup('can')", picked))
+            assert picked and picked.held and picked.attached, picked
+            assert picked.object in cans and picked.arm is not None, picked
+            first, side = picked.object, picked.arm
+            assert robot.holding() == (side, first)
+            assert first not in robot.find_objects()
+
+            placed = robot.place()
+            calls.append(_call("place()", placed))
+            assert placed and not placed.attached and placed.arm == side, placed
+            assert robot.holding() is None
+            assert first not in robot.find_objects()
+            assert _in_bin(recycling.true_pose(ctx, first), side), recycling.true_pose(ctx, first)
+
+            # An arm chosen by side, then the worktop.
+            (second,) = robot.find_objects("can")
+            origin = recycling.registered_pose(ctx, second).position
+            picked = robot.right.pickup(second)
+            calls.append(_call(f"right.pickup({second!r})", picked))
+            assert picked and picked.arm == "right" and picked.object == second, picked
+            placed = robot.place("worktop")
+            calls.append(_call("place('worktop')", placed))
+            assert placed and not placed.attached, placed
+            at = recycling.true_pose(ctx, second)
+            off = np.linalg.norm(np.subtract(at.position[:2], origin[:2]))
+            assert off <= recycling.PLACE_SLACK_M + recycling.PLACE_TOLERANCE_M, off
+            _, rest = physical("can")
+            assert regions.tilt(regions.matrix(at), rest) <= recycling.PLACE_TILT_RAD, at
+
+            home = robot.go_home()
+            calls.append(_call("go_home()", home))
+            assert home, home
+            configuration = ctx.description.configuration(HOME)
+            ready = dict(
+                zip(
+                    ctx.description.group(configuration.group).joints,
+                    configuration.positions,
+                    strict=True,
+                )
+            )
+            for a in robot.arms:
+                q = a.joint_positions()
+                gap = max(abs(v - ready[j]) for v, j in zip(q, a.joints, strict=True))
+                assert gap <= HOME_TOLERANCE_RAD, (a.side, gap)
+
+            # Each arm's surface, against its channels.
+            for a in robot.arms:
+                pose = a.end_effector_pose()
+                channel = _reading(ctx, f"{a.side}_hand_pose")
+                assert np.allclose(pose.position, channel[:3], atol=FRAME_TOLERANCE_M), a.side
+                assert abs(abs(np.dot(pose.quat_wxyz, channel[3:])) - 1.0) <= 1e-6, a.side
+                raw = np.linalg.norm(a.wrench())  # untared: the hand's own weight
+                a.tare()
+                tared = np.linalg.norm(a.wrench())
+                assert raw > 1.0 and tared <= 1e-9, (a.side, raw, tared)
+                closed = a.close()
+                calls.append(_call(f"{a.side}.close()", closed))
+                assert closed and _reading(ctx, a.arm.opening)[0] < 0.05, closed
+                opened = a.open()
+                calls.append(_call(f"{a.side}.open()", opened))
+                assert opened and _reading(ctx, a.arm.opening)[0] > 0.95, opened
+
+            # Abort, once the can is in the hand: cancelled, no recovery, held.
+            armed.append(True)
+            aborted = robot.pickup("can")
+            calls.append(_call("pickup('can'), aborted", aborted))
+            assert not aborted and aborted.aborted, aborted
+            assert aborted.held is True and aborted.attached and aborted.recovery is None, aborted
+            (result,) = aborted.results
+            assert result.stage.reason is Reason.CANCELLED, result.stage
+            assert robot.holding() == (aborted.arm, second)
+            assert aborted.arm is not None
+            refused = robot.arm(aborted.arm).open()
+            calls.append(_call(f"{aborted.arm}.open(), holding", refused))
+            assert not refused and robot.holding() == (aborted.arm, second), refused
+            again = robot.go_home()
+            calls.append(_call("go_home(), aborted", again))
+            assert not again and again.aborted, again
+            robot.clear_abort()
+            armed.clear()
+            assert not robot.aborted
+
+            # Cleared, what the abort left in the hand is placed, and the arm goes home:
+            # by then both cans have come to rest in the bin.
+            placed = robot.place()
+            calls.append(_call("place(), after clear_abort", placed))
+            assert placed and robot.holding() is None, placed
+            home = robot.go_home()
+            calls.append(_call("go_home(), after clear_abort", home))
+            assert home, home
+            for name in (first, second):
+                assert _in_bin(recycling.true_pose(ctx, name), side), name
+
+            ended = {
+                name: {
+                    "position": list(recycling.true_pose(ctx, name).position),
+                    "quat_wxyz": list(recycling.true_pose(ctx, name).quat_wxyz),
+                }
+                for name in everything
+            }
+    report = {"seed": SEED, "objects": OBJECTS, "calls": calls, "ended": ended}
+    (artifacts / "robot.json").write_text(json.dumps(report, indent=2) + "\n")

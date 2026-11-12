@@ -45,3 +45,6 @@ htmlcov/
 # Claude AI working files
 tasks/lessons.md
 CLAUDE.md
+
+# Each test's evidence (GEODUDE_ARTIFACTS), and evaluation runs
+artifacts/

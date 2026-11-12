@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.1.0 (2026-11-12)
+
+The last 3.x release. Geodude 4.0, on ssrobot and ssgrasping, replaces it (#212); the 3.x console, chat, and teleoperation remain available from this tag. No behavior changes beyond those listed:
+
+- `reset` cleans up through `ctx.reset_state()` and `ctx.reset_to_keyframe()`, and re-syncs the controller after `setup_scene` (ef2377e, 921c249, 95a2578, dec2e35).
+- `request_abort` also deactivates teleoperation (45b6a78).
+- viser and mj-viser are declared as direct dependencies (#195).
+- sstsr from PyPI, at 3.4 or later (322a3ee, #203).
+- UR5e IK from ssik, built from the live model, not EAIK (#204); mj_manipulator locked at #180 (#205).
+
 ## v3.0.0 (2026-04-17)
 
 203 commits since v2.0.0. Near-total rewrite of internals; public API stable but behavior and architecture transformed. Coordinated with mj_manipulator v2.0.0.

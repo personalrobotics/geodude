@@ -275,3 +275,7 @@ evidence under `artifacts/` and documents how to reproduce it. CI also builds th
 wheel, installs it in a clean environment, runs the demo from the installed command,
 and checks with `scripts/check_installed.py` that the run used the installed 4.x
 package rather than the source tree or the 3.x application.
+
+CI runs each third-party action at a full commit, with its release in a comment.
+Dependabot (`.github/dependabot.yml`) proposes each update as a pull request that moves
+the pin and its comment together. Review it as any dependency change.

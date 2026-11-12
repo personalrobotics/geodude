@@ -1,0 +1,11 @@
+# Keeps the CI workflow's actions, pinned by commit, up to date: each proposal moves a pin
+# to a newer release's commit and its version comment.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:  # one pull request, and one CI run, for every action at once
+      actions:
+        patterns: ["*"]

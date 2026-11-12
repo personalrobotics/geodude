@@ -6,3 +6,6 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    groups:  # one pull request, and one CI run, for every action at once
+      actions:
+        patterns: ["*"]

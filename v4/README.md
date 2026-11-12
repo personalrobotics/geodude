@@ -76,12 +76,13 @@ from geodude.scene import stage_scene
 
 package = load_installed_package("geodude_assets")
 scene = stage_scene("scene", package, objects={"can": 2}, fixtures=recycling.BINS, seed=0)
-with RobotContext(package.description, recycling.runtime(package, scene),
-                  object_poses=recycling.OBJECT_POSES) as ctx:
+with RobotContext(
+    package.description, recycling.runtime(package, scene), object_poses=recycling.OBJECT_POSES
+) as ctx:
     robot = Geodude(ctx, package)
-    if robot.pickup("can"):        # an instance, a type, or None for anything; either arm
-        robot.place()              # into the bin on the holding arm's side, or "worktop"
-    robot.right.pickup("can")      # an arm chosen by side
+    if robot.pickup("can"):  # an instance, a type, or None for anything; either arm
+        robot.place()  # into the bin on the holding arm's side, or "worktop"
+    robot.right.pickup("can")  # an arm chosen by side
     robot.go_home()
 ```
 

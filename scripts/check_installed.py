@@ -1,7 +1,7 @@
 """Check Geodude 4.0 as installed from its wheel, not from a checkout (#208).
 
-Both Geodude 4.0 and the legacy app import as ``geodude``. Run with the clean
-environment's interpreter, in isolated mode (``python -I``), from outside the
+The 3.x application, last released as ``v3.1.0``, also imported as ``geodude``. Run
+with the clean environment's interpreter, in isolated mode (``python -I``), from outside the
 repository, after the installed ``geodude-recycling --seed 0 --record DIR``::
 
     python -I check_installed.py <repository> <DIR>/recycling.json
@@ -9,8 +9,8 @@ repository, after the installed ``geodude-recycling --seed 0 --record DIR``::
 It fails unless:
 - ``geodude`` is the installed 4.x wheel, in the environment's site-packages, not an
   editable or path install, and no path on ``sys.path`` is inside the repository;
-- no module that only the legacy app has (``<repository>/src/geodude``) is importable,
-  and the wheel ships none;
+- no module that only the 3.x application had (``LEGACY``, less any the 4.x package
+  has itself) is importable, and the wheel ships none;
 - the installed command's outcome decodes strictly as a ``RecyclingRun``, succeeded,
   and names this install, by its version and no VCS commit, as its geodude source.
 """
@@ -23,6 +23,25 @@ import json
 import sys
 import sysconfig
 from pathlib import Path
+
+LEGACY = frozenset(
+    {
+        "__main__",
+        "bt",
+        "chat",
+        "cli",
+        "config",
+        "console",
+        "demo_loader",
+        "demos",
+        "grasp_source",
+        "panels",
+        "primitives",
+        "vention_base",
+    }
+)
+"""The modules and subpackages of ``geodude`` that only the 3.x application had, at
+``v3.1.0``, the last 3.x release, removed at the cutover (#212)."""
 
 
 def _modules(package: Path) -> set[str]:
@@ -54,9 +73,7 @@ def main(repository: Path, report_path: Path) -> list[str]:
     if direct.get("dir_info") or not direct.get("url", ".whl").endswith(".whl"):
         failures.append(f"geodude installed from {direct}, not a wheel")
 
-    legacy = _modules(repository / "src" / "geodude") - _modules(installed)
-    if not legacy:
-        failures.append("found no legacy-only modules to check")
+    legacy = LEGACY - _modules(installed)  # a 4.x module may reuse a 3.x name
     importable = sorted(m for m in legacy if importlib.util.find_spec(f"geodude.{m}"))
     if importable:
         failures.append(f"legacy modules importable: {importable}")

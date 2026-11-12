@@ -1,292 +1,305 @@
-# Geodude
+# Geodude 4.0
 
-Bimanual manipulation with the Geodude robot, built on [mj_manipulator](https://github.com/personalrobotics/mj_manipulator).
+Geodude is a bimanual robot: two UR5e arms, each on a Vention linear rail and fitted
+with a Robotiq 2F-140 gripper, working over a table. Geodude 4.0 rebuilds its
+application on [ssrobot](https://github.com/personalrobotics/ssrobot) and
+[ssgrasping](https://github.com/personalrobotics/ssgrasping). It replaced the 3.x
+application at the cutover (#212). 3.x, with its console, chat and teleoperation, remains
+available from its last release, [`v3.1.0`](https://github.com/personalrobotics/geodude/releases/tag/v3.1.0),
+installed from that tag's lock. See "From 3.x" below.
 
-Geodude 4.0, rebuilt on ssrobot and ssgrasping, is developed in [`v4/`](v4/README.md)
-alongside this application and will replace it once it covers the same tasks.
+## What the application owns
 
-## The Robot
+A robot application is where the decisions specific to one robot and one task belong.
+Geodude 4.0 is deliberately small because most of the work happens in shared layers,
+each of which owns one kind of decision:
 
-```
-                ┌─────────────────────────────────────┐
-                │           Vention Frame             │
-                └─────────────────────────────────────┘
-                     │                       │
-                ┌────┴────┐             ┌────┴────┐
-                │ Linear  │             │ Linear  │
-                │ Rail    │             │ Rail    │
-                │ (0-50cm)│             │ (0-50cm)│
-                └────┬────┘             └────┬────┘
-                     │                       │
-                ┌────┴────┐             ┌────┴────┐
-                │  UR5e   │             │  UR5e   │
-                │  Left   │             │  Right  │
-                └────┬────┘             └────┬────┘
-                     │                       │
-                ┌────┴────┐             ┌────┴────┐
-                │ Robotiq │             │ Robotiq │
-                │ 2F-140  │             │ 2F-140  │
-                └─────────┘             └─────────┘
-```
+| Layer | Owns |
+| --- | --- |
+| [geodude_assets](https://github.com/personalrobotics/geodude_assets) | Geodude's robot package: its MuJoCo model, groups, end effectors, grippers, channels, and limits |
+| ssrobot | The session, snapshots, planning contracts, the checked execution boundary, and the run's evidence |
+| ssgrasping | Grasp, place, and drop skills written against robot-neutral contracts, candidate races, and planning ahead |
+| [prl_assets](https://github.com/personalrobotics/prl_assets) and [sstsr](https://github.com/personalrobotics/sstsr) | Object geometry and models, and the gripper and placement templates built from them |
+| Geodude 4.0 | Which arm takes which object, where the bins stand, the regions offered to each skill, the speeds, forces, and tolerances, how a scene is staged, how the run is driven, and what counts as success |
 
-- **2× UR5e arms** — 6-DOF manipulators (from mj_manipulator)
-- **2× Vention linear actuators** — Height-adjustable bases (0–50cm)
-- **2× Robotiq 2F-140 grippers** — Parallel-jaw, 140mm stroke (from mj_manipulator)
+Geodude 4.0 owns the application's orchestration. It chooses and constructs its
+planners, builds the specs it passes to each skill, decides which skills run in which
+order, and advances the `RobotContext`, stepping its clock while skills and races
+proceed. It does not contain a planner implementation, a low-level controller, a
+simulator integration, or a grasping skill. ssrobot's runtime integrates MuJoCo,
+sscbirrt plans, and ssgrasping implements the skills. The same separation is what allows
+ssgrasping's skills to be written against robot-neutral contracts.
 
-## Quick Start
+## The recycling demo
+
+The demo stages cans upright on the worktop with two recycling bins beside the table,
+one on each arm's side, then picks each can and drops it into a bin. With one can, the
+arm on the can's side of the worktop picks it and drops it into its own bin.
+
+With several cans, both arms race for each one. Each arm's whole feasibility prefix,
+from the pregrasp through the transfer to its own bin's drop region, is planned before
+anything moves. Closing the fingers, releasing the can, and where it comes to rest are
+observed when they happen, not planned.
+The arm on the can's side is preferred, and the other arm takes the can when the
+preferred arm's prefix does not plan. The race for the next can is planned while the
+current can is carried, on the prediction of that transfer. The prediction expects the
+can to be released over the bin and then removed from the scene as landed, and the
+selected pregrasp continues once the release has happened. The demo can also place a single can
+upright at a target on the worktop under a force-guarded descent, instead of dropping
+it.
+
+The legacy demo's round stages five objects drawn, by the seed, from its nine types:
+`can`, `spam_can`, `cracker_box`, `gelatin_box`, `sugar_box`, `pocky_box`,
+`pop_tarts_case`, `fuze_bottle` and `plastic_glass` (`recycling.MIX_KINDS`).
+`recycling.sort_all` sorts them all into the bins, racing both arms as above. An attempt
+that fails is recovered only where releasing the object is safe: a lift that did not
+plan releases it where it was grasped, and an object whose gripper opening showed it
+leave the hand during a carry, which then stopped and reported it not held, is
+detached: nothing is left in the hand. A held object whose drop's transfer does not plan
+is put back on the worktop where it was picked from. An object released back onto the
+worktop upright is tried once more. Anything else stops the round, the object still
+declared held: the fingers open only onto the object's known support or an empty hand.
+That includes a transfer whose command fails mid-carry and a release that is not
+confirmed (#210). The table is clear once every object rests in a bin.
+
+## The robot API
+
+`geodude.robot.Geodude` wraps the same pieces for a program of its own (#209). It binds to
+an open `RobotContext`, and wires once what each call would otherwise repeat: each arm's
+planners and component names, the object registration, the driving of each skill on the
+context's clock, and the recovery above.
 
 ```python
-from geodude import Geodude
+from ssrobot import RobotContext, load_installed_package
+from geodude import recycling
+from geodude.robot import Geodude
+from geodude.scene import stage_scene
 
-robot = Geodude(objects={"can": 3, "recycle_bin": 2})
-
-with robot.sim() as ctx:
-    robot.pickup("can")           # pick up any can
-    robot.place("recycle_bin")    # drop into any bin
-    robot.place("worktop")       # place on the table
-    robot.place("sugar_box")     # place on top of a sugar box
+package = load_installed_package("geodude_assets")
+scene = stage_scene("scene", package, objects={"can": 2}, fixtures=recycling.BINS, seed=0)
+with RobotContext(
+    package.description, recycling.runtime(package, scene), object_poses=recycling.OBJECT_POSES
+) as ctx:
+    robot = Geodude(ctx, package)
+    if robot.pickup("can"):  # an instance, a type, or None for anything; either arm
+        robot.place()  # into the bin on the holding arm's side, or "worktop"
+    robot.right.pickup("can")  # an arm chosen by side
     robot.go_home()
 ```
 
-That's it. Object discovery, TSR generation, planning, execution, grasp detection, and recovery are all automatic.
+- **Lookups:** `find_objects` and `holding`.
+- **Moves:** `go_to` takes a configuration the package names. `go_home` goes to its `ready`, carrying whatever is held.
+- **Per arm** (`robot.left` and `robot.right`): joint positions, the end-effector pose, the wrist wrench and its tare, and the gripper's `open` and `close`. `open` refuses while the hand holds an object.
+- **Results:** every call returns a `TaskResult`. It is true when the call succeeded, and it records the object, the arm, whether the object is held and attached, and the skills' own results.
+- **Abort:** `request_abort` cancels the active skill and leaves what is held as it is, reported so. Every call is refused until `clear_abort`.
 
-## Smart Object Resolution
+The `recycling` functions beneath it remain available.
 
-Primitives accept instance names, type names, or nothing:
+## From 3.x
 
-```python
-robot.pickup("can_0")         # specific instance
-robot.pickup("can")           # any can in the scene
-robot.pickup()                # anything graspable
+Most everyday 3.x calls keep their names, on `geodude.robot.Geodude`. 3.x's own planning and state calls map to ssrobot. #213 classifies every 3.x capability.
 
-robot.place("recycle_bin_0")  # drop into a specific bin
-robot.place("recycle_bin")    # drop into any bin
-robot.place("sugar_box")     # place on top of any sugar box
-robot.place("worktop")       # place on the table surface
-robot.place()                 # auto-select: containers first, then worktop
+| 3.x | 4.0 |
+| --- | --- |
+| `Geodude(objects=…)`, `robot.sim(...)`, `setup_scene(fixtures=…)` | `scene.stage_scene(...)`, then `RobotContext(...)` and `Geodude(ctx, package)` |
+| `pickup`, `place`, `go_home`, `go_to`, `find_objects`, `holding` | The same names on `Geodude`. Each returns a `TaskResult`, not a bool |
+| `robot.left` / `robot.right`: `pickup`, `place`, `go_home`, `open`, `close` | The same, on `GeodudeArm` |
+| `get_joint_positions`, `get_ee_pose`, `get_ft_wrench`, `tare_ft` | `joint_positions`, `end_effector_pose`, `wrench`, `tare` |
+| `request_abort`, `clear_abort`, `is_abort_requested` | `request_abort`, `clear_abort`, `aborted` |
+| `plan_to_configuration`, `plan_to_pose`, `plan_to_tsrs` | `ctx.manipulator(name).plan_to_configuration`, `plan_to_end_effector_pose`, `plan_to_tsr`, with a planner (`recycling.planners`) |
+| Executing a plan, `retime` | `ctx.execute(plan, planner=…)`. Plans come back timed |
+| `forward_kinematics`, `check_collisions` | `ctx.planning_scene(snapshot, group)`, then `.forward_kinematics(q, frame)` and `.contacts(q)` |
+| `get_joint_velocities`, `get_joint_limits` | `ctx.snapshot()` and `ctx.description` |
+| `GeodudConfig`, named poses | The robot package (`geodude_assets`), its named configurations, and Geodude's constants |
+| `geodude --demo recycling`, `sort_all` | `geodude-recycling --mix 5`, `recycling.sort_all` |
+| The console, chat, teleoperation, demo files | Not in 4.0 yet (#202, #211). Use `v3.1.0` |
+
+## Running it
+
+From a clone, the application has its own [uv](https://docs.astral.sh/uv/) project and
+environment:
+
+```sh
+git clone https://github.com/personalrobotics/geodude
+cd geodude
+uv sync --locked
 ```
 
-All matching objects' TSRs are combined and sent to the planner — it picks whichever is easiest to reach.
+Recycle one can and record the run:
 
-## Placement
-
-`place()` supports three destination types:
-
-| Destination | Example | Behavior |
-|---|---|---|
-| Container (bin, tote) | `robot.place("recycle_bin")` | Drop from above, object removed from scene |
-| Surface (any flat-topped object) | `robot.place("sugar_box")` | Stable placement on top, object stays in scene |
-| Worktop | `robot.place("worktop")` | Place on the table surface |
-| Auto | `robot.place()` | Tries containers first, then worktop |
-
-Any object with an upward-facing flat face (box top, cylinder end) is a valid placement surface. The system automatically:
-- Enumerates flat faces from the destination's geometry
-- Filters to faces within ~18 degrees of vertical
-- Computes the grasp offset so the held object lands upright
-- Adds clearance so the planner avoids collision with the surface
-
-## Arm Selection
-
-By default, both arms are tried (random order). Specify an arm explicitly:
-
-```python
-robot.right.pickup("can")        # right arm only
-robot.left.place("recycle_bin")   # left arm only
-robot.right.go_home()             # right arm only
-
-robot.pickup("can", arm="right")  # equivalent to above
+```sh
+uv run geodude-recycling --seed 0 --record out/one
 ```
 
-## Architecture
+It prints the outcome, judged after the run from the can's resting pose, and where the
+record was written:
 
-```
-┌──────────────────────────────────────────────────────┐
-│  Your code                                           │
-│  robot.pickup("can")                                 │
-│  robot.right.place("recycle_bin")                    │
-│  robot.go_home()                                     │
-└──────────────────────┬───────────────────────────────┘
-                       │
-┌──────────────────────┴───────────────────────────────┐
-│  geodude  (this package)                             │
-│  • Smart object resolution (instance/type/any)       │
-│  • py_trees behavior trees with automatic recovery   │
-│  • Bimanual arm selection + arm-scoped primitives    │
-│  • Auto TSR generation from prl_assets geometry      │
-│  • VentionBase — linear actuator with collision check│
-└──────────────────────┬───────────────────────────────┘
-                       │
-┌──────────────────────┴───────────────────────────────┐
-│  mj_manipulator  (generic manipulation)              │
-│  • Arm, SimContext, ExecutionContext protocol         │
-│  • BT leaf nodes (PlanToTSRs, Execute, Grasp, ...)   │
-│  • CBiRRT planning, ssik inverse kinematics          │
-│  • CartesianController, GraspManager                 │
-│  • RobotiqGripper, FrankaGripper                     │
-└──────────────────────┬───────────────────────────────┘
-                       │
-┌──────────────────────┴───────────────────────────────┐
-│  tsr + prl_assets  (objects + geometry)               │
-│  • tsr.hands.Robotiq2F140.grasp_cylinder_side(r, h)  │
-│  • prl_assets: can, recycle_bin, ... with meta.yaml   │
-└──────────────────────────────────────────────────────┘
+```text
+{"grasped": true, "dropped": true, "released": true, "landed": true, "detached": true, "in_bin": true}
+recorded out/one/bundle and out/one/recycling.json
 ```
 
-## Interactive Console
+Recycle four cans, racing both arms and planning each can while the previous one is
+carried:
 
-The primary way to use Geodude. IPython REPL with tab completion, optional LLM chat, and a demo system.
-
-```bash
-uv run python -m geodude --demo recycling                # headless console
-uv run python -m geodude --demo recycling --viser        # browser viewer (http://localhost:8080)
-uv run mjpython -m geodude --demo recycling --viewer     # native MuJoCo viewer (macOS: requires mjpython)
-uv run python -m geodude --list-demos                    # see available demos
+```sh
+uv run geodude-recycling --seed 4 --cans 4 --record out/four
 ```
 
-### Python API
-
-```python
-In [1]: robot.pickup()               # pick up nearest object
-In [2]: robot.place("recycle_bin")   # drop in any bin
-In [3]: robot.place("worktop")      # place on the table
-In [4]: sort_all()                   # run the demo's built-in function
-In [5]: reset()                      # restart the demo
-In [6]: commands()                   # quick reference
+```text
+{"can_0": true, "can_1": true, "can_2": true, "can_3": true}
 ```
 
-### LLM Chat
+Sort a round of the legacy demo's mix:
 
-Natural language control via Claude (requires `ANTHROPIC_API_KEY` + `uv sync --extra chat`).
-
-```python
-In [1]: /chat "what's on the table?"
-  -> get_objects({})
-Geodude: There are 2 cans, a sugar box, and 2 recycle bins on the table.
-
-In [2]: /chat "recycle all the cans"
-  -> pickup({"target": "can"})
-  -> place({"destination": "recycle_bin"})
-  -> pickup({"target": "can"})
-  -> place({"destination": "recycle_bin"})
-Geodude: Done! Both cans have been recycled.
-
-In [3]: /chat "stack the sugar box on the pop tarts case"
-  -> pickup({"target": "sugar_box"})
-  -> place({"destination": "pop_tarts_case"})
-Geodude: Placed the sugar box on top of the pop tarts case.
-
-In [4]: /chat "reset with 3 cans and a sugar box"
-  -> reset_scene({"objects": {"can": 3, "sugar_box": 1}})
-Geodude: Scene reset with 4 objects.
+```sh
+uv run geodude-recycling --seed 0 --mix 5 --record out/mix
 ```
 
-The LLM sees planning diagnostics behind the scenes (IK failures, collision details, grasp results) and adjusts its strategy automatically.
-
-### Teleop
-
-With `--viser`, the browser viewer includes a Teleop tab for interactive arm control. Drag a 6DOF gizmo to move the arm in real-time — both arms can be controlled simultaneously.
-
-- **Activate/Deactivate** per arm with ghost hand preview
-- **Toggle Gripper** to grasp/release objects
-- **Safety modes**: Allow (move + flag collisions) or Reject (block colliding configs)
-- **Record** demonstrations for ML training
-- **Snap to EE** to reset the gizmo to the current arm position
-
-### Creating demos
-
-Demos are Python files in `src/geodude/demos/`. Create one interactively with `save_demo('name')`, or write a file:
-
-```python
-# demos/my_task.py
-"""My task — do something useful."""
-scene = {"objects": {"can": 4}, "fixtures": {}}
-
-def do_task():
-    while robot.pickup("can"):
-        robot.place()
+```text
+{"cracker_box_0": "recycle_bin_0", "fuze_bottle_0": "recycle_bin_0", "gelatin_box_0": "recycle_bin_0", "pop_tarts_case_0": "recycle_bin_1", "sugar_box_0": "recycle_bin_1"}
 ```
 
-Then: `geodude --demo my_task`
+`--to worktop` places the can upright on the worktop instead of dropping it, and
+`--viser` serves a live view of the run at <http://localhost:8080>. The seed selects
+the staged scene, and a deterministic run gives the same outcome for the same seed on
+the same OpenBLAS kernel.
 
-## Debugging
+OpenBLAS picks its kernel for the CPU, and the kernels round differently, so one ulp of a
+grasp region's orientation can change a round's outcome. CI checks the tests' outcomes
+on the Haswell kernel, which every x86-64 host with AVX2 runs; select it with
+`OPENBLAS_CORETYPE=Haswell`. `recycling.json` names the
+kernel a run used (`blas_kernel`), and `null` when numpy does not use its bundled OpenBLAS, as on macOS
+on Apple silicon.
 
-Pass `verbose=True` to see the behavior tree status after execution:
+## Geodude's choices
 
-```python
-robot.pickup("can", verbose=True)
+The regions offered to each skill are built in `src/geodude/regions.py` from each
+object's prl_assets geometry. Grasps are sstsr's templates for the 2F-140, backed off
+along the approach so that the skill can move straight in, and keep a box's fingertips
+at least the planning clearance off the box. A drop releases the held object with its
+lowest point just below the bin's rim, its footprint and, where they reach below the rim,
+the open fingers inside the walls: released above the rim, an object strays sideways as
+the pads let go, and can come to rest across it (#237). The region a dropped object must
+come to rest in is the 3.x demo's, computed from the bin's geometry. These are Geodude's
+choices rather than ssgrasping's, because another
+robot or task would offer different grasps and containers.
+
+The speeds, forces, and tolerances are set in `src/geodude/recycling.py`. Where a value
+is set from measurement, its code comment records that evidence. Held cans are carried at
+a fraction of the joint limits, because full speed can throw a can from the fingers. A
+guarded placement stops at a contact force set above the free-motion peak. Free-space
+moves keep a small clearance from the worktop, the bins, and the other cans. Straight
+approaches allow a line width chosen from how far the arm actually arrives from its
+planned line.
+
+Control runs on what a physical robot has: joint, gripper and wrist channels, and the
+registration of the objects on the table (#248). Contexts keep registered object poses
+(ssrobot's `ObjectPoses.REGISTERED`), so planning and every decision use the poses last
+registered, never the simulator's. Objects on the table are registered when a round
+begins, before a race planned from a fresh snapshot once the scene has changed, and
+after a recovery, before a retry. A grasp that closes on nothing (`missed`) may mean the
+object moved: what was planned ahead is discarded, the table is registered again, and
+the object is retried once. A dropped object, once its release is confirmed, is assumed to have landed and is
+removed from the scene; a placed one is registered again where it rests.
+
+The demo has no perception yet, so registration reads each object's privileged pose
+channel, the simulator's ground truth, as the 3.x demo has always done, and the trace
+records that source (`pose_stub`). Privileged state is otherwise read only to evaluate:
+where each object came to rest, and how often an assumed landing was wrong.
+`tests/test_registered_control.py` runs a round with every privileged channel withheld
+and shows the same decisions, and moves a can behind registration's back: the grasp
+misses, the table is registered again, and the retry succeeds.
+
+## Scenes and evidence
+
+`src/geodude/scene.py` stages each scene from prl_assets into its own directory. Object
+poses are sampled with a seeded generator from sstsr's placement regions, and a
+`manifest.json` records the prl_assets source, the seed, every placement, and the
+SHA-256 of every staged file. The same inputs produce the same bytes.
+
+`--record DIR` writes the run as an ssrobot run bundle in `DIR/bundle`, with the exact
+robot, scene, and trace needed to inspect it elsewhere, and its outcome in
+`DIR/recycling.json`. The outcome is a typed, versioned record,
+`geodude.outcomes.RecyclingRun`. It holds:
+
+- the seed and the OpenBLAS kernel;
+- the name, version, and VCS commit of each distribution in the application's listed
+  stack (`SOURCES` in `recycling.py`);
+- the staged scene's manifest;
+- the SHA-256 of the bundle's `bundle.json`;
+- every attempt, with its race, its skill stages, and any failure and recovery;
+- where each object came to rest.
+
+It names no path, so a run directory can be moved and still verified: the bundle opens
+on its own, and its `bundle.json` has the digest the outcome cites. Nothing in the
+outcome depends on wall-clock time. A race records each candidate the chosen one
+outranked without its plans, because how far those got depended on planning speed. The
+same seed on the same kernel writes the same bytes.
+
+The outcome is decoded strictly before it is written, and by every reader, with
+ssrobot's codec. A missing, extra, or wrongly typed field is refused, as is an
+inconsistent one, such as a drop released and evaluated without its landing. Each
+refusal has its own code (`src/geodude/outcomes.py`), and nothing is coerced. The file
+is replaced atomically, so a failed write never leaves a partial outcome.
+`RecyclingRun.VERSION` versions the format. A bundle can be turned into a recording that anyone can
+scrub with mj_viser, as described in its guide to [replaying a run
+bundle](https://github.com/personalrobotics/mj_viser#replay-a-run-bundle).
+
+## Current status
+
+| Capability | Status |
+| --- | --- |
+| Pick one can and drop it into the bin on its side | Implemented; tested from the source tree and from the built wheel in a clean environment |
+| Pick one can and place it upright on the worktop | Implemented; tested |
+| Recycle several cans, racing both arms and planning each can during the previous transfer | Implemented; four cans tested, and the same round with planning delayed by up to 3 s gives the same trace (`test_planning_latency`) |
+| Pick and drop each of the legacy demo's nine object types | Implemented; each type tested alone (`test_object_types`) |
+| Sort a five-object round of the mix into the bins, recovering where it is safe | Implemented; seed 0 tested, its bundle verified and judged by the corpus evaluator (`test_sort_all`) |
+| Recover a failed stage by its rule: release in place, detach a lost object, put back, retry | Implemented; a lift blocked by a shelf and a can pulled out mid-transfer each recover, judged against privileged poses (`test_recovered`); putting back (`test_unpickable`) and retrying (`test_registered_control`) |
+| A robot API: pick up by instance, type or anything, place, go home, per-arm state and gripper, abort | Implemented; every call driven in one seeded scene and judged against privileged poses and the channels (`test_robot`) |
+| Control on registered object poses | Implemented; a round with privileged channels withheld decides exactly as one with them (`test_registered_control`) |
+| A typed, versioned, strictly decoded outcome | Implemented; tampered copies are each refused with their own code (`test_outcome_boundary`), and the outcome file is byte-identical with planning delayed (`test_planning_latency`) |
+| Perception | Not implemented; registration reads privileged simulator channels |
+| The physical robot | Not yet supported; it depends on ssrobot's hardware runtime |
+| The 3.x console, chat and demos; teleoperation; the Vention lift; stacking on another object | Deferred, each with an owner: #202 (through sspilot), #211, #200, personalrobotics/ssgrasping#4 (#213's ledger). 3.x remains available at `v3.1.0` |
+
+Not every seed recycles every object. A run that fails reports the stage that decided
+it, such as no arm finding a feasible prefix, and the record preserves the evidence
+needed to diagnose it. `scripts/evaluate_recycling.py` measures reliability over fixed
+corpora of rounds (personalrobotics/geodude#201): `development`, seeds 0-39, for
+diagnosis and every fix; `catalog`, seeds 3000-3059, also for development, which deals
+every catalog object that stages on the worktop (`recycling.CATALOG_KINDS`) ten times each
+(#267); and three frozen corpora, each run once, whole, from a clean
+tree, on the Haswell kernel: `acceptance`, seeds 1000-1039, #201's, and `cutover`, seeds
+2000-2039, the Geodude 4.0 cutover's (#213), both spent; and `catalog-frozen`, seeds
+4000-4059, #267's, dealt like `catalog` from the deals that follow its own, now spent too.
+On it, the 18 supported catalog kinds recycled 174 of their 180 instances, and the other 12
+kinds, unsupported for recorded reasons (#266), none; its evaluation is
+[`evidence/catalog-frozen/`](evidence/catalog-frozen/). On the cutover corpus, 199
+of 200 objects were recycled and 39 of 40 rounds cleared; its evaluation is
+[`evidence/cutover/`](evidence/cutover/). On the development corpus, on the Haswell
+kernel, 191 of 200 objects are recycled and 38 of 40 rounds cleared.
+
+## Development
+
+All commands run from the repository root:
+
+```sh
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy
+uv run python scripts/check_boundary.py
+uv run pytest
 ```
 
-```
-{-} geodude_pickup [o]
-    --> GenerateGrasps [o]
-    {o} pickup_or_recover [o]
-        {-} pickup [o]
-            {-} plan_and_execute [o]
-                --> PlanToTSRs [o]
-                --> Retime [o]
-                --> Execute [o]
-            --> Sync [o]
-            --> Grasp [o]
-            ...
-```
+`scripts/check_boundary.py` confirms that Geodude 4.0 imports none of the 3.x stack:
+mj_manipulator, mj_environment, asset_manager, or the old viewer. Each test writes its
+evidence under `artifacts/` and documents how to reproduce it. CI also builds the
+wheel, installs it in a clean environment, runs the demo from the installed command,
+and checks with `scripts/check_installed.py` that the run used the installed 4.x
+package rather than the source tree, and that none of the 3.x application's modules is
+present.
 
-`[o]` = success, `[x]` = failure (with reason), `[-]` = not reached.
-
-Enable globally:
-
-```python
-robot.config.debug.verbose = True  # all primitives show tree status
-robot.config.debug.enable_all()    # verbose + all debug logging
-```
-
-## Configuration
-
-```python
-robot.config.planning.timeout = 60.0        # seconds per planning attempt
-robot.config.planning.base_heights = [0.2]  # heights to search
-robot.config.planning.lift_height = 0.10    # meters to lift after grasping
-```
-
-## Package Structure
-
-```
-src/geodude/
-├── robot.py          # Geodude class + _ArmScope for robot.right/left
-├── config.py         # PlanningConfig, VentionBaseConfig, DebugConfig
-├── primitives.py     # pickup() / place() / go_home() — BT-backed
-├── bt/
-│   ├── nodes.py      # GenerateGrasps, GeneratePlaceTSRs + smart resolution
-│   └── subtrees.py   # geodude_pickup, geodude_place
-├── vention_base.py   # Linear actuator planning + collision checking
-├── cli.py            # geodude CLI entry point
-├── console.py        # IPython console with chat, demos, save_demo
-├── chat.py           # LLM chat integration (ChatSession, tools)
-├── demo_loader.py    # Demo discovery, loading, scene setup
-├── demos/            # Demo files (recycling.py, ...)
-└── __init__.py       # Public API + mj_manipulator re-exports
-```
-
-## Testing
-
-```bash
-uv run pytest tests/ -v
-```
-
-## Dependencies
-
-**Workspace packages:**
-
-- [mj_manipulator](https://github.com/personalrobotics/mj_manipulator) — Arm control, planning, execution, BT leaf nodes
-- [geodude_assets](https://github.com/personalrobotics/geodude_assets) — MuJoCo models (UR5e + Robotiq)
-- [prl_assets](https://github.com/personalrobotics/prl_assets) — Object models with geometry metadata
-- [tsr](https://github.com/personalrobotics/tsr) — Task Space Regions + grasp generation
-- [pycbirrt](https://github.com/personalrobotics/pycbirrt) — CBiRRT motion planner
-- [mj_environment](https://github.com/personalrobotics/mj_environment) — MuJoCo environment wrapper
-- [mj_viser](https://github.com/personalrobotics/mj_viser) — Browser-based viewer (optional, for `--viser`)
-- [asset_manager](https://github.com/personalrobotics/asset_manager) — Object metadata loader
-
-**External:**
-
-- [py_trees](https://github.com/splintered-reality/py_trees) — Behavior tree engine
-- [ssik](https://github.com/personalrobotics/ssik) — Analytical IK, built from the MuJoCo model
-- [mujoco](https://github.com/google-deepmind/mujoco) — Physics simulation
+CI runs each third-party action at a full commit, with its release in a comment.
+Dependabot (`.github/dependabot.yml`) proposes each update as a pull request that moves
+the pin and its comment together. Review it as any dependency change.

@@ -1,53 +1,57 @@
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
+# Geodude 4.0: Geodude on ssrobot and ssgrasping (personalrobotics/geodude#213).
+#
+# It replaced the 3.x application at the cutover (#212); 3.x remains at v3.1.0. It never
+# imports mj_manipulator, mj_environment, asset_manager, or the old mj-viser
+# (scripts/check_boundary.py).
 [project]
 name = "geodude"
-version = "3.1.0"
-description = "High-level API for programming the Geodude bimanual robot"
+version = "4.0.0.dev0"
+description = "Geodude, the bimanual robot, on ssrobot and ssgrasping"
 readme = "README.md"
-requires-python = ">=3.11"  # mj-manipulator (transitive via ssik) requires 3.11+
+requires-python = ">=3.11,<3.14"
 license = "MIT"
-authors = [
-    {name = "Siddhartha Srinivasa", email = "siddhartha.srinivasa@gmail.com"},
-]
-maintainers = [
-    {name = "Siddhartha Srinivasa", email = "siddhartha.srinivasa@gmail.com"},
-]
+authors = [{name = "Siddhartha Srinivasa", email = "siddhartha.srinivasa@gmail.com"}]
+maintainers = [{name = "Siddhartha Srinivasa", email = "siddhartha.srinivasa@gmail.com"}]
 dependencies = [
-    "numpy",
-    "mujoco",
-    "pyyaml",
-    "py_trees>=2.2",
-    "ipython>=8.0",
-    "mj-manipulator @ git+https://github.com/personalrobotics/mj_manipulator.git",
-    "mj-environment @ git+https://github.com/personalrobotics/mj_environment.git",
-    "mj-viser @ git+https://github.com/personalrobotics/mj_viser.git",
-    "geodude-assets @ git+https://github.com/personalrobotics/geodude_assets.git",
-    "prl-assets @ git+https://github.com/personalrobotics/prl_assets.git",
-    "sstsr>=3.4,<4",
-    "viser>=1.0",
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+    "ssmjviser==1.0.0",
+    # Imported directly (regions.py): the Robotiq hands' closed reach and a box's scaled
+    # default margin (sstsr#193, #195), and StablePlacer.place, which places an object by
+    # its collision geometry (sstsr#201); ssgrasping's sstsr adapter takes 4.2 or later.
+    "sstsr==4.4.0",
+    # Pinned by commit: the contracts and skills this app is proven against.
+    "ssrobot[mujoco,planning] @ git+https://github.com/personalrobotics/ssrobot@e1761b1ec61896652577c9ae44c07c5f4a11a282",
+    # With its sstsr adapter (ssgrasping.sstsr), whose requirements the resolver enforces.
+    "ssgrasping[sstsr] @ git+https://github.com/personalrobotics/ssgrasping@62863ae78ebb9c8363b31ffd25421a16a8403181",
+    # With its placement extra: collision_shape, an object's collision geometry for
+    # StablePlacer.place (prl_assets#50), each container's measured opening (#49), and the
+    # grasp regions measured by recipe (#52), and flat resting faces for the scanned
+    # boxes and bottles (#54).
+    "prl-assets[placement] @ git+https://github.com/personalrobotics/prl_assets@6b5cc8d029e97264c59e61631f437e5999b671fa",
+    # The 2F-140 driven like the real gripper (geodude_assets#38), with its declared
+    # completion detector (#40), and each pad's torsional friction its contact face's
+    # (#41), its MuJoCo rest criteria (#46), the driver's real 0.7 rad travel (#51), and
+    # where each gripper's joints settle open and closed (#52), which every gripper
+    # command is checked with: ssrobot's reference pin for Geodude, at the ssrobot pinned
+    # above.
+    "geodude-assets @ git+https://github.com/personalrobotics/geodude_assets@e9538a26553e10a9613f9a61af86cb9f63db144e",
 ]
+
+[project.urls]
+Homepage = "https://github.com/personalrobotics/geodude"
+Repository = "https://github.com/personalrobotics/geodude"
+Issues = "https://github.com/personalrobotics/geodude/issues"
 
 [project.scripts]
-geodude = "geodude.cli:main"
+geodude-recycling = "geodude.recycling:main"
 
-[tool.uv.sources]
-mj-manipulator = { workspace = true }
-mj-environment = { workspace = true }
-mj-viser = { workspace = true }
-geodude-assets = { workspace = true }
-prl-assets = { workspace = true }
+[dependency-groups]
+dev = ["mypy>=1.13", "pytest>=8.3", "ruff>=0.8", "types-pyyaml"]
 
-[project.optional-dependencies]
-chat = [
-    "anthropic>=0.40",
-]
-dev = [
-    "pytest",
-    "ruff",
-]
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -55,20 +59,25 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 packages = ["src/geodude"]
 
-[project.urls]
-Homepage = "https://github.com/personalrobotics/geodude"
-Repository = "https://github.com/personalrobotics/geodude"
-Issues = "https://github.com/personalrobotics/geodude/issues"
+# Its own workspace root: uv never adopts it into the robot-code workspace around the
+# 3.x stack (mj_manipulator, the old mj_viser).
+[tool.uv.workspace]
+members = []
 
 [tool.ruff]
-line-length = 120
+line-length = 100
+target-version = "py311"
 
 [tool.ruff.lint]
-select = ["F", "E", "W", "I"]
+select = ["E", "F", "W", "I", "B", "UP", "RUF"]
 
-[tool.ruff.lint.per-file-ignores]
-"src/geodude/__init__.py" = ["F401"]
-"src/geodude/**/__init__.py" = ["F401"]
-"src/geodude/demos/*.py" = ["F821"]
-"src/geodude/chat.py" = ["E501"]
-"src/geodude/panels/chat_panel.py" = ["E501"]
+[tool.mypy]
+strict = true
+files = ["src", "tests", "scripts"]
+
+[[tool.mypy.overrides]]
+module = ["mujoco.*", "sscbirrt.*", "tsr.*", "prl_assets.*", "geodude_assets.*", "mj_viser.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

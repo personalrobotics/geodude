@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+Geodude 4.0, on ssrobot and ssgrasping, becomes `geodude` (#212). It is still versioned `4.0.0.dev0`; the 4.0.0 release is a separate decision.
+- **The project moves to the root.** The application developed in `v4/` (#208 onward) is now the repository's project. The 3.x sources, tests, docs and dependencies (mj_manipulator, mj_environment, the old mj-viser) are removed; 3.x remains at `v3.1.0`.
+- **What it does:**
+  - **Recycling:** seeded scenes, both arms raced for each object, bin drops and worktop placement.
+  - **Recovery** by the failed stage's rule (#210).
+  - **The robot API**, `geodude.robot` (#209).
+  - **Typed, versioned outcomes and run bundles.**
+- **Evidence:**
+  - the frozen cutover corpus, 199 of 200 objects (#213);
+  - the frozen catalog corpus: 18 of 30 kinds supported, 174 of their 180 instances recycled (#267).
+- **Classification:** #213's ledger classifies every 3.x capability as preserved, replaced, removed or deferred. The README's "From 3.x" maps the calls.
+- **CI:** one `test` job from the root lock. The installed-wheel check refuses any 3.x module by name (`check_installed.LEGACY`).
+
 ## v3.1.0 (2026-11-12)
 
 The last 3.x release. Geodude 4.0, on ssrobot and ssgrasping, replaces it (#212). The 3.x console, chat, and teleoperation remain available from this tag through its lock: `UV_NO_SOURCES=true uv sync --locked` in a clone of it. Its git dependencies are unpinned in `pyproject.toml`, so installing the tag without the lock resolves them at their current branches, which no longer agree with it (prl_assets now requires sstsr 4). No behavior changes beyond those listed:

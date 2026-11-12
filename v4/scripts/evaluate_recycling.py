@@ -1,11 +1,11 @@
 """Evaluate the recycling demo over a seeded corpus of mixed rounds (#201).
 
 Each round stages five objects: ``recycling.mix(seed, OBJECTS)``, drawn from the legacy
-demo's nine types, or, in the ``catalog`` corpus, ``recycling.dealt``'s from every type
-of the catalog (#267). It sorts them into the bins with ``recycling.sort_all``, as the demo
-runs: racing both arms with lookahead, recovering a failed attempt where that is safe,
-and retrying an object released back onto the worktop once. The evaluation is one JSON
-artifact:
+demo's nine types, or, in the ``catalog`` corpora (``DEALT``), ``recycling.dealt``'s from
+every type of the catalog (#267). It sorts them into the bins with
+``recycling.sort_all``, as the demo runs: racing both arms with lookahead, recovering a
+failed attempt where that is safe, and retrying an object released back onto the worktop
+once. The evaluation is one JSON artifact:
 - what it ran: the corpus, its seeds, the Geodude commit and whether the tree was
   dirty, every ``recycling.SOURCES`` distribution, and the host: its platform, Python,
   CPU model and count, OpenBLAS kernel (``recycling.blas_kernel``), and load;
@@ -33,16 +33,16 @@ round records which run its verdict came from.
 
 The corpora are fixed: ``development`` (seeds 0-39), for diagnosis and every fix;
 ``catalog`` (seeds 3000-3059), also for development, over the catalog's 30 types that
-stage on the worktop (``recycling.CATALOG_KINDS``), each dealt exactly ten times; and two
-frozen corpora, each run once, whole, from a clean tree, on
-the reference OpenBLAS kernel (``recycling.REFERENCE_BLAS_KERNEL``, selected with
-``OPENBLAS_CORETYPE``), and both now spent:
-- ``acceptance`` (seeds 1000-1039) was #201's: it is refused;
-- ``cutover`` (seeds 2000-2039) was the Geodude 4.0 cutover's (#213): it is refused. Its
-  evaluation is ``evidence/cutover/``.
-
-A new frozen corpus brings back the checks that run one whole, from a clean tree, on
-the reference kernel (#251).
+stage on the worktop (``recycling.CATALOG_KINDS``), each dealt exactly ten times; and
+three frozen corpora, each run once, whole, from a clean tree, on the reference OpenBLAS
+kernel (``recycling.REFERENCE_BLAS_KERNEL``, selected with ``OPENBLAS_CORETYPE``):
+- ``acceptance`` (seeds 1000-1039) was #201's: spent, it is refused;
+- ``cutover`` (seeds 2000-2039) was the Geodude 4.0 cutover's (#213): spent, it is
+  refused. Its evaluation is ``evidence/cutover/``;
+- ``catalog-frozen`` (seeds 4000-4059) is #267's, over every catalog type as ``catalog``
+  deals them, from the deals that follow its own (``recycling.dealt`` from index 60): each
+  type ten times again, in rounds none of which repeats one of ``catalog``'s. It runs
+  only whole (``--seeds`` is refused), from a clean tree, on the reference kernel.
 
 A spent corpus's seeds are refused one at a time too (``--round``). The development
 corpus runs as::
@@ -114,7 +114,14 @@ CORPORA = {
     "acceptance": range(1000, 1040),
     "cutover": range(2000, 2040),
     "catalog": range(3000, 3060),
+    "catalog-frozen": range(4000, 4060),
 }
+DEALT = {"catalog": 0, "catalog-frozen": 60}
+"""Corpora dealt from every catalog type, by ``recycling.dealt``, and the deal each one's
+first seed is dealt: the frozen one's continue the development one's 60, so each type is
+dealt ten times in each, and neither repeats the other's rounds."""
+FROZEN = {"catalog-frozen"}
+"""Corpora that run once, whole, from a clean tree, on the reference OpenBLAS kernel."""
 SPENT = {
     "acceptance": "it was run once, for #201, and stays that claim's evidence",
     "cutover": "it was run once, for #213, and stays that claim's evidence (evidence/cutover/)",
@@ -127,6 +134,17 @@ JOBS = 16
 each round's races plan on worker threads."""
 
 
+def staged(seed: int) -> dict[str, int]:
+    """The objects ``seed``'s round stages: each type and how many."""
+    from geodude import recycling
+
+    dealt = next((c for c in DEALT if seed in CORPORA[c]), None)
+    if dealt is None:
+        return recycling.mix(seed, OBJECTS)
+    index = DEALT[dealt] + seed - CORPORA[dealt].start
+    return recycling.dealt(index, OBJECTS, recycling.CATALOG_KINDS)
+
+
 def run_round(seed: int) -> dict[str, Any]:
     """One round of ``seed``, in this process."""
     from ssrobot import RobotContext, load_installed_package
@@ -134,10 +152,7 @@ def run_round(seed: int) -> dict[str, Any]:
     from geodude import recycling
     from geodude.scene import stage_scene
 
-    if seed in CORPORA["catalog"]:
-        drawn = recycling.dealt(seed - CORPORA["catalog"].start, OBJECTS, recycling.CATALOG_KINDS)
-    else:
-        drawn = recycling.mix(seed, OBJECTS)
+    drawn = staged(seed)
     package = load_installed_package("geodude_assets")
     work = Path(tempfile.mkdtemp(prefix="geodude-eval-"))
     try:
@@ -540,6 +555,20 @@ def main() -> int:
     seeds = list(CORPORA[args.corpus])
     if args.corpus in SPENT:
         parser.error(f"the {args.corpus} corpus is spent: {SPENT[args.corpus]}")
+    if args.corpus in FROZEN:
+        from geodude import recycling
+
+        if args.seeds:
+            parser.error(f"the {args.corpus} corpus runs whole: --seeds is refused")
+        if _provenance()["dirty"]:
+            parser.error(f"the {args.corpus} corpus runs from a clean tree")
+        kernel = recycling.blas_kernel()
+        if kernel != recycling.REFERENCE_BLAS_KERNEL:
+            parser.error(
+                f"the {args.corpus} corpus runs on the {recycling.REFERENCE_BLAS_KERNEL} "
+                f"OpenBLAS kernel, not {kernel}: set "
+                f"OPENBLAS_CORETYPE={recycling.REFERENCE_BLAS_KERNEL}"
+            )
     if args.seeds:
         chosen = [int(s) for s in args.seeds.split(",")]
         if not set(chosen) <= set(seeds):

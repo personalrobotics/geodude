@@ -427,6 +427,10 @@ def drive(ctx: RobotContext, execution: SkillExecution, tick: Callable[[], None]
     return execution.result
 
 
+Driver = Callable[[RobotContext, SkillExecution, Callable[[], None]], SkillResult]
+"""What drives a skill to its end, as ``drive`` does."""
+
+
 def pick(
     ctx: RobotContext,
     obj: str,
@@ -523,10 +527,12 @@ def place_on_worktop(
     planners: tuple[Planner, Planner],
     tick: Callable[[], None] = lambda: None,
     read: Read = pose_stub,
+    run: Driver = drive,
 ) -> SkillResult:
     """Place the held ``obj`` upright on the worktop within ``PLACE_SLACK_M`` of
     ``target`` in x and y, under the measured contact guard. It stands as its model
-    file stands it, by its collision geometry (``regions.upright``)."""
+    file stands it, by its collision geometry (``regions.upright``). ``run`` drives the
+    skill (``drive``; the robot API's, to cancel it on abort)."""
     shape, rest = physical(kind_of(obj))
     planner, checker = planners
     surface = worktop(package).centre[2]
@@ -554,7 +560,7 @@ def place_on_worktop(
     placing = place(
         ctx, planner, spec, check_planner=checker, released=lambda _: register(ctx, [obj], read)
     )
-    return drive(ctx, placing, tick)
+    return run(ctx, placing, tick)
 
 
 def drop_in_bin(
@@ -997,7 +1003,9 @@ RELEASE_LOST = outcomes.RecoveryAction.RELEASE_LOST
 PLACE_BACK = outcomes.RecoveryAction.PLACE_BACK
 
 
-def _wait(ctx: RobotContext, execution: Execution, tick: Callable[[], None]) -> ExecutionStatus:
+def step_until(
+    ctx: RobotContext, execution: Execution, tick: Callable[[], None]
+) -> ExecutionStatus:
     """Step until ``execution`` ends, calling ``tick`` after each step."""
     for _ in range(MAX_TICKS):
         if execution.done:
@@ -1033,7 +1041,7 @@ def _release(
             f"{Reason.GRIPPER_OBSTRUCTED.value}: the fingers open would touch {', '.join(touched)}"
         )
     command = GripperCommand(gripper=arm.gripper, opening=spec.open_opening)
-    status = _wait(ctx, ctx.submit(command, timeout_ns=spec.gripper_timeout_ns), tick)
+    status = step_until(ctx, ctx.submit(command, timeout_ns=spec.gripper_timeout_ns), tick)
     result = status.gripper
     if (
         status.state is not ExecutionState.SUCCEEDED
@@ -1129,7 +1137,7 @@ def recover(
         if not back.succeeded:
             retreat = f"not planned: {back.status.value}"
         else:
-            retreat = _wait(ctx, ctx.execute(back, planner=planner), tick).state.value
+            retreat = step_until(ctx, ctx.execute(back, planner=planner), tick).state.value
         return outcomes.Recovery(
             action=RELEASE_IN_PLACE,
             released=True,

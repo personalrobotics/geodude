@@ -61,6 +61,39 @@ declared held: the fingers open only onto the object's known support or an empty
 That includes a transfer whose command fails mid-carry and a release that is not
 confirmed (#210). The table is clear once every object rests in a bin.
 
+## The robot API
+
+`geodude.robot.Geodude` wraps the same pieces for a program of its own (#209). It binds to
+an open `RobotContext`, and wires once what each call would otherwise repeat: each arm's
+planners and component names, the object registration, the driving of each skill on the
+context's clock, and the recovery above.
+
+```python
+from ssrobot import RobotContext, load_installed_package
+from geodude import recycling
+from geodude.robot import Geodude
+from geodude.scene import stage_scene
+
+package = load_installed_package("geodude_assets")
+scene = stage_scene("scene", package, objects={"can": 2}, fixtures=recycling.BINS, seed=0)
+with RobotContext(
+    package.description, recycling.runtime(package, scene), object_poses=recycling.OBJECT_POSES
+) as ctx:
+    robot = Geodude(ctx, package)
+    if robot.pickup("can"):  # an instance, a type, or None for anything; either arm
+        robot.place()  # into the bin on the holding arm's side, or "worktop"
+    robot.right.pickup("can")  # an arm chosen by side
+    robot.go_home()
+```
+
+- **Lookups:** `find_objects` and `holding`.
+- **Moves:** `go_to` takes a configuration the package names. `go_home` goes to its `ready`, carrying whatever is held.
+- **Per arm** (`robot.left` and `robot.right`): joint positions, the end-effector pose, the wrist wrench and its tare, and the gripper's `open` and `close`. `open` refuses while the hand holds an object.
+- **Results:** every call returns a `TaskResult`. It is true when the call succeeded, and it records the object, the arm, whether the object is held and attached, and the skills' own results.
+- **Abort:** `request_abort` cancels the active skill and leaves what is held as it is, reported so. Every call is refused until `clear_abort`.
+
+The `recycling` functions beneath it remain available.
+
 ## Running it
 
 From a clone, the application has its own [uv](https://docs.astral.sh/uv/) project and
@@ -203,6 +236,7 @@ bundle](https://github.com/personalrobotics/mj_viser#replay-a-run-bundle).
 | Pick and drop each of the legacy demo's nine object types | Implemented; each type tested alone (`test_object_types`) |
 | Sort a five-object round of the mix into the bins, recovering where it is safe | Implemented; seed 0 tested, its bundle verified and judged by the corpus evaluator (`test_sort_all`) |
 | Recover a failed stage by its rule: release in place, detach a lost object, put back, retry | Implemented; a lift blocked by a shelf and a can pulled out mid-transfer each recover, judged against privileged poses (`test_recovered`); putting back (`test_unpickable`) and retrying (`test_registered_control`) |
+| A robot API: pick up by instance, type or anything, place, go home, per-arm state and gripper, abort | Implemented; every call driven in one seeded scene and judged against privileged poses and the channels (`test_robot`) |
 | Control on registered object poses | Implemented; a round with privileged channels withheld decides exactly as one with them (`test_registered_control`) |
 | A typed, versioned, strictly decoded outcome | Implemented; tampered copies are each refused with their own code (`test_outcome_boundary`), and the outcome file is byte-identical with planning delayed (`test_planning_latency`) |
 | Perception | Not implemented; registration reads privileged simulator channels |

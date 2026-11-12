@@ -15,7 +15,8 @@ Two cans and a sugar box are staged at ``SEED``, all on the right arm's side. On
 - an abort requested from the tick once a can is in the hand: the grasp is cancelled
   (``SkillExecution.cancel``), no recovery runs, and the result reports the can held,
   as ``holding`` does; ``open`` refuses while it is, and every call until
-  ``clear_abort``.
+  ``clear_abort``. Cleared, the can is placed in the bin, and the arm goes home, by when
+  both cans rest in the bin.
 
 The privileged pose of each object (``recycling.true_pose``), never the registered one,
 is what the bin and the worktop are judged by. The evidence is ``robot.json``: every call,
@@ -175,7 +176,19 @@ def test_robot_api_drives_every_call(artifacts: Path) -> None:
             calls.append(_call("go_home(), aborted", again))
             assert not again and again.aborted, again
             robot.clear_abort()
+            armed.clear()
             assert not robot.aborted
+
+            # Cleared, what the abort left in the hand is placed, and the arm goes home:
+            # by then both cans have come to rest in the bin.
+            placed = robot.place()
+            calls.append(_call("place(), after clear_abort", placed))
+            assert placed and robot.holding() is None, placed
+            home = robot.go_home()
+            calls.append(_call("go_home(), after clear_abort", home))
+            assert home, home
+            for name in (first, second):
+                assert _in_bin(recycling.true_pose(ctx, name), side), name
 
             ended = {
                 name: {

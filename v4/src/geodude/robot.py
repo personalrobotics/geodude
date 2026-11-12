@@ -136,7 +136,8 @@ class Geodude:
 
     def request_abort(self) -> None:
         """Cancel the active skill or command at the next step, and refuse every call until
-        ``clear_abort``. Safe from another thread."""
+        ``clear_abort``. Safe from another thread. A race being planned, which steps no
+        time, is not interrupted: the grasp it selects is cancelled before it moves."""
         self._abort.set()
 
     def clear_abort(self) -> None:
@@ -207,11 +208,12 @@ class Geodude:
         side, obj = selection.candidate.label.split(" ")
         chosen = self.arm(side)
         origin = recycling.registered_pose(self._ctx, obj).position
-        picked = self._run(self._ctx, selection.grasp(self._ctx), self._stepped)
         spec = selection.candidate.grasp
-        if picked.succeeded:
-            self._held[side] = _Held(obj, spec, (float(origin[0]), float(origin[1])))
-        return self._finish(chosen, obj, picked, spec)
+        # Kept while the object stays in the hand, however the grasp ended: attached, it is
+        # no longer registered, and its recovery needs how it was grasped and where from.
+        self._held[side] = _Held(obj, spec, (float(origin[0]), float(origin[1])))
+        picked = self._run(self._ctx, selection.grasp(self._ctx), self._stepped)
+        return self._finish(chosen, obj, picked, self._held[side])
 
     def place(
         self,
@@ -223,7 +225,14 @@ class Geodude:
         """Place what ``arm``'s hand holds (``holding``'s, by default): into the bin on its
         side (None, ``recycle_bin`` or that bin's name; each arm reaches only its own), or
         upright on the worktop (``worktop``) at ``at``, where it was picked from by
-        default. A failure with the object still in the hand is recovered."""
+        default. A failure with the object still in the hand is recovered, if this robot
+        picked it.
+
+        A drop succeeds once its release is confirmed. Where the object then comes to rest
+        has no portable signal, so it is assumed landed and removed from the scene
+        (``recycling.assume_landed``, #248), as ``recycle`` does without ``evaluate``."""
+        if at is not None and destination != "worktop":
+            raise ValueError(f"at={at!r} is a worktop position; destination is {destination!r}")
         if self.aborted:
             return TaskResult(False, ABORTED, aborted=True)
         if arm is None:
@@ -242,25 +251,27 @@ class Geodude:
                 f"one of None, 'recycle_bin', {bin_name!r}, 'worktop'"
             )
         record = self._held.get(arm)
-        if record is None or record.object != obj:
-            pose = recycling.registered_pose(self._ctx, obj).position
-            record = _Held(
-                obj, recycling.grasp_spec(self._ctx, obj, chosen.arm), (pose[0], pose[1])
-            )
+        if record is not None and record.object != obj:
+            record = None  # attached by something else: nothing known to recover it by
+        if destination == "worktop" and at is None:
+            if record is None:
+                raise ValueError(f"{obj} was not picked by this robot: give at=")
+            at = record.origin
         planner, checker = chosen.planners
         if destination == "worktop":
+            assert at is not None
             placed = recycling.place_on_worktop(
                 self._ctx,
                 self._package,
                 obj,
-                at or record.origin,
+                at,
                 arm=chosen.arm,
                 planners=chosen.planners,
                 tick=self._stepped,
                 read=self._read,
                 run=self._run,
             )
-            return self._finish(chosen, obj, placed, record.spec)
+            return self._finish(chosen, obj, placed, record)
         spec = recycling.drop_spec(obj, chosen.arm)
         if spec is None:
             return TaskResult(
@@ -274,7 +285,7 @@ class Geodude:
             released=recycling.assume_landed(self._ctx, obj),
         )
         dropped = self._run(self._ctx, dropping, self._stepped)
-        return self._finish(chosen, obj, dropped, record.spec, origin=record.origin)
+        return self._finish(chosen, obj, dropped, record, put_back=True)
 
     def go_to(self, name: str, *, arm: str | None = None) -> TaskResult:
         """Move ``arm``, or each arm in turn, the right first, to its joints' positions in
@@ -285,8 +296,15 @@ class Geodude:
         configuration = self._ctx.description.configuration(name)
         joints = self._ctx.description.group(configuration.group).joints
         target = dict(zip(joints, configuration.positions, strict=True))
+        covered = [a for a in self.arms if all(j in target for j in a.joints)]
+        if arm is not None:
+            if self.arm(arm) not in covered:
+                raise ValueError(f"configuration {name!r} does not cover the {arm} arm")
+            covered = [self.arm(arm)]
+        if not covered:
+            raise ValueError(f"configuration {name!r} covers neither arm")
         details = []
-        for a in self.arms if arm is None else (self.arm(arm),):
+        for a in covered:
             reached = a.move_to(tuple(target[j] for j in a.joints))
             details.append(f"{a.side}: {reached}")
             if reached != ExecutionState.SUCCEEDED.value:
@@ -323,42 +341,48 @@ class Geodude:
             self._skill = None
 
     def _wait(self, execution: Execution) -> str:
-        """Step until ``execution`` ends; its end state."""
+        """Step until ``execution`` ends, cancelling it if it has not after
+        ``recycling.MAX_TICKS``; its end state."""
         if self.aborted:
             self._ctx.cancel(execution)
-        return recycling.step_until(self._ctx, execution, self._stepped).state.value
+        status = recycling.step_until(self._ctx, execution, self._stepped)
+        if not execution.done:
+            status = self._ctx.cancel(execution)
+        return status.state.value
 
     def _finish(
         self,
         chosen: GeodudeArm,
         obj: str,
         result: SkillResult,
-        spec: GraspSpec,
+        record: _Held | None,
         *,
-        origin: tuple[float, float] | None = None,
+        put_back: bool = False,
     ) -> TaskResult:
         """The result of a skill on ``obj``, recovered first when it failed with ``obj``
-        still in the hand and was not aborted. ``origin``, for a drop: where to put the
-        object back if no release planned (``recycling.recover``)."""
+        still in the hand, was not aborted, and ``record`` says how it was grasped. With
+        ``put_back``, for a drop: an object no release planned for goes back where it was
+        picked from (``recycling.recover``)."""
         failed: Stage | None = recycling.failed_stage(result)
         decided = failed or result.stage
         recovery = None
-        aborted = self.aborted
-        if failed is not None and not aborted and chosen.holding() == obj:
-            planner, checker = chosen.planners
-            recovery = recycling.recover(
-                self._ctx,
-                obj,
-                chosen.arm,
-                failed,
-                spec,
-                planner,
-                self._stepped,
-                self._read,
-                package=self._package,
-                checker=checker,
-                origin=origin,
-            )
+        if failed is not None and record is not None and not self.aborted:
+            if chosen.holding() == obj:
+                planner, checker = chosen.planners
+                recovery = recycling.recover(
+                    self._ctx,
+                    obj,
+                    chosen.arm,
+                    failed,
+                    record.spec,
+                    planner,
+                    self._stepped,
+                    self._read,
+                    package=self._package,
+                    checker=checker,
+                    origin=record.origin if put_back else None,
+                )
+        aborted = self.aborted  # requested during the recovery, too
         attached = chosen.holding() == obj
         if not attached:
             self._held.pop(chosen.side, None)

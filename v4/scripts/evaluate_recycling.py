@@ -39,10 +39,10 @@ kernel (``recycling.REFERENCE_BLAS_KERNEL``, selected with ``OPENBLAS_CORETYPE``
 - ``acceptance`` (seeds 1000-1039) was #201's: spent, it is refused;
 - ``cutover`` (seeds 2000-2039) was the Geodude 4.0 cutover's (#213): spent, it is
   refused. Its evaluation is ``evidence/cutover/``;
-- ``catalog-frozen`` (seeds 4000-4059) is #267's, over every catalog type as ``catalog``
+- ``catalog-frozen`` (seeds 4000-4059) was #267's, over every catalog type as ``catalog``
   deals them, from the deals that follow its own (``recycling.dealt`` from index 60): each
-  type ten times again, in rounds none of which repeats one of ``catalog``'s. It runs
-  only whole (``--seeds`` is refused), from a clean tree, on the reference kernel.
+  type ten times again, in rounds none of which repeats one of ``catalog``'s. Spent, it is
+  refused. Its evaluation is ``evidence/catalog-frozen/``.
 
 A spent corpus's seeds are refused one at a time too (``--round``). The development
 corpus runs as::
@@ -125,6 +125,9 @@ FROZEN = {"catalog-frozen"}
 SPENT = {
     "acceptance": "it was run once, for #201, and stays that claim's evidence",
     "cutover": "it was run once, for #213, and stays that claim's evidence (evidence/cutover/)",
+    "catalog-frozen": (
+        "it was run once, for #267, and stays that claim's evidence (evidence/catalog-frozen/)"
+    ),
 }
 """Frozen corpora already run: their outcomes are known, so they are never run again."""
 OBJECTS = 5

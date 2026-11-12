@@ -1,5 +1,5 @@
 """Geodude 4.0: the bimanual Geodude robot on ssrobot and ssgrasping.
 
-Built alongside the legacy 3.x app (personalrobotics/geodude#213), and imported under the
-same name in its own environment.
+It replaced the 3.x application at the cutover (personalrobotics/geodude#212); 3.x, which
+imported under the same name, remains at v3.1.0.
 """

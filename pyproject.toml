@@ -1,16 +1,17 @@
 # Geodude 4.0: Geodude on ssrobot and ssgrasping (personalrobotics/geodude#213).
 #
-# It is built alongside the legacy 3.x app at the repository root, as its own uv project
-# with its own environment, and replaces it at the cutover (#212). It never imports
-# mj_manipulator, mj_environment, asset_manager, or the old mj-viser
+# It replaced the 3.x application at the cutover (#212); 3.x remains at v3.1.0. It never
+# imports mj_manipulator, mj_environment, asset_manager, or the old mj-viser
 # (scripts/check_boundary.py).
 [project]
 name = "geodude"
 version = "4.0.0.dev0"
 description = "Geodude, the bimanual robot, on ssrobot and ssgrasping"
+readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = "MIT"
 authors = [{name = "Siddhartha Srinivasa", email = "siddhartha.srinivasa@gmail.com"}]
+maintainers = [{name = "Siddhartha Srinivasa", email = "siddhartha.srinivasa@gmail.com"}]
 dependencies = [
     "numpy>=1.26",
     "pyyaml>=6.0",
@@ -36,6 +37,11 @@ dependencies = [
     # above.
     "geodude-assets @ git+https://github.com/personalrobotics/geodude_assets@e9538a26553e10a9613f9a61af86cb9f63db144e",
 ]
+
+[project.urls]
+Homepage = "https://github.com/personalrobotics/geodude"
+Repository = "https://github.com/personalrobotics/geodude"
+Issues = "https://github.com/personalrobotics/geodude/issues"
 
 [project.scripts]
 geodude-recycling = "geodude.recycling:main"

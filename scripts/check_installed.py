@@ -9,8 +9,8 @@ repository, after the installed ``geodude-recycling --seed 0 --record DIR``::
 It fails unless:
 - ``geodude`` is the installed 4.x wheel, in the environment's site-packages, not an
   editable or path install, and no path on ``sys.path`` is inside the repository;
-- no module that only the 3.x application had (``LEGACY``) is importable, and the wheel
-  ships none;
+- no module that only the 3.x application had (``LEGACY``, less any the 4.x package
+  has itself) is importable, and the wheel ships none;
 - the installed command's outcome decodes strictly as a ``RecyclingRun``, succeeded,
   and names this install, by its version and no VCS commit, as its geodude source.
 """
@@ -44,6 +44,15 @@ LEGACY = frozenset(
 ``v3.1.0``, the last 3.x release, removed at the cutover (#212)."""
 
 
+def _modules(package: Path) -> set[str]:
+    """The top-level modules and subpackages of the package directory ``package``."""
+    return {
+        p.stem
+        for p in package.iterdir()
+        if (p.suffix == ".py" and p.stem != "__init__") or (p / "__init__.py").is_file()
+    }
+
+
 def main(repository: Path, report_path: Path) -> list[str]:
     failures: list[str] = []
     repository = repository.resolve()
@@ -64,7 +73,7 @@ def main(repository: Path, report_path: Path) -> list[str]:
     if direct.get("dir_info") or not direct.get("url", ".whl").endswith(".whl"):
         failures.append(f"geodude installed from {direct}, not a wheel")
 
-    legacy = LEGACY
+    legacy = LEGACY - _modules(installed)  # a 4.x module may reuse a 3.x name
     importable = sorted(m for m in legacy if importlib.util.find_spec(f"geodude.{m}"))
     if importable:
         failures.append(f"legacy modules importable: {importable}")

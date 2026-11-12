@@ -43,6 +43,23 @@ uv run pytest tests/integration -v
   `main` advances, and on scheduled nightly runs.
 - Review is by [@siddhss5](https://github.com/siddhss5) (enforced via CODEOWNERS).
 
+## Releases
+
+Geodude releases are source releases on GitHub. The committed lock is part of the
+release: it fixes the ssrobot, ssgrasping, robot, and object packages that were checked
+together. PyPI publication is not part of the 4.0.0 release.
+
+1. In a release pull request, set the project version, move the changelog entry out of
+   `Unreleased`, and update the lock with `uv lock`.
+2. Merge only after CI has built the wheel, installed it outside the checkout, run the
+   installed command, and checked its outcome.
+3. Wait for the same `test` job to pass on the merge commit. Tag that exact commit as
+   `vX.Y.Z`; do not tag a pull-request head.
+4. Create the GitHub release from that tag, using the matching changelog section as its
+   notes.
+5. In a clean clone of the tag, run `uv sync --locked` and the README's one-can command.
+   Record the commit and result in the release notes.
+
 ## Package manager: uv only
 
 We use [uv](https://docs.astral.sh/uv/) exclusively. **Do not use pip.**

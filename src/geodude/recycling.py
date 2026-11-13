@@ -1803,10 +1803,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 from mj_viser import ContactOverlay, LiveView
                 from mj_viser.integrations.ssrobot import render_source
 
-                # mj_viser's adapter satisfies its protocol at run time, not for mypy
-                # (personalrobotics/mj_viser#62).
                 view = LiveView(
-                    render_source(ctx),  # type: ignore[arg-type]
+                    render_source(ctx),
                     channels=channels.board,
                     label="Geodude 4.0: recycling",
                 )

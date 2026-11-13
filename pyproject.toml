@@ -15,15 +15,15 @@ maintainers = [{name = "Siddhartha Srinivasa", email = "siddhartha.srinivasa@gma
 dependencies = [
     "numpy>=1.26",
     "pyyaml>=6.0",
-    "ssmjviser==1.0.0",
+    "ssmjviser==1.0.1",
     # Imported directly (regions.py): the Robotiq hands' closed reach and a box's scaled
     # default margin (sstsr#193, #195), and StablePlacer.place, which places an object by
     # its collision geometry (sstsr#201); ssgrasping's sstsr adapter takes 4.2 or later.
-    "sstsr==4.4.0",
+    "sstsr==4.5.0",
     # Pinned by commit: the contracts and skills this app is proven against.
     "ssrobot[mujoco,planning] @ git+https://github.com/personalrobotics/ssrobot@e1761b1ec61896652577c9ae44c07c5f4a11a282",
     # With its sstsr adapter (ssgrasping.sstsr), whose requirements the resolver enforces.
-    "ssgrasping[sstsr] @ git+https://github.com/personalrobotics/ssgrasping@62863ae78ebb9c8363b31ffd25421a16a8403181",
+    "ssgrasping[sstsr] @ git+https://github.com/personalrobotics/ssgrasping@cdab288c19ac82d12bf7c1a0aa332cf38a1b683a",
     # With its placement extra: collision_shape, an object's collision geometry for
     # StablePlacer.place (prl_assets#50), each container's measured opening (#49), and the
     # grasp regions measured by recipe (#52), and flat resting faces for the scanned

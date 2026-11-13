@@ -46,7 +46,10 @@ worktop``, which a version 1 decoder cannot read. 3: ssgrasping's reason
 version 2 decoder cannot read. 4: drops to regions for the object (#260): ``no_drop_zone``
 refuses an object before it is raced, armless, when no resting orientation of it fits
 the bin's opening, and a place-back follows a drop whose transfer did not plan, which a
-version 3 decoder cannot read.
+version 3 decoder cannot read. 5: ssgrasping's reason ``transition_unobserved``, a carry
+refused because its hand's opening cannot show that it still holds the object and it was
+not told to assume so (ssgrasping#59), which a version 4 decoder cannot read. Geodude's
+Robotiq hands' openings do establish a grasp, so it never records one.
 """
 
 from __future__ import annotations
@@ -632,7 +635,7 @@ class RecyclingRun(Record):
     rests in a bin (``cleared``)."""
 
     SCHEMA = "geodude.RecyclingRun"
-    VERSION = 4
+    VERSION = 5
 
     seed: int
     blas_kernel: str | None

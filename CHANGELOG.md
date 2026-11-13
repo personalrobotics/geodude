@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Dependencies:** sstsr 4.5.0, ssgrasping cdab288 and ssmjviser 1.0.1.
+  - sstsr 4.5.0 adds enveloping grips for the JACO2 only.
+  - ssgrasping cdab288 adds an opt-in `assume_unobserved` for hands whose opening can't show a grasp (ssgrasping#59).
+  - ssmjviser 1.0.1 types its render adapter (mj_viser#62).
+  - The Robotiq hands' behaviour is unchanged: the `catalog` development corpus gives the same outcomes at both pins.
+- **`RecyclingRun` version 5, evaluation format 11:** outcomes may carry ssgrasping's new reason `transition_unobserved`, which a version 4 decoder rejects. Geodude's hands never produce it.
+
 ## v4.0.0 (2026-11-12)
 
 Geodude 4.0, on ssrobot and ssgrasping, becomes `geodude` (#212).

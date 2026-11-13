@@ -77,7 +77,7 @@ from ssrobot import PlanStatus, StageOutcome, dumps, loads
 
 from geodude.outcomes import NO_DROP_ZONE, NO_GRASP, Attempt, Disposition, RecyclingRun
 
-FORMAT = 10
+FORMAT = 11
 """The evaluation artifact's format: raised whenever a field's meaning changes. 2: per
 object, its attempts, where it finally rests, and its verdict, in place of one outcome
 and its mechanism. 3: each round's and object's ``timing``. 4: a failure's ``reason`` and
@@ -108,7 +108,9 @@ refused open leaves an object in place still held, or, one that had left the han
 detached with the fingers unopened. 10: outcomes of ``RecyclingRun`` version 4; drops
 release an object in its resting orientations over the opening, composed with how it is
 held (#260): an object no orientation of which fits is refused before it is raced
-(``drop.zone``, armless), and a place-back follows a drop whose transfer did not plan."""
+(``drop.zone``, armless), and a place-back follows a drop whose transfer did not plan.
+11: outcomes of ``RecyclingRun`` version 5, which may carry ssgrasping's
+``transition_unobserved`` (ssgrasping#59)."""
 CORPORA = {
     "development": range(0, 40),
     "acceptance": range(1000, 1040),
